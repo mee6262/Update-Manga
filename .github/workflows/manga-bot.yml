@@ -5,9 +5,6 @@ on:
     - cron: '0 0,12 * * *' # รันทุก 07:00 น. และ 19:00 น. เวลาไทย
   workflow_dispatch: 
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-
 jobs:
   run-bot:
     runs-on: ubuntu-latest
@@ -15,39 +12,39 @@ jobs:
       contents: write
       
     steps:
+      # 🚀 อัปเดตเป็น v4.1.7+ หรือ v4 ตัวล่าสุดเพื่อบังคับใช้ Node 24 อัตโนมัติ
       - name: Check out repo code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
+      # 🚀 อัปเดตเป็น v5.1.1+ หรือ v5 ตัวล่าสุดเพื่อเคลียร์ปัญหา Node 20 ล้าสมัย
       - name: Set up Python environment
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      # ลดขั้นตอนที่ซ้ำซ้อนและปล่อยให้ Playwright จัดการติดตั้งแบบระบุเวอร์ชันโดยตรง
+      - name: Install Dependencies and Playwright
         run: |
           pip install -r requirements.txt
-
-      # 🛠️ ขั้นตอนแก้ไข: ติดตั้งแพ็คเกจเสียงเวอร์ชันใหม่ และแก้ปัญหาไร้แพ็คเกจตัวเก่า
-      - name: Fix Playwright Ubuntu Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2t64
-          # สร้าง symlink หลอกให้ Playwright คิดว่ามี libasound2 อยู่ในเครื่อง
-          sudo ln -s /usr/lib/x86_64-linux-gnu/libasound.so.2 /usr/lib/x86_64-linux-gnu/libasound2 || true
-
-      - name: Install Playwright Browsers
-        run: |
+          pip install --upgrade playwright
           playwright install chromium --with-deps
 
+      # 🔍 เปิดโหมดสืบสวน: บังคับให้ Python พ่นรายงานความผิดพลาดแบบละเอียดยิบ (Unbuffered Output)
       - name: Execute script and check updates
         env:
+          PYTHONUNBUFFERED: "1"
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python bot.py
 
+      # ป้องกันการพังกรณีระบุตัวตน Git บนระบบ
       - name: Commit and update current status
         run: |
-          git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Actions"
-          git add manga_db.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 อัปเดตฐานข้อมูลตอนล่าสุด [Automated]" && git push)
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          if [ -f manga_db.json ]; then
+            git add manga_db.json
+            git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 อัปเดตฐานข้อมูลตอนล่าสุด [Automated]" && git push)
+          fi
