@@ -28,7 +28,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2t64 libgbm1 libnspr4 libnss3 libxss1
-          sudo ln -s /usr/lib/x86_64-linux-gnu/libasound.so.2 /usr/lib/x86_64-linux-gnu/libasound2 || true
+          # ลบบรรทัด: sudo ln -s /usr/lib/x86_64-linux-gnu/libasound.so.2 /usr/lib/x86_64-linux-gnu/libasound2 || true
 
       # 🚀 สั่งติดตั้งเฉพาะเบราว์เซอร์เท่านั้น ตัดคำว่า --with-deps ออกไปเพื่อไม่ให้ระบบพัง
       - name: Install Python Packages and Playwright Browser
@@ -51,7 +51,7 @@ jobs:
             git add manga_db.json
             if ! git diff --quiet || ! git diff --staged --quiet; then
               git commit -m "🤖 อัปเดตฐานข้อมูลตอนล่าสุด [Automated]"
-              git pull --rebase origin main
+              git pull --rebase origin main || true
               git push origin main
             fi
           fi
