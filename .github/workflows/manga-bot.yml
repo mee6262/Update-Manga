@@ -2,10 +2,9 @@ name: Manga Auto Update Bot
 
 on:
   schedule:
-    - cron: '0 0,12 * * *'
+    - cron: '0 0,12 * * *' # รันทุก 07:00 น. และ 19:00 น. เวลาไทย
   workflow_dispatch: 
 
-# 🚀 เพิ่มบรรทัดนี้เพื่อเคลียร์ Warning เรื่อง Node.js 20
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
@@ -27,6 +26,17 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
+
+      # 🛠️ ขั้นตอนแก้ไข: ติดตั้งแพ็คเกจเสียงเวอร์ชันใหม่ และแก้ปัญหาไร้แพ็คเกจตัวเก่า
+      - name: Fix Playwright Ubuntu Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2t64
+          # สร้าง symlink หลอกให้ Playwright คิดว่ามี libasound2 อยู่ในเครื่อง
+          sudo ln -s /usr/lib/x86_64-linux-gnu/libasound.so.2 /usr/lib/x86_64-linux-gnu/libasound2 || true
+
+      - name: Install Playwright Browsers
+        run: |
           playwright install chromium --with-deps
 
       - name: Execute script and check updates
