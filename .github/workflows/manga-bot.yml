@@ -1,0 +1,39 @@
+name: Manga Auto Update Bot
+
+on:
+  schedule:
+    - cron: '0 0,12 * * *' # รันทุก 07:00 น. และ 19:00 น. เวลาไทย
+  workflow_dispatch: 
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Check out repo code
+        uses: actions/checkout@v4
+
+      - name: Set up Python environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
+
+      - name: Execute script and check updates
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bot.py
+
+      - name: Commit and update current status
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git add manga_db.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 อัปเดตฐานข้อมูลตอนล่าสุด [Automated]" && git push)
