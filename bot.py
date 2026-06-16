@@ -6,6 +6,10 @@ from playwright.sync_api import sync_playwright
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 DB_FILE = "manga_db.json"
+LIST_FILE = "manga_list.txt"
+
+# ตัวจับพิกัดโครงสร้างเว็บแบบครอบจักรวาล (สำหรับเว็บมังงะทั่วไปและค่ายที่คุณมี่อ่าน)
+DEFAULT_SELECTOR = ".wp-manga-chapter a, .chapter-link a, li.chapter a, .chapternum"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -17,9 +21,27 @@ def save_db(data):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
+# ฟังก์ชันอ่านรายชื่อมังงะจากไฟล์ txt
+def load_manga_list():
+    mangas = []
+    if not os.path.exists(LIST_FILE):
+        print(f"❌ ไม่พบไฟล์ {LIST_FILE}")
+        return mangas
+        
+    with open(LIST_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"): # ข้ามบรรทัดว่างหรือคอมเมนต์
+                continue
+            if "|" in line:
+                parts = line.split("|")
+                name = parts[0].strip()
+                url = parts[1].strip()
+                mangas.append({"name": name, "url": url, "selector": DEFAULT_SELECTOR})
+    return mangas
+
 def send_telegram(manga_name, chapter, url):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("❌ ไม่พบ TELEGRAM_TOKEN หรือ TELEGRAM_CHAT_ID ข้ามการแจ้งเตือน")
         return
     
     msg = (
@@ -38,38 +60,18 @@ def send_telegram(manga_name, chapter, url):
     }
     
     try:
-        response = requests.post(telegram_url, json=payload)
-        if response.status_code != 200:
-            print(f"❌ ส่งข้อความเข้า Telegram ล้มเหลว: {response.text}")
+        requests.post(telegram_url, json=payload)
     except Exception as e:
-        print(f"⚠️ เกิดข้อผิดพลาดในการเชื่อมต่อ Telegram: {str(e)}")
+        print(f"⚠️ Telegram Error: {str(e)}")
 
 def main():
     db = load_db()
+    manga_list = load_manga_list()
     
-    manga_list = [
-        {
-            "name": "What a Bountiful Harvest, Demon Lord",
-            "url": "https://www.slow-manga.net/manga/what-a-bountiful-harvest-demon-lord/",
-            "selector": ".wp-manga-chapter a, .chapter-link a, li.chapter a, .chapternum" 
-        },
-        {
-            "name": "Disastrous Necromancer",
-            "url": "https://www.go-manga.com/disastrous-necromancer/",
-            "selector": ".wp-manga-chapter a, .chapter-link a, li.chapter a, .chapternum"
-        },
-        {
-            "name": "Level 1 Player",
-            "url": "https://www.up-manga.com/level-1-player/",
-            "selector": ".wp-manga-chapter a, .chapter-link a, li.chapter a, .chapternum"
-        },
-        {
-            "name": "Magic Emperor",
-            "url": "https://www.tanuki-manga.net/manga/magic-emperor/",
-            "selector": ".wp-manga-chapter a, .chapter-link a, li.chapter a, .chapternum"
-        }
-    ]
-    
+    if not manga_list:
+        print("📭 ไม่มีรายชื่อมังงะให้ตรวจสอบ")
+        return
+        
     has_updates = False
     
     with sync_playwright() as p:
@@ -95,7 +97,6 @@ def main():
                 if latest_chap_element and latest_chap_element.count() > 0:
                     current_chap = latest_chap_element.inner_text().strip()
                     if not current_chap:
-                        print(f"⚠️ ข้อความที่ดึงได้จาก {name} เป็นค่าว่าง ข้ามข้อมูลนี้")
                         continue
                         
                     print(f"✨ เจอตอนล่าสุด: {current_chap}")
@@ -104,7 +105,6 @@ def main():
                         db[name] = current_chap
                         has_updates = True
                         print(f"✅ บันทึกตอนตั้งต้นของ {name} สำเร็จ")
-                    
                     elif db[name] != current_chap:
                         db[name] = current_chap
                         has_updates = True
