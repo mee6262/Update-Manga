@@ -12,26 +12,31 @@ jobs:
       contents: write
       
     steps:
-      # 🚀 อัปเดตเป็น v4.1.7+ หรือ v4 ตัวล่าสุดเพื่อบังคับใช้ Node 24 อัตโนมัติ
       - name: Check out repo code
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # 🚀 อัปเดตเป็น v5.1.1+ หรือ v5 ตัวล่าสุดเพื่อเคลียร์ปัญหา Node 20 ล้าสมัย
       - name: Set up Python environment
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # ลดขั้นตอนที่ซ้ำซ้อนและปล่อยให้ Playwright จัดการติดตั้งแบบระบุเวอร์ชันโดยตรง
-      - name: Install Dependencies and Playwright
+      # 🛠️ จัดการติดตั้งแพ็คเกจระบบพื้นฐานด้วยตัวเอง เพื่อรองรับ Ubuntu เวอร์ชันใหม่
+      # และสร้างทางเชื่อม (Symlink) ให้ระบบมองเห็น libasound2 เพื่อหลอกบอทตัวเก่า
+      - name: Install System Dependencies for Chromium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2t64 libgbm1 libnspr4 libnss3 libxss1
+          sudo ln -s /usr/lib/x86_64-linux-gnu/libasound.so.2 /usr/lib/x86_64-linux-gnu/libasound2 || true
+
+      # 🚀 สั่งติดตั้งเฉพาะเบราว์เซอร์เท่านั้น ตัดคำว่า --with-deps ออกไปเพื่อไม่ให้ระบบพัง
+       Sir, Yes Sir!
+      - name: Install Python Packages and Playwright Browser
         run: |
           pip install -r requirements.txt
-          pip install --upgrade playwright
-          playwright install chromium --with-deps
+          playwright install chromium
 
-      # 🔍 เปิดโหมดสืบสวน: บังคับให้ Python พ่นรายงานความผิดพลาดแบบละเอียดยิบ (Unbuffered Output)
       - name: Execute script and check updates
         env:
           PYTHONUNBUFFERED: "1"
@@ -39,7 +44,6 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python bot.py
 
-      # ป้องกันการพังกรณีระบุตัวตน Git บนระบบ
       - name: Commit and update current status
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
