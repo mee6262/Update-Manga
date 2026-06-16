@@ -3,7 +3,6 @@ import json
 import requests
 from playwright.sync_api import sync_playwright
 
-# โหลดข้อมูลลับจากระบบ (GitHub Secrets)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 DB_FILE = "manga_db.json"
@@ -18,13 +17,11 @@ def save_db(data):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
-# ฟังก์ชันส่งข้อความเข้า Telegram
 def send_telegram(manga_name, chapter, url):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ ไม่พบ TELEGRAM_TOKEN หรือ TELEGRAM_CHAT_ID ข้ามการแจ้งเตือน")
         return
     
-    # ตกแต่งข้อความให้อ่านง่าย รองรับ HTML Formatting บน Telegram
     msg = (
         f"📚 <b>มังงะอัปเดตตอนใหม่!</b>\n"
         f"📌 <b>เรื่อง:</b> {manga_name}\n"
@@ -42,9 +39,7 @@ def send_telegram(manga_name, chapter, url):
     
     try:
         response = requests.post(telegram_url, json=payload)
-        if response.status_code == 200:
-            print(f"🔔 แจ้งเตือน Telegram สำเร็จ: {manga_name} -> {chapter}")
-        else:
+        if response.status_code != 200:
             print(f"❌ ส่งข้อความเข้า Telegram ล้มเหลว: {response.text}")
     except Exception as e:
         print(f"⚠️ เกิดข้อผิดพลาดในการเชื่อมต่อ Telegram: {str(e)}")
@@ -52,27 +47,26 @@ def send_telegram(manga_name, chapter, url):
 def main():
     db = load_db()
     
-    # รายการมังงะและจุดดึงข้อความตอนล่าสุด
     manga_list = [
         {
             "name": "What a Bountiful Harvest, Demon Lord",
             "url": "https://www.slow-manga.net/manga/what-a-bountiful-harvest-demon-lord/",
-            "selector": ".wp-manga-chapter a, .chapter-link a, li.chapter a" 
+            "selector": ".wp-manga-chapter a, .chapter-link a, li.chapter a, .chapternum" 
         },
         {
             "name": "Disastrous Necromancer",
             "url": "https://www.go-manga.com/disastrous-necromancer/",
-            "selector": ".wp-manga-chapter a, .chapter-link a, li.chapter a"
+            "selector": ".wp-manga-chapter a, .chapter-link a, li.chapter a, .chapternum"
         },
         {
             "name": "Level 1 Player",
             "url": "https://www.up-manga.com/level-1-player/",
-            "selector": ".wp-manga-chapter a, .chapter-link a, li.chapter a"
+            "selector": ".wp-manga-chapter a, .chapter-link a, li.chapter a, .chapternum"
         },
         {
             "name": "Magic Emperor",
             "url": "https://www.tanuki-manga.net/manga/magic-emperor/",
-            "selector": ".wp-manga-chapter a, .chapter-link a, li.chapter a"
+            "selector": ".wp-manga-chapter a, .chapter-link a, li.chapter a, .chapternum"
         }
     ]
     
@@ -93,12 +87,20 @@ def main():
             
             try:
                 print(f"🔍 กำลังตรวจสอบ: {name}...")
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                # เพิ่มความอึดให้บอท รอโหลดข้อมูลนานขึ้นเล็กน้อย
+                page.goto(url, wait_until="load", timeout=45000)
                 
+                # บังคับให้รอตัว Selector แสดงตัวบนหน้าเว็บ ป้องกันการดึงข้อมูลตอนเว็บยังโหลดไม่เสร็จ
+                page.wait_for_selector(selector, timeout=10000)
                 latest_chap_element = page.locator(selector).first
                 
-                if latest_chap_element.count() > 0:
+                if latest_chap_element and latest_chap_element.count() > 0:
                     current_chap = latest_chap_element.inner_text().strip()
+                    # ถ้าดึงมาแล้วดันได้ค่าว่าง ให้ข้ามไปก่อนเพื่อป้องกันฐานข้อมูลพัง
+                    if not current_chap:
+                        print(f"⚠️ ข้อความที่ดึงได้จาก {name} เป็นค่าว่าง ข้ามข้อมูลนี้")
+                        continue
+                        
                     print(f"✨ เจอตอนล่าสุด: {current_chap}")
                     
                     if name not in db:
@@ -114,12 +116,15 @@ def main():
                     print(f"❌ หาจุดแสดงข้อมูลตอนล่าสุดไม่เจอในเรื่อง: {name}")
                     
             except Exception as e:
+                # 🛑 จุดสำคัญ: ดักจับและแสดง Error แต่ไม่สั่งให้สคริปต์หยุดทำงาน เพื่อให้เรื่องอื่นทำงานต่อได้
                 print(f"⚠️ เกิดข้อผิดพลาดกับเรื่อง {name}: {str(e)}")
+                continue
                 
         browser.close()
         
     if has_updates:
         save_db(db)
+    print("🏁 บอททำงานเสร็จสิ้นกระบวนการ")
 
 if __name__ == "__main__":
     main()
