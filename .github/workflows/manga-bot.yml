@@ -49,5 +49,7 @@ jobs:
           git config --local user.name "github-actions[bot]"
           if [ -f manga_db.json ]; then
             git add manga_db.json
+            # 🔄 เพิ่มบรรทัดนี้: ดึงข้อมูลล่าสุดจากเว็บลงมาก่อนเผื่อมี่แอบแก้ไขหน้าเว็บ บอทจะได้ไม่เออเร่อ
+            git pull --rebase origin main
             git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 อัปเดตฐานข้อมูลตอนล่าสุด [Automated]" && git push)
           fi
