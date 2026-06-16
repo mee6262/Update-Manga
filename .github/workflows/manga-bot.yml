@@ -22,15 +22,14 @@ jobs:
         with:
           python-version: '3.11'
 
-      # 🛠️ จัดการติดตั้งแพ็คเกจระบบพื้นฐานด้วยตัวเอง เพื่อรองรับ Ubuntu เวอร์ชันใหม่
-      # และสร้างทางเชื่อม (Symlink) ให้ระบบมองเห็น libasound2 เพื่อหลอกบอทตัวเก่า
+      # 🛠️ จัดการติดตั้งแพ็คเกจระบบและทำทางเชื่อมให้ Chromium เปิดทำงานได้บน Ubuntu ใหม่
+       Sir, Yes Sir!
       - name: Install System Dependencies for Chromium
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2t64 libgbm1 libnspr4 libnss3 libxss1
-          # ลบบรรทัด: sudo ln -s /usr/lib/x86_64-linux-gnu/libasound.so.2 /usr/lib/x86_64-linux-gnu/libasound2 || true
+          sudo ln -s /usr/lib/x86_64-linux-gnu/libasound.so.2 /usr/lib/x86_64-linux-gnu/libasound2 || true
 
-      # 🚀 สั่งติดตั้งเฉพาะเบราว์เซอร์เท่านั้น ตัดคำว่า --with-deps ออกไปเพื่อไม่ให้ระบบพัง
       - name: Install Python Packages and Playwright Browser
         run: |
           pip install -r requirements.txt
@@ -43,6 +42,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python bot.py
 
+      # 🤝 ระบบจัดการ Git สไตล์ที่คุณมี่ปรับปรุงมา ดึงข้อมูลผสานกันก่อน Push ป้องกันปัญหาชนกัน
       - name: Commit and update current status
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
