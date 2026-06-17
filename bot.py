@@ -9,9 +9,10 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 DB_FILE = "manga_db.json"
 LIST_FILE = "manga_list.txt"
 
-# เว็บกลุ่ม slow-manga / go-manga / up-manga / tanuki-manga ใช้ธีมเดียวกัน
-# ทุกหน้ามีลิงก์ "อ่านตอนล่าสุด ตอนที่ X" อยู่ตำแหน่งเดิมเป๊ะ จับด้วยข้อความแทนการเดา class
-LATEST_CHAPTER_SELECTOR = 'a:has-text("ตอนล่าสุด")'
+# เว็บกลุ่ม slow-manga / go-manga / up-manga / tanuki-manga ใช้ธีมเดียวกัน แต่คำเรียก "ตอนล่าสุด"
+# ไม่เหมือนกันทุกเว็บ: go-manga/up-manga ใช้ "อ่านตอนล่าสุด" ส่วน slow-manga/tanuki-manga ใช้ "ตอนใหม่"
+# จับทั้งสองคำไว้เผื่อ
+LATEST_CHAPTER_SELECTOR = 'a:has-text("ตอนล่าสุด"), a:has-text("ตอนใหม่")'
 
 # selector สำรองสำหรับดึงรูปปก ถ้าไม่เจอ og:image
 COVER_FALLBACK_SELECTORS = [
