@@ -2,9 +2,8 @@ name: Manga Auto Update Bot
 
 on:
   schedule:
-    # ⏰ บอทจะรันที่เวลา 03:00, 07:00 และ 12:00 UTC
-    # ซึ่งตรงกับเวลาไทยคือ 10:00 น. | 14:00 น. | 19:00 น. พอดีครับ
-    - cron: '0 3,7,12 * * *'
+    # Run every 3 hours (minute 0 of every 3rd hour) — times are UTC
+    - cron: '0 */3 * * *'
   workflow_dispatch:
 
 jobs:
