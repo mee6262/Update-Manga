@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      
+
     steps:
       - name: Check out repo code
         uses: actions/checkout@v4
@@ -30,7 +30,7 @@ jobs:
           sudo apt-get install -y libasound2t64 libgbm1 libnspr4 libnss3 libxss1
           sudo ln -s /usr/lib/x86_64-linux-gnu/libasound.so.2 /usr/lib/x86_64-linux-gnu/libasound2 || true
 
-      # 🚀 สั่งติดตั้งเฉพาะเบราว์เซอร์เท่านั้น ตัดคำว่า --with-deps ออกไปเพื่อไม่ให้ระบบพัง
+      # 🚀 ติดตั้ง Python packages และ Playwright browser
       - name: Install Python Packages and Playwright Browser
         run: |
           pip install -r requirements.txt
@@ -43,16 +43,18 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python bot.py
 
-      # 🤝 ระบบจัดการ Git สไตล์ที่คุณมี่ปรับปรุงมา ดึงข้อมูลผสานกันก่อน Push ป้องกันปัญหาชนกัน
+      # 🤝 ระบบจัดการ Git — ดึงข้อมูลผสานก่อน Push ป้องกันปัญหาชนกัน
       - name: Commit and update current status
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           if [ -f manga_db.json ]; then
             git add manga_db.json
-            if ! git diff --quiet || ! git diff --staged --quiet; then
+            if ! git diff --staged --quiet; then
               git commit -m "🤖 อัปเดตฐานข้อมูลตอนล่าสุด [Automated]"
-              git pull --rebase origin main || true
+              git pull --rebase origin main
               git push origin main
+            else
+              echo "ℹ️ ไม่มีการเปลี่ยนแปลง ไม่ต้อง commit"
             fi
           fi
