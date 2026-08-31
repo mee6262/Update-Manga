@@ -1,3 +1,55 @@
+โค้ด GitHub Actions Workflow ชุดนี้**เขียนได้สมบูรณ์ เรียบหรู และครอบคลุมปัญหาหลักๆ ครบถ้วนแล้ว** ครับ
+
+มีจุดเด่นหลายเรื่องที่ทำไว้ดีมาก:
+
+* **การจัดการ Chromium:** มี step `Install System Dependencies for Chromium` แก้ปัญหา `libasound2` ใน Ubuntu runner เวอร์ชันใหม่ (`ubuntu-24.04` / `ubuntu-latest`) ได้ถูกต้อง
+* **การจัดการ Git State:** มีการเช็ค `git diff --staged --quiet` เพื่อป้องกันการเกิด Empty Commit และใช้ `git pull --rebase` ช่วยลดโอกาสการเกิด Push Conflict
+
+---
+
+### 💡 ข้อเสนอแนะเพื่อปรับปรุงให้สมบูรณ์ขึ้น (Optional Improvements)
+
+หากต้องการปรับแต่งให้ทำงานได้ราบรื่นยิ่งขึ้น มี 3 จุดที่แนะนำให้พิจารณาปรับครับ:
+
+#### 1. การดึงระบบสาขา (Branch) แบบ Dynamic ในขั้นตอน Push
+
+ในขั้นตอน `Commit and update current status` มีการระบุชื่อ branch ไว้เป็น `origin main` หากวันใดมี่เปลี่ยนชื่อ branch หลัก (เช่น เป็น `master`) อาจจะส่งผลให้ Step นี้ค้างหรือ Error ได้ สามารถปรับใช้ Dynamic standard variable ของ GitHub Actions แทนได้ดังนี้:
+
+```yaml
+git pull --rebase origin ${{ github.ref_name }}
+git push origin ${{ github.ref_name }}
+
+```
+
+#### 2. ใช้ `playwright install --with-deps chromium` แทนการลง system deps มือ
+
+Playwright มีคำสั่งสำหรับติดตั้ง System Dependencies ของเบราว์เซอร์ให้อัตโนมัติอยู่แล้ว ซึ่งจะครอบคลุม Linux shared libraries ทั้งหมดโดยไม่ต้องสั่ง `apt-get install` เองหลายตัว:
+
+```yaml
+- name: Install Python Packages and Playwright Browser
+  run: |
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+    playwright install --with-deps chromium
+
+```
+
+*(ถ้าลองเปลี่ยนมาใช้คำสั่งนี้ สามารถตัด step `Install System Dependencies for Chromium` ออกได้เลยครับ)*
+
+#### 3. ป้องกันปัญหา Rebase Conflict
+
+กรณีที่รันบอทถี่ๆ หรือมี commit ใหม่จากภายนอกเข้า `main` ระหว่างที่บอทกำลังรัน `git pull --rebase` อาจเจอ conflict จากไฟล์ `manga_db.json` ได้ การใช้ strategy แบบ **theirs** จะช่วยบังคับให้ใช้เวอร์ชันล่าสุดที่บอทเพิ่งรันเสร็จเสมอ:
+
+```bash
+git pull --rebase -X theirs origin ${{ github.ref_name }}
+
+```
+
+---
+
+### 📝 ไฟล์ Workflow ที่ปรับปรุงสมบูรณ์แล้ว
+
+```yaml
 name: Manga Auto Update Bot
 
 on:
@@ -16,25 +68,19 @@ jobs:
       - name: Check out repo code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0 # ดึง History ครบ ป้องกันปัญหาตอน pull --rebase
 
       - name: Set up Python environment
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # 🛠️ จัดการติดตั้งแพ็คเกจระบบและทำทางเชื่อมให้ Chromium เปิดทำงานได้บน Ubuntu ใหม่
-      - name: Install System Dependencies for Chromium
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2t64 libgbm1 libnspr4 libnss3 libxss1
-          sudo ln -s /usr/lib/x86_64-linux-gnu/libasound.so.2 /usr/lib/x86_64-linux-gnu/libasound2 || true
-
-      # 🚀 ติดตั้ง Python packages และ Playwright browser
+      # 🚀 ติดตั้ง Python packages และ Playwright พร้อมDependencies ของระบบ
       - name: Install Python Packages and Playwright Browser
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
-          playwright install chromium
+          playwright install --with-deps chromium
 
       - name: Execute script and check updates
         env:
@@ -43,7 +89,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python bot.py
 
-      # 🤝 ระบบจัดการ Git — ดึงข้อมูลผสานก่อน Push ป้องกันปัญหาชนกัน
+      # 🤝 ระบบจัดการ Git — ดึงข้อมูลผสานก่อน Push
       - name: Commit and update current status
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
@@ -52,9 +98,13 @@ jobs:
             git add manga_db.json
             if ! git diff --staged --quiet; then
               git commit -m "🤖 อัปเดตฐานข้อมูลตอนล่าสุด [Automated]"
-              git pull --rebase origin main
-              git push origin main
+              git pull --rebase -X theirs origin ${{ github.ref_name }}
+              git push origin ${{ github.ref_name }}
             else
               echo "ℹ️ ไม่มีการเปลี่ยนแปลง ไม่ต้อง commit"
             fi
           fi
+
+```
+
+ภาพรวมไฟล์เดิมของมี่ใช้งานได้จริงแน่นอนครับ สามารถนำเวอร์ชันปรับปรุงนี้ไปใช้เพื่อเพิ่มความเสถียรในระยะยาวได้เลย
