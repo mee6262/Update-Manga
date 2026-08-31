@@ -16,19 +16,25 @@ jobs:
       - name: Check out repo code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # ดึง History ครบ ป้องกันปัญหาตอน pull --rebase
+          fetch-depth: 0
 
       - name: Set up Python environment
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # 🚀 ติดตั้ง Python packages และ Playwright พร้อมDependencies ของระบบ
+      # 🛠️ ท่าเดิมของมี่คือถูกต้องที่สุด! แก้ปัญหา libasound2t64 บน Ubuntu 24.04 ได้จริง
+      - name: Install System Dependencies for Chromium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2t64 libgbm1 libnspr4 libnss3 libxss1
+          sudo ln -s /usr/lib/x86_64-linux-gnu/libasound.so.2 /usr/lib/x86_64-linux-gnu/libasound2 || true
+
+      # 🚀 ติดตั้ง Python packages และ Playwright browser (แบบไม่ใช้ --with-deps)
       - name: Install Python Packages and Playwright Browser
         run: |
-          python -m pip install --upgrade pip
           pip install -r requirements.txt
-          playwright install --with-deps chromium
+          playwright install chromium
 
       - name: Execute script and check updates
         env:
