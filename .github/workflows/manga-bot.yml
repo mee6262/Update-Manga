@@ -2,8 +2,8 @@ name: Manga Auto Update Bot
 
 on:
   schedule:
-    # Run every 3 hours (minute 0 of every 3rd hour) — times are UTC
-    - cron: '0 */3 * * *'
+    # Run every 2 hours (minute 0 of every 2rd hour) — times are UTC
+    - cron: '0 */2 * * *'
   workflow_dispatch:
 
 jobs:
