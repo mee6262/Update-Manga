@@ -355,6 +355,20 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
 
 .reader-msg { color: var(--text-dim); padding: 40px; text-align: center; }
 
+.next-hint {
+  width: 100%;
+  max-width: 800px;
+  box-sizing: border-box;
+  text-align: center;
+  padding: 30px 16px;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  opacity: 0;
+  transition: opacity 0.25s ease, color 0.25s ease;
+}
+
+.next-hint.show { opacity: 1; color: var(--accent); font-weight: 600; }
+
 /* chapter list */
 #chapterListView { background: var(--bg); }
 

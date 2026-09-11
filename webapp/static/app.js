@@ -278,6 +278,7 @@ function findChapterText(url) {
 let readerMangaId = null;
 let currentChapterData = { url: null, prevUrl: null, nextUrl: null };
 let autoAdvancing = false;
+let awaitingConfirmScroll = false; // ถึงล่างสุดแล้ว รอให้เลื่อน/สไลด์อีกทีเพื่อยืนยันไปตอนถัดไป
 
 async function openReader(chapterUrl) {
   el("#chapterListView").hidden = true;
@@ -348,6 +349,16 @@ async function loadChapter(mangaId, chapterUrl) {
     el("#readerPrev").disabled = !data.prev_url;
     el("#readerNext").disabled = !data.next_url;
 
+    awaitingConfirmScroll = false;
+    if (data.next_url) {
+      const hint = document.createElement("div");
+      hint.className = "next-hint";
+      hint.id = "nextHint";
+      hint.textContent = "เลื่อนต่ออีกทีเพื่อไปตอนถัดไป ›";
+      body.appendChild(hint);
+    }
+    initNextChapterConfirm();
+
     // อัปเดตสถานะ NEW ที่หน้าหลักและหน้าเลือกตอนแบบเงียบ ๆ ในพื้นหลัง
     loadManga();
   } catch (e) {
@@ -357,16 +368,59 @@ async function loadChapter(mangaId, chapterUrl) {
   }
 }
 
-// เช็คทุกครั้งที่เลื่อน ว่าถึงสุดท้ายของตอนที่กำลังอ่านจริง ๆ หรือยัง (ไม่ใช่แค่ใกล้ ๆ)
-// ถึงค่อยเปลี่ยนตอน กันไม่ให้มาร์คตอนถัดไปว่าอ่านแล้วก่อนเวลาอันควร
+// เช็คทุกครั้งที่เลื่อน ว่าถึงล่างสุดของตอนที่กำลังอ่านจริง ๆ หรือยัง ถ้าถึงแล้วโชว์ข้อความ
+// "เลื่อนต่ออีกทีเพื่อไปตอนถัดไป" ไว้ก่อน ยังไม่เปลี่ยนตอนทันที ต้องรอ confirm อีกจังหวะ
+// (กันเปลี่ยนตอนเร็วเกินไปทั้งที่ยังอ่านหน้าสุดท้ายไม่จบ)
 function checkAutoAdvance() {
-  if (autoAdvancing || !currentChapterData.nextUrl) return;
+  const hint = el("#nextHint");
+  if (!currentChapterData.nextUrl) return;
   const body = el("#readerBody");
   const remaining = body.scrollHeight - body.scrollTop - body.clientHeight;
-  if (remaining < 40) {
-    autoAdvancing = true;
-    loadChapter(readerMangaId, currentChapterData.nextUrl);
-  }
+  const atBottom = remaining < 40;
+  awaitingConfirmScroll = atBottom;
+  if (hint) hint.classList.toggle("show", atBottom);
+}
+
+function confirmAdvanceToNext() {
+  if (autoAdvancing || !awaitingConfirmScroll || !currentChapterData.nextUrl) return;
+  autoAdvancing = true;
+  awaitingConfirmScroll = false;
+  loadChapter(readerMangaId, currentChapterData.nextUrl);
+}
+
+// ต้องดักจังหวะ "เลื่อน/สไลด์ต่อ" หลังจากถึงล่างสุดแล้ว (scrollTop ไปต่อไม่ได้แล้ว เลย
+// ไม่มี scroll event เกิดขึ้นอีก) ด้วย wheel (เมาส์/trackpad) และ touchmove (มือถือ) แทน
+let nextChapterConfirmInit = false;
+function initNextChapterConfirm() {
+  if (nextChapterConfirmInit) return;
+  nextChapterConfirmInit = true;
+
+  const body = el("#readerBody");
+  body.addEventListener(
+    "wheel",
+    (e) => {
+      if (awaitingConfirmScroll && e.deltaY > 0) confirmAdvanceToNext();
+    },
+    { passive: true }
+  );
+
+  let touchStartY = null;
+  body.addEventListener(
+    "touchstart",
+    (e) => {
+      touchStartY = e.touches[0].clientY;
+    },
+    { passive: true }
+  );
+  body.addEventListener(
+    "touchmove",
+    (e) => {
+      if (touchStartY === null || !awaitingConfirmScroll) return;
+      const draggedUp = touchStartY - e.touches[0].clientY; // นิ้วเลื่อนขึ้น = พยายามเลื่อนเนื้อหาลงต่อ
+      if (draggedUp > 40) confirmAdvanceToNext();
+    },
+    { passive: true }
+  );
 }
 
 // ซ่อนแถบ nav ตอนเลื่อนลงอ่าน โชว์กลับมาตอนเลื่อนขึ้น (เหมือนเว็บแอปทั่วไป)
