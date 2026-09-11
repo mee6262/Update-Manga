@@ -4,15 +4,21 @@
 """
 import os
 import sys
+from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 BASE_URL = os.environ.get("MANGA_APP_URL", "http://127.0.0.1:5050")
+CRON_TOKEN = os.environ.get("CRON_TOKEN")
 
 
 def main():
     try:
-        resp = requests.post(f"{BASE_URL}/api/refresh_all", timeout=300)
+        headers = {"X-Cron-Token": CRON_TOKEN} if CRON_TOKEN else {}
+        resp = requests.post(f"{BASE_URL}/api/refresh_all", headers=headers, timeout=300)
         resp.raise_for_status()
         data = resp.json()
         print(f"อัปเดตใหม่ {len(data['updated_ids'])} เรื่อง, ผิดพลาด {len(data['failed'])} เรื่อง")

@@ -32,6 +32,11 @@ app.config.update(
 WEB_USERNAME = os.environ.get("WEB_USERNAME")
 WEB_PASSWORD = os.environ.get("WEB_PASSWORD")
 
+# โทเคนสำหรับให้ refresh_cron.py/refresh_loop.py เรียก /api/refresh_all ได้เองโดยไม่ต้อง login
+# (ใช้ header แทน ไม่ใช้ remote_addr==127.0.0.1 เพราะ Caddy ก็ proxy มาจาก 127.0.0.1 เหมือนกัน
+# เช็คแค่ IP จะเท่ากับเปิดช่องให้ใครก็ได้จากอินเทอร์เน็ตข้าม login ได้)
+CRON_TOKEN = os.environ.get("CRON_TOKEN")
+
 REQUEST_DELAY = 1.0  # หน่วงระหว่างเรื่องตอน refresh ทั้งหมด กันโดน block
 
 
@@ -41,6 +46,12 @@ def require_login():
     if not WEB_USERNAME or not WEB_PASSWORD:
         return None
     if request.endpoint in ("login", "static"):
+        return None
+    if (
+        request.endpoint == "refresh_all"
+        and CRON_TOKEN
+        and hmac.compare_digest(request.headers.get("X-Cron-Token", ""), CRON_TOKEN)
+    ):
         return None
     if session.get("authenticated"):
         return None
