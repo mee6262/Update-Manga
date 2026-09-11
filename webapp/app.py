@@ -309,7 +309,27 @@ def list_chapters(manga_id):
         {**c, "is_read": is_chapter_read(entry, c["url"], c["text"])}
         for c in chapters
     ]
-    return jsonify({"manga_name": manga["name"], "cover_url": manga.get("cover_url"), "chapters": items})
+
+    # ตอนล่าสุดที่กดอ่าน (ไว้ให้หน้าเว็บเลื่อนไปหาอัตโนมัติ) เอาจากตัวท้ายสุดของ read_urls
+    # (append ต่อท้ายทุกครั้งที่อ่าน จึงเป็นตอนล่าสุดที่อ่านจริง) หรือ fallback ข้อมูลเก่า
+    last_read_url = None
+    if entry:
+        read_urls = entry.get("read_urls") or []
+        if read_urls:
+            last_read_url = read_urls[-1]
+        elif entry.get("last_read_chapter"):
+            match = next((c for c in chapters if c["text"] == entry["last_read_chapter"]), None)
+            if match:
+                last_read_url = match["url"]
+
+    return jsonify(
+        {
+            "manga_name": manga["name"],
+            "cover_url": manga.get("cover_url"),
+            "chapters": items,
+            "last_read_url": last_read_url,
+        }
+    )
 
 
 @app.route("/api/manga/<manga_id>/mark_read", methods=["POST"])

@@ -173,6 +173,7 @@ function initAddForm() {
 // ---------- Chapter list ----------
 let currentManga = null; // { id, name }
 let currentChapters = []; // รายการตอนทั้งหมดที่โหลดมา (ยังไม่กรอง) ไว้ใช้กรองตอนค้นหา
+let lastReadUrl = null; // ตอนล่าสุดที่อ่าน ไว้เลื่อนหาอัตโนมัติตอนเปิดหน้าเลือกตอน
 
 async function openChapterList(manga) {
   currentManga = { id: manga.id, name: manga.name };
@@ -200,12 +201,14 @@ async function renderChapterList() {
     }
 
     currentChapters = data.chapters || [];
+    lastReadUrl = data.last_read_url || null;
     if (currentChapters.length === 0) {
       body.innerHTML = '<div class="reader-msg">ยังไม่มีข้อมูลรายชื่อตอน ลองรีเฟรชเรื่องนี้ในแท็บ "ตั้งค่า" ก่อน</div>';
       return;
     }
 
     renderChapterRows(currentChapters);
+    scrollToLastRead();
   } catch (e) {
     currentChapters = [];
     body.innerHTML = `<div class="reader-msg">เกิดข้อผิดพลาด: ${e}</div>`;
@@ -224,6 +227,7 @@ function renderChapterRows(chapters) {
   for (const c of chapters) {
     const row = document.createElement("div");
     row.className = "chapter-row" + (c.is_read ? " read" : "");
+    row.dataset.url = c.url;
     row.innerHTML = `
       <span class="chapter-text">${escapeHtml(c.text)}</span>
       ${c.date ? `<span class="chapter-date">${escapeHtml(c.date)}</span>` : ""}
@@ -232,6 +236,14 @@ function renderChapterRows(chapters) {
     row.addEventListener("click", () => openReader(c.url));
     body.appendChild(row);
   }
+}
+
+// เลื่อนหาแถวตอนล่าสุดที่อ่าน ให้อยู่กลางจอ จะได้อ่านต่อง่ายไม่ต้องไล่หาเอง
+function scrollToLastRead() {
+  if (!lastReadUrl) return;
+  const body = el("#chapterListBody");
+  const row = body.querySelector(`.chapter-row[data-url="${CSS.escape(lastReadUrl)}"]`);
+  if (row) row.scrollIntoView({ block: "center", behavior: "auto" });
 }
 
 function initChapterSearch() {
