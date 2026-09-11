@@ -49,7 +49,9 @@ def list_manga():
     manga_items = storage.load_manga()
     read_state = storage.load_read_state()
     items = [serialize(m, read_state) for m in manga_items]
-    items.sort(key=lambda m: (not m["is_new"], m.get("last_checked_at") or ""), reverse=False)
+    # เรื่องที่ยังไม่อ่านขึ้นก่อน แล้วภายในกลุ่มเดียวกันเรียงตามเวลาที่ "เจอตอนใหม่จริง ๆ"
+    # ล่าสุดก่อน (last_updated_at เปลี่ยนเฉพาะตอนตอนล่าสุดเปลี่ยนจริง ไม่ใช่ทุกครั้งที่เช็ค)
+    items.sort(key=lambda m: m.get("last_updated_at") or "", reverse=True)
     items.sort(key=lambda m: m["is_new"], reverse=True)
     return jsonify(items)
 
@@ -79,6 +81,7 @@ def add_manga():
         "latest_chapter_url": None,
         "cover_url": None,
         "last_checked_at": None,
+        "last_updated_at": None,
     }
 
     # ลองดึงข้อมูลทันทีตอนเพิ่ม เพื่อให้เห็นตอนล่าสุด/ปก ทันที
@@ -87,6 +90,8 @@ def add_manga():
         parsed = scraper.parse_index_page(html)
         new_item.update(parsed)
         new_item["last_checked_at"] = now_iso()
+        if parsed.get("latest_chapter"):
+            new_item["last_updated_at"] = new_item["last_checked_at"]
     except Exception as e:
         print(f"⚠️ ดึงข้อมูลตอนเพิ่มเรื่องใหม่ไม่สำเร็จ: {e}")
 
@@ -124,6 +129,8 @@ def refresh_manga(manga_id):
         prev_chapter = manga.get("latest_chapter")
         manga.update(parsed)
         manga["last_checked_at"] = now_iso()
+        if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
+            manga["last_updated_at"] = manga["last_checked_at"]
     except Exception as e:
         return jsonify({"error": f"ดึงข้อมูลไม่สำเร็จ: {e}"}), 502
 
@@ -153,6 +160,7 @@ def refresh_all():
             manga.update(parsed)
             manga["last_checked_at"] = now_iso()
             if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
+                manga["last_updated_at"] = manga["last_checked_at"]
                 updated_ids.append(manga["id"])
                 # แจ้งเตือนเฉพาะตอนที่เคยรู้ตอนล่าสุดมาก่อนแล้วเปลี่ยน (ไม่แจ้งตอนเพิ่งเพิ่มเรื่องใหม่)
                 if prev_chapter:

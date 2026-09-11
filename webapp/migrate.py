@@ -58,6 +58,7 @@ def main():
                 "latest_chapter_url": None,
                 "cover_url": None,
                 "last_checked_at": None,
+                "last_updated_at": None,
             }
         )
         if known_chapter:
