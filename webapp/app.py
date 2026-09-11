@@ -1,12 +1,15 @@
+import hmac
+import os
 import re
+import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request, Response
+from flask import Flask, jsonify, redirect, render_template, request, Response, session, url_for
 
 import scraper
 import storage
@@ -17,7 +20,56 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 app = Flask(__name__)
 
+# SECRET_KEY ต้องคงที่ (ใส่ใน .env) ไม่งั้น session จะหลุดทุกครั้งที่รีสตาร์ทแอป
+app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+app.permanent_session_lifetime = timedelta(days=90)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=True,
+)
+
+WEB_USERNAME = os.environ.get("WEB_USERNAME")
+WEB_PASSWORD = os.environ.get("WEB_PASSWORD")
+
 REQUEST_DELAY = 1.0  # หน่วงระหว่างเรื่องตอน refresh ทั้งหมด กันโดน block
+
+
+@app.before_request
+def require_login():
+    # ถ้าไม่ได้ตั้ง WEB_USERNAME/WEB_PASSWORD ไว้ใน .env (เช่นตอน dev บนเครื่อง) ปล่อยผ่านไม่บังคับ login
+    if not WEB_USERNAME or not WEB_PASSWORD:
+        return None
+    if request.endpoint in ("login", "static"):
+        return None
+    if session.get("authenticated"):
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "unauthorized"}), 401
+    return redirect(url_for("login", next=request.path))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        ok = hmac.compare_digest(username, WEB_USERNAME or "") and hmac.compare_digest(
+            password, WEB_PASSWORD or ""
+        )
+        if ok:
+            session.permanent = True
+            session["authenticated"] = True
+            return redirect(request.args.get("next") or url_for("index"))
+        error = "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง"
+    return render_template("login.html", error=error)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 def now_iso() -> str:
@@ -323,8 +375,6 @@ def proxy_image():
 
 
 if __name__ == "__main__":
-    import os
-
     debug = os.environ.get("FLASK_DEBUG") == "1"
     port = int(os.environ.get("PORT", "5050"))
     # host default เป็น 127.0.0.1 (ปลอดภัยกว่า); บน VPS ให้รันผ่าน gunicorn

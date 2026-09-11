@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>เข้าสู่ระบบ - Update Manga</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <div class="login-wrap">
+    <form class="login-box" method="POST">
+      <h1>📚 Update Manga</h1>
+      {% if error %}<div class="form-msg error">{{ error }}</div>{% endif %}
+      <input type="text" name="username" placeholder="ชื่อผู้ใช้" autofocus required />
+      <input type="password" name="password" placeholder="รหัสผ่าน" required />
+      <button type="submit" class="btn primary">เข้าสู่ระบบ</button>
+    </form>
+  </div>
+</body>
+</html>

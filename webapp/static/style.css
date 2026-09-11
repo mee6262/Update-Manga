@@ -39,6 +39,40 @@ body {
   margin-right: auto;
 }
 
+/* login */
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.login-box {
+  width: 100%;
+  max-width: 320px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.login-box h1 { font-size: 1.2rem; margin: 0 0 8px; text-align: center; }
+
+.login-box input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.login-box .btn { margin-top: 4px; }
+
 .tabs {
   display: flex;
   gap: 8px;
