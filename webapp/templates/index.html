@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Update Manga</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>📚 Update Manga</h1>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="list">รายการอัปเดต</button>
+      <button class="tab-btn" data-tab="settings">ตั้งค่า</button>
+    </nav>
+    <button id="refreshAllBtn" class="btn primary">รีเฟรชทั้งหมด</button>
+  </header>
+
+  <main>
+    <section id="listView" class="view active">
+      <div id="statusBar" class="status-bar" hidden></div>
+      <div id="mangaGrid" class="manga-grid"></div>
+      <div id="emptyState" class="empty-state" hidden>
+        ยังไม่มีเรื่องในรายการ ไปที่แท็บ "ตั้งค่า" เพื่อเพิ่มเรื่องที่ต้องการติดตาม
+      </div>
+    </section>
+
+    <section id="settingsView" class="view">
+      <form id="addForm" class="add-form">
+        <h2>เพิ่มเรื่องใหม่</h2>
+        <input type="text" id="addName" placeholder="ชื่อเรื่อง" required />
+        <input type="url" id="addUrl" placeholder="URL หน้าเรื่อง เช่น https://www.go-manga.com/overgeared/" required />
+        <button type="submit" class="btn primary">เพิ่ม</button>
+      </form>
+      <div id="addFormMsg" class="form-msg"></div>
+
+      <h2>เรื่องที่ติดตามอยู่</h2>
+      <ul id="settingsList" class="settings-list"></ul>
+    </section>
+  </main>
+
+  <div id="reader" class="reader" hidden>
+    <div class="reader-topbar">
+      <button id="readerClose" class="btn">✕ ปิด</button>
+      <div class="reader-title">
+        <span id="readerMangaName"></span>
+        <span id="readerChapterName" class="reader-chapter"></span>
+      </div>
+      <div class="reader-nav">
+        <button id="readerPrev" class="btn" disabled>‹ ตอนก่อนหน้า</button>
+        <button id="readerNext" class="btn" disabled>ตอนถัดไป ›</button>
+      </div>
+    </div>
+    <div id="readerBody" class="reader-body"></div>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

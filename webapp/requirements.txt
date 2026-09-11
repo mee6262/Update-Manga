@@ -1,0 +1,9 @@
+# dependencies เฉพาะเว็บแอป (ไม่ต้องใช้ playwright เลย ต่างจาก requirements.txt ที่ root
+# ซึ่งเป็นของ bot.py เดิม) ใช้ไฟล์นี้ตอน deploy เว็บแอปแทน
+requests==2.31.0
+flask==3.0.3
+beautifulsoup4==4.12.3
+python-dotenv==1.0.1
+# gunicorn รันบน Windows ไม่ได้ (ต้องพึ่ง fork ของ Unix) ใช้ตัวไหนอัตโนมัติตาม OS
+gunicorn==22.0.0; platform_system != "Windows"
+waitress==3.0.0; platform_system == "Windows"

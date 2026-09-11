@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# ข้อมูลส่วนตัว (ตอนที่อ่านแล้ว / cache รูปตอน) ไม่ต้อง commit
+webapp/data/read_state.json
+webapp/data/chapters/

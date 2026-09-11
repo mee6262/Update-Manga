@@ -1,2 +1,4 @@
+# dependencies ของ bot.py เดิม (ใช้ playwright ส่งแจ้งเตือน Telegram ผ่าน GitHub Actions)
+# ถ้าจะรันแค่เว็บแอป ใช้ webapp/requirements.txt แทน ไม่ต้องลง playwright เลย
 playwright==1.42.0
 requests==2.31.0
