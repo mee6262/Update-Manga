@@ -234,6 +234,19 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
   flex-wrap: wrap;
 }
 
+/* เฉพาะหน้าอ่านมังงะ (ไม่ใช่หน้าเลือกตอน) ให้ลอยทับเนื้อหาและซ่อนได้ตอนเลื่อนอ่าน */
+#readerTopbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  transition: transform 0.25s ease;
+  transform: translateY(0);
+}
+
+#readerTopbar.nav-hidden { transform: translateY(-100%); }
+
 .reader-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .reader-title span:first-child { font-weight: 600; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reader-chapter { font-size: 0.8rem; color: var(--text-dim); }

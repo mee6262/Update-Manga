@@ -233,11 +233,18 @@ async function openReader(chapterUrl) {
 async function loadChapter(mangaId, chapterUrl) {
   const reader = el("#reader");
   const body = el("#readerBody");
+  const topbar = el("#readerTopbar");
   reader.hidden = false;
   document.body.style.overflow = "hidden";
   body.innerHTML = '<div class="reader-msg">กำลังโหลด...</div>';
   el("#readerPrev").disabled = true;
   el("#readerNext").disabled = true;
+
+  // เผื่อพื้นที่ด้านบนให้พอดีกับแถบ nav (ลอยทับ) กันไม่ให้บังรูปหน้าแรก
+  topbar.classList.remove("nav-hidden");
+  body.style.paddingTop = topbar.offsetHeight + "px";
+  body.scrollTop = 0;
+  initReaderAutoHide();
 
   const qs = chapterUrl ? `?url=${encodeURIComponent(chapterUrl)}` : "";
   try {
@@ -273,6 +280,36 @@ async function loadChapter(mangaId, chapterUrl) {
   } catch (e) {
     body.innerHTML = `<div class="reader-msg">เกิดข้อผิดพลาด: ${e}</div>`;
   }
+}
+
+// ซ่อนแถบ nav ตอนเลื่อนลงอ่าน โชว์กลับมาตอนเลื่อนขึ้น (เหมือนเว็บแอปทั่วไป)
+let readerAutoHideInit = false;
+function initReaderAutoHide() {
+  if (readerAutoHideInit) return;
+  readerAutoHideInit = true;
+
+  const body = el("#readerBody");
+  const topbar = el("#readerTopbar");
+  let lastScrollTop = 0;
+  let ticking = false;
+
+  body.addEventListener("scroll", () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      const scrollTop = body.scrollTop;
+      const delta = scrollTop - lastScrollTop;
+      if (scrollTop < 40) {
+        topbar.classList.remove("nav-hidden");
+      } else if (delta > 4) {
+        topbar.classList.add("nav-hidden");
+      } else if (delta < -4) {
+        topbar.classList.remove("nav-hidden");
+      }
+      lastScrollTop = scrollTop;
+      ticking = false;
+    });
+  });
 }
 
 function closeReader() {
