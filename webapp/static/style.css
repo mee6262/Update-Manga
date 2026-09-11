@@ -78,6 +78,12 @@ body {
   gap: 8px;
 }
 
+.topbar-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .tab-btn {
   background: transparent;
   border: 1px solid var(--border);
