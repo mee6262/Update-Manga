@@ -18,11 +18,17 @@
   <header class="topbar">
     <h1>📚 Update Manga</h1>
     <nav class="tabs">
-      <button class="tab-btn active" data-tab="list">รายการอัปเดต</button>
-      <button class="tab-btn" data-tab="settings">ตั้งค่า</button>
+      <button class="tab-btn active" data-tab="list">หน้าแรก</button>
+      <button class="tab-btn icon-btn" data-tab="settings" title="ตั้งค่า">
+        <svg viewBox="0 0 24 24" width="20" height="20"><line x1="4" y1="6" x2="20" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="9" cy="6" r="2" fill="currentColor"/><line x1="4" y1="12" x2="20" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="15" cy="12" r="2" fill="currentColor"/><line x1="4" y1="18" x2="20" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="9" cy="18" r="2" fill="currentColor"/></svg>
+      </button>
     </nav>
-    <button id="refreshAllBtn" class="btn primary">รีเฟรชทั้งหมด</button>
-    <a href="/logout" class="btn" title="ออกจากระบบ">ออกจากระบบ</a>
+    <button id="refreshAllBtn" class="icon-btn" title="รีเฟรชทั้งหมด">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M21 12a9 9 0 1 1-2.64-6.36" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M21 3v6h-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <a href="/logout" class="icon-btn" title="ออกจากระบบ">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M16 17l5-5-5-5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 12H9" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </a>
   </header>
 
   <main>
@@ -55,22 +61,33 @@
         <span id="chapterListMangaName"></span>
       </div>
     </div>
+    <div class="chapter-search-bar">
+      <input type="text" id="chapterSearch" inputmode="numeric" placeholder="ค้นหาเลขตอน..." />
+    </div>
     <div id="chapterListBody" class="chapter-list-body"></div>
   </div>
 
   <div id="reader" class="reader" hidden>
     <div id="readerTopbar" class="reader-topbar">
-      <button id="readerClose" class="btn">‹ กลับไปเลือกตอน</button>
+      <button id="readerClose" class="icon-btn" title="กลับไปเลือกตอน">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M15 5 L8 12 L15 19" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
       <div class="reader-title">
         <span id="readerMangaName"></span>
-        <span id="readerChapterName" class="reader-chapter"></span>
-      </div>
-      <div class="reader-nav">
-        <button id="readerPrev" class="btn" disabled>‹ ตอนก่อนหน้า</button>
-        <button id="readerNext" class="btn" disabled>ตอนถัดไป ›</button>
       </div>
     </div>
     <div id="readerBody" class="reader-body"></div>
+    <div id="readerBottombar" class="reader-bottombar">
+      <span id="readerChapterName" class="reader-chapter"></span>
+      <div class="reader-nav">
+        <button id="readerPrev" class="icon-btn" disabled title="ตอนก่อนหน้า">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path d="M15 5 L8 12 L15 19" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button id="readerNext" class="icon-btn" disabled title="ตอนถัดไป">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path d="M9 5 L16 12 L9 19" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </div>
   </div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>

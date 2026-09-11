@@ -81,7 +81,7 @@ async function refreshAll() {
   const btn = el("#refreshAllBtn");
   const status = el("#statusBar");
   btn.disabled = true;
-  btn.textContent = "กำลังรีเฟรช...";
+  btn.classList.add("spinning");
   status.hidden = false;
   status.textContent = "กำลังตรวจสอบตอนใหม่ทุกเรื่อง อาจใช้เวลาสักครู่...";
 
@@ -97,7 +97,7 @@ async function refreshAll() {
     status.textContent = "เกิดข้อผิดพลาดระหว่างรีเฟรช: " + e;
   } finally {
     btn.disabled = false;
-    btn.textContent = "รีเฟรชทั้งหมด";
+    btn.classList.remove("spinning");
     setTimeout(() => { status.hidden = true; }, 6000);
   }
 }
@@ -172,15 +172,18 @@ function initAddForm() {
 
 // ---------- Chapter list ----------
 let currentManga = null; // { id, name }
+let currentChapters = []; // รายการตอนทั้งหมดที่โหลดมา (ยังไม่กรอง) ไว้ใช้กรองตอนค้นหา
 
 async function openChapterList(manga) {
   currentManga = { id: manga.id, name: manga.name };
   const view = el("#chapterListView");
   const body = el("#chapterListBody");
+  const search = el("#chapterSearch");
   view.hidden = false;
   document.body.style.overflow = "hidden";
   el("#chapterListMangaName").textContent = manga.name;
   body.innerHTML = '<div class="reader-msg">กำลังโหลด...</div>';
+  search.value = "";
 
   await renderChapterList();
 }
@@ -191,37 +194,69 @@ async function renderChapterList() {
     const res = await fetch(`/api/manga/${currentManga.id}/chapters`);
     const data = await res.json();
     if (!res.ok) {
+      currentChapters = [];
       body.innerHTML = `<div class="reader-msg">${escapeHtml(data.error || "โหลดไม่สำเร็จ")}</div>`;
       return;
     }
 
-    if (!data.chapters || data.chapters.length === 0) {
+    currentChapters = data.chapters || [];
+    if (currentChapters.length === 0) {
       body.innerHTML = '<div class="reader-msg">ยังไม่มีข้อมูลรายชื่อตอน ลองรีเฟรชเรื่องนี้ในแท็บ "ตั้งค่า" ก่อน</div>';
       return;
     }
 
-    body.innerHTML = "";
-    for (const c of data.chapters) {
-      const row = document.createElement("div");
-      row.className = "chapter-row" + (c.is_read ? " read" : "");
-      row.innerHTML = `
-        <span class="chapter-text">${escapeHtml(c.text)}</span>
-        ${c.date ? `<span class="chapter-date">${escapeHtml(c.date)}</span>` : ""}
-        ${!c.is_read ? '<span class="new-badge">NEW!</span>' : ""}
-      `;
-      row.addEventListener("click", () => openReader(c.url));
-      body.appendChild(row);
-    }
+    renderChapterRows(currentChapters);
   } catch (e) {
+    currentChapters = [];
     body.innerHTML = `<div class="reader-msg">เกิดข้อผิดพลาด: ${e}</div>`;
   }
+}
+
+function renderChapterRows(chapters) {
+  const body = el("#chapterListBody");
+  body.innerHTML = "";
+
+  if (chapters.length === 0) {
+    body.innerHTML = '<div class="reader-msg">ไม่พบตอนที่ค้นหา</div>';
+    return;
+  }
+
+  for (const c of chapters) {
+    const row = document.createElement("div");
+    row.className = "chapter-row" + (c.is_read ? " read" : "");
+    row.innerHTML = `
+      <span class="chapter-text">${escapeHtml(c.text)}</span>
+      ${c.date ? `<span class="chapter-date">${escapeHtml(c.date)}</span>` : ""}
+      ${!c.is_read ? '<span class="new-badge">NEW!</span>' : ""}
+    `;
+    row.addEventListener("click", () => openReader(c.url));
+    body.appendChild(row);
+  }
+}
+
+function initChapterSearch() {
+  el("#chapterSearch").addEventListener("input", (e) => {
+    const q = e.target.value.trim();
+    if (!q) {
+      renderChapterRows(currentChapters);
+      return;
+    }
+    const filtered = currentChapters.filter((c) => c.text.includes(q));
+    renderChapterRows(filtered);
+  });
 }
 
 function closeChapterList() {
   el("#chapterListView").hidden = true;
   document.body.style.overflow = "";
   currentManga = null;
+  currentChapters = [];
   loadManga();
+}
+
+function findChapterText(url) {
+  const match = currentChapters.find((c) => c.url === url);
+  return match ? match.text : "";
 }
 
 // ---------- Reader ----------
@@ -234,15 +269,18 @@ async function loadChapter(mangaId, chapterUrl) {
   const reader = el("#reader");
   const body = el("#readerBody");
   const topbar = el("#readerTopbar");
+  const bottombar = el("#readerBottombar");
   reader.hidden = false;
   document.body.style.overflow = "hidden";
   body.innerHTML = '<div class="reader-msg">กำลังโหลด...</div>';
   el("#readerPrev").disabled = true;
   el("#readerNext").disabled = true;
 
-  // เผื่อพื้นที่ด้านบนให้พอดีกับแถบ nav (ลอยทับ) กันไม่ให้บังรูปหน้าแรก
+  // เผื่อพื้นที่บน/ล่างให้พอดีกับแถบ nav ทั้งสอง (ลอยทับ) กันไม่ให้บังรูป
   topbar.classList.remove("nav-hidden");
+  bottombar.classList.remove("nav-hidden");
   body.style.paddingTop = topbar.offsetHeight + "px";
+  body.style.paddingBottom = bottombar.offsetHeight + "px";
   body.scrollTop = 0;
   initReaderAutoHide();
 
@@ -256,7 +294,7 @@ async function loadChapter(mangaId, chapterUrl) {
     }
 
     el("#readerMangaName").textContent = data.manga_name || "";
-    el("#readerChapterName").textContent = data.chapter_text || "";
+    el("#readerChapterName").textContent = data.chapter_text || findChapterText(chapterUrl) || "";
 
     if (!data.images || data.images.length === 0) {
       body.innerHTML = '<div class="reader-msg">ไม่พบรูปภาพในตอนนี้</div>';
@@ -290,6 +328,7 @@ function initReaderAutoHide() {
 
   const body = el("#readerBody");
   const topbar = el("#readerTopbar");
+  const bottombar = el("#readerBottombar");
   let lastScrollTop = 0;
   let ticking = false;
 
@@ -301,10 +340,13 @@ function initReaderAutoHide() {
       const delta = scrollTop - lastScrollTop;
       if (scrollTop < 40) {
         topbar.classList.remove("nav-hidden");
+        bottombar.classList.remove("nav-hidden");
       } else if (delta > 4) {
         topbar.classList.add("nav-hidden");
+        bottombar.classList.add("nav-hidden");
       } else if (delta < -4) {
         topbar.classList.remove("nav-hidden");
+        bottombar.classList.remove("nav-hidden");
       }
       lastScrollTop = scrollTop;
       ticking = false;
@@ -326,6 +368,7 @@ function closeReader() {
 function init() {
   initTabs();
   initAddForm();
+  initChapterSearch();
   el("#refreshAllBtn").addEventListener("click", refreshAll);
   el("#readerClose").addEventListener("click", closeReader);
   el("#chapterListClose").addEventListener("click", closeChapterList);
