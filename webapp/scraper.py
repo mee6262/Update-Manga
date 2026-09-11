@@ -81,10 +81,30 @@ def _extract_balanced_json(text: str, marker: str) -> dict | None:
     return None
 
 
+def parse_chapter_list(soup: BeautifulSoup) -> list[dict]:
+    """ดึงรายชื่อตอนทั้งหมด (ใหม่ -> เก่า ตามลำดับที่เว็บแสดง) จาก #chapterlist"""
+    chapters = []
+    for li in soup.select("#chapterlist li"):
+        anchor = li.select_one(".eph-num a") or li.find("a")
+        if not anchor or not anchor.get("href"):
+            continue
+        num_span = anchor.select_one(".chapternum")
+        text = num_span.get_text(strip=True) if num_span else anchor.get_text(strip=True)
+        date_span = anchor.select_one(".chapterdate")
+        date = date_span.get_text(strip=True) if date_span else None
+        chapters.append({"text": text, "url": anchor["href"], "date": date})
+    return chapters
+
+
 def parse_index_page(html: str) -> dict:
-    """ดึงตอนล่าสุด + ลิงก์ + รูปปก จากหน้ารายละเอียดเรื่อง"""
+    """ดึงตอนล่าสุด + ลิงก์ + รูปปก + รายชื่อตอนทั้งหมด จากหน้ารายละเอียดเรื่อง"""
     soup = BeautifulSoup(html, "html.parser")
-    result = {"latest_chapter": None, "latest_chapter_url": None, "cover_url": None}
+    result = {
+        "latest_chapter": None,
+        "latest_chapter_url": None,
+        "cover_url": None,
+        "chapters": [],
+    }
 
     span = soup.select_one("span.epcurlast")
     if span:
@@ -106,6 +126,8 @@ def parse_index_page(html: str) -> dict:
             if img and img.get("src"):
                 result["cover_url"] = img["src"]
                 break
+
+    result["chapters"] = parse_chapter_list(soup)
 
     return result
 

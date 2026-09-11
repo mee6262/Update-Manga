@@ -24,13 +24,33 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def is_chapter_read(entry: dict | None, chapter_url: str, chapter_text: str | None = None) -> bool:
+    """เช็คว่าตอนนี้ (ระบุด้วย url) อ่านแล้วหรือยัง"""
+    if not entry:
+        return False
+    if chapter_url in entry.get("read_urls", []):
+        return True
+    # fallback สำหรับข้อมูลเก่าก่อนมีระบบติดตามรายตอน (มีแค่ last_read_chapter เป็นข้อความ)
+    old_last = entry.get("last_read_chapter")
+    if old_last and chapter_text and old_last == chapter_text:
+        return True
+    return False
+
+
 def is_new(manga: dict, read_state: dict) -> bool:
-    latest = manga.get("latest_chapter")
-    if not latest:
+    url = manga.get("latest_chapter_url")
+    if not url:
         return False
     entry = read_state.get(manga["id"])
-    last_read = entry.get("last_read_chapter") if entry else None
-    return latest != last_read
+    return not is_chapter_read(entry, url, manga.get("latest_chapter"))
+
+
+def mark_chapter_read(read_state: dict, manga_id: str, chapter_url: str):
+    entry = read_state.setdefault(manga_id, {"read_urls": [], "last_read_at": None})
+    entry.setdefault("read_urls", [])
+    if chapter_url not in entry["read_urls"]:
+        entry["read_urls"].append(chapter_url)
+    entry["last_read_at"] = now_iso()
 
 
 def serialize(manga: dict, read_state: dict) -> dict:
@@ -80,6 +100,7 @@ def add_manga():
         "latest_chapter": None,
         "latest_chapter_url": None,
         "cover_url": None,
+        "chapters": [],
         "last_checked_at": None,
         "last_updated_at": None,
     }
@@ -201,17 +222,31 @@ def get_chapter(manga_id):
             storage.save_chapter_cache(manga_id, chapter_url, data)
             storage.add_image_domains({urlparse(src).netloc for src in data["images"]})
 
-    # ถือว่า "อ่านแล้ว" เท่ากับตอนล่าสุดที่เรารู้ ณ ตอนนี้ (ไม่ใช่แค่ตอนที่เปิดดู เผื่อ user กดเข้าตอนเก่า)
+    # มาร์คเฉพาะ "ตอนที่เปิดดูจริง" ว่าอ่านแล้ว (ไม่กระทบตอนอื่นของเรื่องเดียวกัน)
     read_state = storage.load_read_state()
-    read_state[manga_id] = {
-        "last_read_chapter": manga.get("latest_chapter"),
-        "last_read_at": now_iso(),
-    }
+    mark_chapter_read(read_state, manga_id, chapter_url)
     storage.save_read_state(read_state)
 
     data["chapter_url"] = chapter_url
     data["manga_name"] = manga["name"]
     return jsonify(data)
+
+
+@app.route("/api/manga/<manga_id>/chapters", methods=["GET"])
+def list_chapters(manga_id):
+    manga_items = storage.load_manga()
+    manga = next((m for m in manga_items if m["id"] == manga_id), None)
+    if not manga:
+        return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
+
+    read_state = storage.load_read_state()
+    entry = read_state.get(manga_id)
+    chapters = manga.get("chapters") or []
+    items = [
+        {**c, "is_read": is_chapter_read(entry, c["url"], c["text"])}
+        for c in chapters
+    ]
+    return jsonify({"manga_name": manga["name"], "cover_url": manga.get("cover_url"), "chapters": items})
 
 
 @app.route("/api/manga/<manga_id>/mark_read", methods=["POST"])
@@ -220,21 +255,27 @@ def mark_read(manga_id):
     manga = next((m for m in manga_items if m["id"] == manga_id), None)
     if not manga:
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
+    if not manga.get("latest_chapter_url"):
+        return jsonify({"error": "ยังไม่ทราบลิงก์ตอนล่าสุด ลองรีเฟรชเรื่องนี้ก่อน"}), 400
 
     read_state = storage.load_read_state()
-    read_state[manga_id] = {
-        "last_read_chapter": manga.get("latest_chapter"),
-        "last_read_at": now_iso(),
-    }
+    mark_chapter_read(read_state, manga_id, manga["latest_chapter_url"])
     storage.save_read_state(read_state)
     return jsonify({"ok": True})
 
 
 @app.route("/api/manga/<manga_id>/mark_unread", methods=["POST"])
 def mark_unread(manga_id):
+    manga_items = storage.load_manga()
+    manga = next((m for m in manga_items if m["id"] == manga_id), None)
+    if not manga:
+        return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
+
     read_state = storage.load_read_state()
-    if manga_id in read_state:
-        del read_state[manga_id]
+    entry = read_state.get(manga_id)
+    latest_url = manga.get("latest_chapter_url")
+    if entry and latest_url and latest_url in entry.get("read_urls", []):
+        entry["read_urls"].remove(latest_url)
         storage.save_read_state(read_state)
     return jsonify({"ok": True})
 

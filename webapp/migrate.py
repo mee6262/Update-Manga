@@ -57,6 +57,7 @@ def main():
                 "latest_chapter": known_chapter,
                 "latest_chapter_url": None,
                 "cover_url": None,
+                "chapters": [],
                 "last_checked_at": None,
                 "last_updated_at": None,
             }
