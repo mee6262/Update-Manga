@@ -272,34 +272,16 @@ function findChapterText(url) {
 }
 
 // ---------- Reader ----------
-// อ่านต่อเนื่องแบบ Webtoon/Kakaotoon: เลื่อนใกล้ท้ายตอนแล้วต่อรูปตอนถัดไปให้อัตโนมัติ
-// โดยไม่ reload หน้า — ปุ่ม/หัวข้อขยับตามจริงว่าตอนนี้เลื่อนมาอยู่ตอนไหนแล้ว
-let activeChapterMeta = { url: null, text: "", prevUrl: null, nextUrl: null };
-let initialChapterMeta = activeChapterMeta; // ตอนแรกที่เปิดมา (hard reload) ไว้ย้อนกลับตอนเลื่อนขึ้นเหนือ divider ทั้งหมด
-let loadedDividers = []; // [{ el, meta }] เรียงตามลำดับที่ต่อท้ายเข้ามา ไว้เช็คว่าเลื่อนผ่านตอนไหนมาแล้ว
-let loadedChapterUrls = new Set();
-let tailNextUrl = null; // ตอนถัดไปของ "ตอนสุดท้ายที่โหลดมาต่อท้ายแล้ว" (ไว้เช็คตอนเลื่อนใกล้ล่างสุด)
-let isLoadingNextChapter = false;
+// เลื่อนจนสุดตอนจริง ๆ -> เปลี่ยนไปตอนถัดไปให้อัตโนมัติ (เหมือนเลื่อน slide ต่อ)
+// ตั้งใจให้เป็น hard page change ไม่ใช่ต่อรูปเข้ามาเรื่อย ๆ แบบ infinite scroll เพราะทดสอบแล้วพบว่า
+// การ prefetch/มาร์คตอนถัดไปว่าอ่านแล้วล่วงหน้าก่อนเลื่อนไปถึงจริง ทำให้ "ตอนล่าสุดที่อ่าน" เพี้ยน
 let readerMangaId = null;
+let currentChapterData = { url: null, prevUrl: null, nextUrl: null };
+let autoAdvancing = false;
 
 async function openReader(chapterUrl) {
   el("#chapterListView").hidden = true;
   await loadChapter(currentManga.id, chapterUrl);
-}
-
-function updateChapterMeta(meta) {
-  activeChapterMeta = meta;
-  el("#readerChapterName").textContent = meta.text || "";
-  el("#readerPrev").disabled = !meta.prevUrl;
-  el("#readerNext").disabled = !meta.nextUrl;
-}
-
-function goPrevChapter() {
-  if (activeChapterMeta.prevUrl) loadChapter(readerMangaId, activeChapterMeta.prevUrl);
-}
-
-function goNextChapter() {
-  if (activeChapterMeta.nextUrl) loadChapter(readerMangaId, activeChapterMeta.nextUrl);
 }
 
 function appendChapterImages(images) {
@@ -312,6 +294,14 @@ function appendChapterImages(images) {
   }
 }
 
+function goPrevChapter() {
+  if (currentChapterData.prevUrl) loadChapter(readerMangaId, currentChapterData.prevUrl);
+}
+
+function goNextChapter() {
+  if (currentChapterData.nextUrl) loadChapter(readerMangaId, currentChapterData.nextUrl);
+}
+
 async function loadChapter(mangaId, chapterUrl) {
   const reader = el("#reader");
   const body = el("#readerBody");
@@ -322,12 +312,9 @@ async function loadChapter(mangaId, chapterUrl) {
   body.innerHTML = '<div class="reader-msg">กำลังโหลด...</div>';
   el("#readerPrev").disabled = true;
   el("#readerNext").disabled = true;
-
-  // เปิดตอนใหม่แบบ hard reload เคลียร์สถานะของ infinite scroll เดิมทิ้ง
-  loadedDividers = [];
-  loadedChapterUrls = new Set();
-  tailNextUrl = null;
-  isLoadingNextChapter = false;
+  // กันไว้ตลอดช่วงโหลด (ไม่ปล่อยจนกว่าจะเสร็จ) เพราะการ set scrollTop=0 ด้านล่างเองก็ยิง
+  // scroll event ได้ ถ้าปล่อย flag เร็วไปจะเช็คซ้ำจากเนื้อหา "กำลังโหลด..." ที่สั้นมาก แล้วยิงเปลี่ยนตอนซ้อนอีกรอบ
+  autoAdvancing = true;
   readerMangaId = mangaId;
 
   // เผื่อพื้นที่บน/ล่างให้พอดีกับแถบ nav ทั้งสอง (ลอยทับ) กันไม่ให้บังรูป
@@ -348,8 +335,7 @@ async function loadChapter(mangaId, chapterUrl) {
     }
 
     el("#readerMangaName").textContent = data.manga_name || "";
-    const chapterText = data.chapter_text || findChapterText(chapterUrl) || "";
-    const resolvedUrl = data.chapter_url || chapterUrl;
+    el("#readerChapterName").textContent = data.chapter_text || findChapterText(chapterUrl) || "";
 
     if (!data.images || data.images.length === 0) {
       body.innerHTML = '<div class="reader-msg">ไม่พบรูปภาพในตอนนี้</div>';
@@ -358,94 +344,29 @@ async function loadChapter(mangaId, chapterUrl) {
       appendChapterImages(data.images);
     }
 
-    loadedChapterUrls.add(resolvedUrl);
-    initialChapterMeta = { url: resolvedUrl, text: chapterText, prevUrl: data.prev_url, nextUrl: data.next_url };
-    updateChapterMeta(initialChapterMeta);
-    tailNextUrl = data.next_url || null;
-    checkLoadMoreOnScroll(); // เผื่อตอนสั้นจนไม่ต้องเลื่อนก็เห็นท้ายสุดอยู่แล้ว
+    currentChapterData = { url: data.chapter_url || chapterUrl, prevUrl: data.prev_url, nextUrl: data.next_url };
+    el("#readerPrev").disabled = !data.prev_url;
+    el("#readerNext").disabled = !data.next_url;
 
     // อัปเดตสถานะ NEW ที่หน้าหลักและหน้าเลือกตอนแบบเงียบ ๆ ในพื้นหลัง
     loadManga();
   } catch (e) {
     body.innerHTML = `<div class="reader-msg">เกิดข้อผิดพลาด: ${e}</div>`;
+  } finally {
+    autoAdvancing = false;
   }
 }
 
-// เช็คทุกครั้งที่เลื่อน (เรียกจาก scroll handler เดียวกับ auto-hide) ว่าใกล้ล่างสุดของที่โหลดมาแล้วหรือยัง
-// ใช้ scrollHeight สดจากตำแหน่งจริง ไม่ใช้ IntersectionObserver สังเกต element เพราะรูปที่ยังโหลดไม่เสร็จ
-// ไม่มี width/height สำรองพื้นที่ไว้ ทำให้ layout ยังไม่นิ่งตอน element เพิ่งถูกแทรกเข้ามา
-function checkLoadMoreOnScroll() {
-  if (!tailNextUrl || isLoadingNextChapter) return;
+// เช็คทุกครั้งที่เลื่อน ว่าถึงสุดท้ายของตอนที่กำลังอ่านจริง ๆ หรือยัง (ไม่ใช่แค่ใกล้ ๆ)
+// ถึงค่อยเปลี่ยนตอน กันไม่ให้มาร์คตอนถัดไปว่าอ่านแล้วก่อนเวลาอันควร
+function checkAutoAdvance() {
+  if (autoAdvancing || !currentChapterData.nextUrl) return;
   const body = el("#readerBody");
   const remaining = body.scrollHeight - body.scrollTop - body.clientHeight;
-  if (remaining < 800) appendNextChapter(readerMangaId, tailNextUrl);
-}
-
-async function appendNextChapter(mangaId, chapterUrl) {
-  if (!chapterUrl || loadedChapterUrls.has(chapterUrl)) return;
-  isLoadingNextChapter = true;
-  const body = el("#readerBody");
-
-  const divider = document.createElement("div");
-  divider.className = "chapter-divider";
-  divider.textContent = "กำลังโหลดตอนถัดไป...";
-  body.appendChild(divider);
-
-  try {
-    const res = await fetch(`/api/manga/${mangaId}/chapter?url=${encodeURIComponent(chapterUrl)}`);
-    const data = await res.json();
-    if (!res.ok || !data.images || data.images.length === 0) {
-      divider.textContent = "โหลดตอนถัดไปไม่สำเร็จ";
-      tailNextUrl = null;
-      return;
-    }
-
-    const resolvedUrl = data.chapter_url || chapterUrl;
-    const chapterText = data.chapter_text || findChapterText(chapterUrl) || "ตอนถัดไป";
-    loadedChapterUrls.add(resolvedUrl);
-    divider.textContent = `— ${chapterText} —`;
-
-    appendChapterImages(data.images);
-    loadedDividers.push({
-      el: divider,
-      meta: { url: resolvedUrl, text: chapterText, prevUrl: data.prev_url, nextUrl: data.next_url },
-    });
-    tailNextUrl = data.next_url || null;
-
-    // เซิร์ฟเวอร์มาร์คตอนนี้ว่าอ่านแล้วตอน fetch ไปแล้ว รีเฟรชสถานะ NEW เงียบ ๆ ในพื้นหลัง
-    loadManga();
-  } catch (e) {
-    divider.textContent = "เกิดข้อผิดพลาด: " + e;
-    tailNextUrl = null;
-  } finally {
-    isLoadingNextChapter = false;
+  if (remaining < 40) {
+    autoAdvancing = true;
+    loadChapter(readerMangaId, currentChapterData.nextUrl);
   }
-  checkLoadMoreOnScroll(); // เช็คอีกทีหลังปลดล็อกแล้ว เผื่อตอนที่เพิ่งต่อมาก็สั้นอีก จะได้ไล่โหลดต่อเป็นทอด ๆ
-}
-
-// เช็คว่าตอนนี้เลื่อนผ่าน divider ตัวไหนมาแล้ว (ไล่หาตัวสุดท้ายที่ขอบบนเลยเส้น threshold ขึ้นไป)
-// อัปเดตหัวข้อ/ปุ่มตอนก่อนหน้า-ถัดไปให้ตรงกับตอนที่กำลังอ่านอยู่จริง ไม่ใช้ IntersectionObserver
-// เพราะมันยิง callback ทันทีตอน observe() ถ้า element ที่สังเกตอยู่ในโซนอยู่แล้ว (เช่นตอนสั้นมาก)
-function updateActiveChapterFromScroll() {
-  const body = el("#readerBody");
-  if (body.scrollTop < 60 || loadedDividers.length === 0) {
-    if (activeChapterMeta.url !== initialChapterMeta.url) updateChapterMeta(initialChapterMeta);
-    return;
-  }
-
-  const topbar = el("#readerTopbar");
-  const threshold = topbar.offsetHeight + 20;
-  let active = null;
-  for (const d of loadedDividers) {
-    if (d.el.getBoundingClientRect().top <= threshold) {
-      active = d.meta;
-    } else {
-      break; // เรียงตามลำดับอยู่แล้ว ถ้าตัวนี้ยังไม่ผ่าน ตัวถัดไปก็ยังไม่ผ่านแน่นอน
-    }
-  }
-
-  const target = active || initialChapterMeta;
-  if (target.url !== activeChapterMeta.url) updateChapterMeta(target);
 }
 
 // ซ่อนแถบ nav ตอนเลื่อนลงอ่าน โชว์กลับมาตอนเลื่อนขึ้น (เหมือนเว็บแอปทั่วไป)
@@ -477,8 +398,7 @@ function initReaderAutoHide() {
         bottombar.classList.remove("nav-hidden");
       }
       lastScrollTop = scrollTop;
-      updateActiveChapterFromScroll();
-      checkLoadMoreOnScroll();
+      checkAutoAdvance();
       ticking = false;
     });
   });
