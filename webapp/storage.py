@@ -80,6 +80,14 @@ def all_usernames() -> list[str]:
     return list(load_users().keys())
 
 
+def load_prefs(username: str) -> dict:
+    return _load_json(user_dir(username) / "prefs.json", {})
+
+
+def save_prefs(username: str, prefs: dict):
+    _save_json(user_dir(username) / "prefs.json", prefs)
+
+
 def load_image_domains() -> set[str]:
     return set(_load_json(IMAGE_DOMAINS_FILE, []))
 

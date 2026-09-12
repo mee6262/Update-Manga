@@ -422,6 +422,25 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
 
 .chapter-search-bar input:focus { outline: none; border-color: var(--accent); }
 
+.catalog-sort-row {
+  max-width: 700px;
+  margin: 8px auto 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.catalog-sort-row select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.catalog-sort-row select:focus { outline: none; border-color: var(--accent); }
+
 .chapter-list-body {
   flex: 1;
   overflow-y: auto;

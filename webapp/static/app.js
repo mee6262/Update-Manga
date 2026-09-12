@@ -44,7 +44,7 @@ function initTabs() {
       btn.classList.add("active");
       el(`#${btn.dataset.tab}View`).classList.add("active");
       if (btn.dataset.tab === "settings") loadCatalog().then(renderSettings);
-      if (btn.dataset.tab === "catalog") loadCatalog().then(renderCatalog);
+      if (btn.dataset.tab === "catalog") loadCatalog().then(() => renderCatalog(filterCatalog()));
       if (btn.dataset.tab === "settings") renderUserList();
     });
   });
@@ -203,12 +203,44 @@ async function toggleSubscribe(id, currentlySubscribed) {
 
 function filterCatalog() {
   const q = el("#catalogSearch").value.trim().toLowerCase();
-  if (!q) return state.catalog;
-  return state.catalog.filter((m) => m.name.toLowerCase().includes(q));
+  const items = q ? state.catalog.filter((m) => m.name.toLowerCase().includes(q)) : state.catalog;
+  return sortCatalog(items);
 }
 
-function initCatalogSearch() {
+function sortCatalog(items) {
+  const mode = el("#catalogSort").value;
+  const sorted = [...items];
+  if (mode === "name-asc") {
+    sorted.sort((a, b) => a.name.localeCompare(b.name, "th"));
+  } else if (mode === "name-desc") {
+    sorted.sort((a, b) => b.name.localeCompare(a.name, "th"));
+  } else if (mode === "updated") {
+    sorted.sort((a, b) => (b.last_updated_at || "").localeCompare(a.last_updated_at || ""));
+  }
+  return sorted;
+}
+
+async function initCatalogSearch() {
   el("#catalogSearch").addEventListener("input", () => renderCatalog(filterCatalog()));
+
+  const sortSelect = el("#catalogSort");
+  // ลำดับที่เลือกไว้เก็บฝั่งเซิร์ฟเวอร์แยกบัญชีใครบัญชีมัน (ไม่ใช่ localStorage) ผู้ใช้แต่ละคน
+  // ตั้งค่าของตัวเองได้อิสระ ไม่ปนกัน
+  try {
+    const res = await fetch("/api/prefs");
+    const prefs = await res.json();
+    if (prefs.catalog_sort) sortSelect.value = prefs.catalog_sort;
+  } catch (e) {
+    // ใช้ค่า default ต่อไปได้ถ้าโหลดไม่สำเร็จ
+  }
+  sortSelect.addEventListener("change", () => {
+    renderCatalog(filterCatalog());
+    fetch("/api/prefs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ catalog_sort: sortSelect.value }),
+    });
+  });
 }
 
 // ---------- จัดการสมาชิก (admin เท่านั้น) ----------
@@ -663,7 +695,7 @@ async function init() {
   initTabs();
   initAddForm();
   initChapterSearch();
-  initCatalogSearch();
+  await initCatalogSearch();
   initAddUserForm();
   el("#refreshAllBtn").addEventListener("click", refreshAll);
   el("#readerClose").addEventListener("click", closeReader);

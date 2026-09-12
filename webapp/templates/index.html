@@ -46,6 +46,13 @@
     <section id="catalogView" class="view">
       <div class="chapter-search-bar" style="padding:0; background:none; border:none; margin-bottom:16px;">
         <input type="text" id="catalogSearch" placeholder="ค้นหาชื่อเรื่อง..." />
+        <div class="catalog-sort-row">
+          <select id="catalogSort">
+            <option value="name-asc">ชื่อ ก-ฮ / A-Z</option>
+            <option value="name-desc">ชื่อ ฮ-ก / Z-A</option>
+            <option value="updated">วันอัพเดตล่าสุด</option>
+          </select>
+        </div>
       </div>
       <div id="catalogGrid" class="manga-grid"></div>
       <div id="catalogEmpty" class="empty-state" hidden>ยังไม่มีเรื่องในระบบเลย</div>

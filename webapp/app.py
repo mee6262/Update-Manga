@@ -145,6 +145,26 @@ def me():
     return jsonify({"username": current_username(), "is_admin": is_admin()})
 
 
+@app.route("/api/prefs", methods=["GET"])
+def get_prefs():
+    # ค่าตั้งค่าส่วนตัว (เช่น ลำดับการเรียงเรื่องทั้งหมด) เก็บแยกบัญชีใครบัญชีมัน
+    # dev mode ที่ไม่มีบัญชี (current_username()==None) ไม่ต้องจำอะไรเลย
+    if not current_username():
+        return jsonify({})
+    return jsonify(storage.load_prefs(current_username()))
+
+
+@app.route("/api/prefs", methods=["POST"])
+def update_prefs():
+    if not current_username():
+        return jsonify({"ok": True})
+    body = request.get_json(force=True) or {}
+    prefs = storage.load_prefs(current_username())
+    prefs.update(body)
+    storage.save_prefs(current_username(), prefs)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/users", methods=["GET"])
 @require_admin
 def list_users():
