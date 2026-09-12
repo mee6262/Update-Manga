@@ -110,9 +110,13 @@ def is_new(manga: dict, read_state: dict) -> bool:
 
 def mark_chapter_read(read_state: dict, manga_id: str, chapter_url: str):
     entry = read_state.setdefault(manga_id, {"read_urls": [], "last_read_at": None})
-    entry.setdefault("read_urls", [])
-    if chapter_url not in entry["read_urls"]:
-        entry["read_urls"].append(chapter_url)
+    read_urls = entry.setdefault("read_urls", [])
+    # ย้ายไปท้ายลิสต์เสมอ (ไม่ใช่แค่ append ตอนยังไม่เคยอ่าน) เพราะ "ตอนล่าสุดที่อ่าน" (สำหรับ
+    # bookmark/auto-scroll) อิงจากตัวท้ายสุดของลิสต์นี้ ถ้ากดกลับไปอ่านตอนเก่าที่เคยอ่านแล้วซ้ำ
+    # ต้องขยับมาเป็น "ล่าสุด" ด้วย ไม่ใช่ค้างอยู่ตำแหน่งเดิมตอนอ่านครั้งแรก
+    if chapter_url in read_urls:
+        read_urls.remove(chapter_url)
+    read_urls.append(chapter_url)
     entry["last_read_at"] = now_iso()
 
 
