@@ -81,6 +81,31 @@ def _extract_balanced_json(text: str, marker: str) -> dict | None:
     return None
 
 
+_TH_MONTHS = {
+    "มกราคม": 1, "กุมภาพันธ์": 2, "มีนาคม": 3, "เมษายน": 4, "พฤษภาคม": 5, "มิถุนายน": 6,
+    "กรกฎาคม": 7, "สิงหาคม": 8, "กันยายน": 9, "ตุลาคม": 10, "พฤศจิกายน": 11, "ธันวาคม": 12,
+}
+_EN_MONTHS = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def parse_release_date(text: str | None) -> str | None:
+    """แปลงวันที่แบบที่เว็บแสดง (เช่น "กันยายน 8, 2026" หรือ "September 3, 2026") เป็น
+    ISO (YYYY-MM-DD) ไว้เทียบ/เรียงลำดับตามความจริงได้ ไม่ใช่แค่เวลาที่ระบบเรามาเช็คเจอ"""
+    if not text:
+        return None
+    match = re.match(r"([ก-๙A-Za-z.]+)\s+(\d{1,2}),?\s+(\d{4})", text.strip())
+    if not match:
+        return None
+    month_name, day, year = match.groups()
+    month = _TH_MONTHS.get(month_name) or _EN_MONTHS.get(month_name.lower())
+    if not month:
+        return None
+    return f"{int(year):04d}-{month:02d}-{int(day):02d}"
+
+
 def _chapter_num(text: str) -> float | None:
     match = re.search(r"(\d+(?:\.\d+)?)", text)
     return float(match.group(1)) if match else None
@@ -199,6 +224,12 @@ def parse_index_page(html: str, url: str | None = None) -> dict:
         elif result["chapters"]:
             result["latest_chapter"] = result["chapters"][0]["text"]
             result["latest_chapter_url"] = result["chapters"][0]["url"]
+
+    # วันที่ตอนล่าสุดจริง ๆ ตามเว็บต้นทาง (เอาไว้เรียง "วันอัพเดตล่าสุด" ในหน้าเรื่องทั้งหมด)
+    # ตอนล่าสุดบางเว็บไม่มีวันที่กำกับ (เพิ่งลงวันนี้ยังไม่ทันขึ้น) เลยไล่หาตัวแรกที่มีวันที่จริง
+    result["latest_chapter_date"] = next(
+        (d for c in result["chapters"] if (d := parse_release_date(c.get("date")))), None
+    )
 
     return result
 

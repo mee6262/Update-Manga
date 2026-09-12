@@ -215,7 +215,12 @@ function sortCatalog(items) {
   } else if (mode === "name-desc") {
     sorted.sort((a, b) => b.name.localeCompare(a.name, "th"));
   } else if (mode === "updated") {
-    sorted.sort((a, b) => (b.last_updated_at || "").localeCompare(a.last_updated_at || ""));
+    // ใช้วันที่ตอนล่าสุดจริงจากเว็บต้นทางก่อน (latest_chapter_date) ไม่ใช่เวลาที่ระบบเรามาเช็คเจอ
+    // (last_updated_at) เพราะเรื่องที่พึ่งเพิ่มเข้าระบบจะโดนตราว่า "อัพเดตตอนนี้เลย" ทั้งที่ตอน
+    // ล่าสุดของเรื่องนั้นอาจลงมานานแล้วก็ได้ ใช้ last_updated_at เป็น fallback เผื่อเว็บนั้นไม่มี
+    // วันที่ให้แปลงได้
+    const key = (m) => m.latest_chapter_date || m.last_updated_at || "";
+    sorted.sort((a, b) => key(b).localeCompare(key(a)));
   }
   return sorted;
 }
