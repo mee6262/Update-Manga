@@ -1,4 +1,8 @@
-"""รันครั้งเดียวเพื่อย้ายข้อมูลจาก manga_list.txt / manga_db.json (เดิม) มาเป็น data/manga.json + data/read_state.json"""
+"""รันครั้งเดียวเพื่อย้ายข้อมูลจาก manga_list.txt / manga_db.json (เดิม) มาเป็น data/manga.json
+ส่วนตอนที่เคยอ่านแล้วจะเขียนไว้ที่ data/read_state.json (ตำแหน่งเดิมก่อนมีระบบผู้ใช้หลายคน) —
+พอรันแอปครั้งแรกพร้อม WEB_USERNAME/WEB_PASSWORD ใน .env ตัว _bootstrap_first_admin() ใน app.py
+จะย้ายไฟล์นี้ไปเป็นของ admin คนแรกให้เองอัตโนมัติ"""
+import json
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -26,8 +30,6 @@ def load_old_list() -> list[dict]:
 
 
 def load_old_db() -> dict:
-    import json
-
     if not DB_FILE.exists():
         return {}
     with open(DB_FILE, "r", encoding="utf-8") as f:
@@ -66,7 +68,9 @@ def main():
             read_state[mid] = {"last_read_chapter": known_chapter, "last_read_at": None}
 
     storage.save_manga(manga_items)
-    storage.save_read_state(read_state)
+    if read_state:
+        with open(storage.DATA_DIR / "read_state.json", "w", encoding="utf-8") as f:
+            json.dump(read_state, f, ensure_ascii=False, indent=2)
     print(f"✅ Migrate เรียบร้อย: {len(manga_items)} เรื่อง -> {storage.MANGA_FILE}")
 
 

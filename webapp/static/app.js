@@ -1,5 +1,7 @@
 const state = {
   manga: [],
+  catalog: [],
+  currentUser: { username: null, is_admin: false },
 };
 
 const el = (sel) => document.querySelector(sel);
@@ -22,6 +24,17 @@ function timeAgo(iso) {
   return `${days} วันที่แล้ว`;
 }
 
+// ---------- Current user / admin gating ----------
+async function loadCurrentUser() {
+  try {
+    const res = await fetch("/api/me");
+    state.currentUser = await res.json();
+  } catch (e) {
+    state.currentUser = { username: null, is_admin: false };
+  }
+  els(".admin-only").forEach((elm) => { elm.hidden = !state.currentUser.is_admin; });
+}
+
 // ---------- Tabs ----------
 function initTabs() {
   els(".tab-btn").forEach((btn) => {
@@ -30,7 +43,9 @@ function initTabs() {
       els(".view").forEach((v) => v.classList.remove("active"));
       btn.classList.add("active");
       el(`#${btn.dataset.tab}View`).classList.add("active");
-      if (btn.dataset.tab === "settings") renderSettings();
+      if (btn.dataset.tab === "settings") loadCatalog().then(renderSettings);
+      if (btn.dataset.tab === "catalog") loadCatalog().then(renderCatalog);
+      if (btn.dataset.tab === "settings") renderUserList();
     });
   });
 }
@@ -102,11 +117,11 @@ async function refreshAll() {
   }
 }
 
-// ---------- Settings ----------
+// ---------- Settings (admin: จัดการเรื่องทั้งหมดในระบบ) ----------
 function renderSettings() {
   const list = el("#settingsList");
   list.innerHTML = "";
-  for (const m of state.manga) {
+  for (const m of state.catalog) {
     const row = document.createElement("li");
     row.className = "settings-row";
     row.innerHTML = `
@@ -116,7 +131,7 @@ function renderSettings() {
         <div class="meta">${escapeHtml(m.source)} — ${m.latest_chapter ? escapeHtml(m.latest_chapter) : "-"}</div>
       </div>
       <button class="btn" data-action="refresh">รีเฟรช</button>
-      <button class="btn danger" data-action="delete">ลบ</button>
+      <button class="btn danger" data-action="delete">ลบออกจากระบบ</button>
     `;
     row.querySelector('[data-action="refresh"]').addEventListener("click", () => refreshOne(m.id));
     row.querySelector('[data-action="delete"]').addEventListener("click", () => deleteManga(m.id, m.name));
@@ -127,14 +142,129 @@ function renderSettings() {
 async function refreshOne(id) {
   await fetch(`/api/manga/${id}/refresh`, { method: "POST" });
   await loadManga();
+  await loadCatalog();
   renderSettings();
 }
 
 async function deleteManga(id, name) {
-  if (!confirm(`ลบ "${name}" ออกจากรายการ?`)) return;
+  if (!confirm(`ลบ "${name}" ออกจากระบบ? (ทุกคนจะติดตามไม่ได้อีก)`)) return;
   await fetch(`/api/manga/${id}`, { method: "DELETE" });
   await loadManga();
+  await loadCatalog();
   renderSettings();
+}
+
+// ---------- Catalog (เรื่องทั้งหมดในระบบ ไว้เลือกติดตาม) ----------
+async function loadCatalog() {
+  const res = await fetch("/api/catalog");
+  state.catalog = await res.json();
+}
+
+function renderCatalog(items = state.catalog) {
+  const grid = el("#catalogGrid");
+  const empty = el("#catalogEmpty");
+  grid.innerHTML = "";
+
+  if (items.length === 0) {
+    empty.hidden = false;
+    return;
+  }
+  empty.hidden = true;
+
+  for (const m of items) {
+    const card = document.createElement("div");
+    card.className = "manga-card";
+    card.innerHTML = `
+      <img class="manga-cover" src="${m.cover_url ? proxied(m.cover_url) : ""}" alt="${m.name}" loading="lazy" onerror="this.style.opacity=0" />
+      <div class="manga-info">
+        <div class="manga-name">${escapeHtml(m.name)}</div>
+        <div class="manga-chapter">${m.latest_chapter ? escapeHtml(m.latest_chapter) : "ยังไม่ทราบตอนล่าสุด"}</div>
+        <button class="follow-btn${m.is_subscribed ? " subscribed" : ""}" data-action="toggle-follow">
+          ${m.is_subscribed ? "✓ ติดตามอยู่" : "+ ติดตาม"}
+        </button>
+      </div>
+    `;
+    card.addEventListener("click", () => openChapterList(m));
+    card.querySelector('[data-action="toggle-follow"]').addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleSubscribe(m.id, m.is_subscribed);
+    });
+    grid.appendChild(card);
+  }
+}
+
+async function toggleSubscribe(id, currentlySubscribed) {
+  const action = currentlySubscribed ? "unsubscribe" : "subscribe";
+  await fetch(`/api/catalog/${id}/${action}`, { method: "POST" });
+  await loadCatalog();
+  renderCatalog(filterCatalog());
+  loadManga(); // อัปเดตหน้าแรกด้วยเงียบ ๆ
+}
+
+function filterCatalog() {
+  const q = el("#catalogSearch").value.trim().toLowerCase();
+  if (!q) return state.catalog;
+  return state.catalog.filter((m) => m.name.toLowerCase().includes(q));
+}
+
+function initCatalogSearch() {
+  el("#catalogSearch").addEventListener("input", () => renderCatalog(filterCatalog()));
+}
+
+// ---------- จัดการสมาชิก (admin เท่านั้น) ----------
+async function renderUserList() {
+  const list = el("#userList");
+  try {
+    const res = await fetch("/api/users");
+    if (!res.ok) return; // ไม่ใช่ admin หรือยังไม่ login
+    const users = await res.json();
+    list.innerHTML = "";
+    for (const u of users) {
+      const row = document.createElement("li");
+      row.className = "settings-row";
+      row.innerHTML = `
+        <div class="grow">
+          <div class="name">${escapeHtml(u.username)}${u.is_admin ? " (admin)" : ""}</div>
+        </div>
+      `;
+      list.appendChild(row);
+    }
+  } catch (e) {
+    // เงียบไว้ ไม่ใช่ประเด็นสำคัญถ้าโหลดรายชื่อสมาชิกไม่ได้
+  }
+}
+
+function initAddUserForm() {
+  el("#addUserForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const username = el("#newUsername").value.trim();
+    const password = el("#newPassword").value;
+    const isAdmin = el("#newIsAdmin").checked;
+    const msg = el("#addUserMsg");
+    msg.className = "form-msg";
+    msg.textContent = "กำลังเพิ่ม...";
+
+    try {
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password, is_admin: isAdmin }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        msg.classList.add("error");
+        msg.textContent = data.error || "เพิ่มไม่สำเร็จ";
+        return;
+      }
+      msg.classList.add("success");
+      msg.textContent = `เพิ่มสมาชิก "${username}" สำเร็จ`;
+      el("#addUserForm").reset();
+      renderUserList();
+    } catch (err) {
+      msg.classList.add("error");
+      msg.textContent = "เกิดข้อผิดพลาด: " + err;
+    }
+  });
 }
 
 function initAddForm() {
@@ -208,7 +338,10 @@ async function renderChapterList() {
     lastReadUrl = data.last_read_url || null;
     lastScrollInfo = data.last_scroll || null;
     if (currentChapters.length === 0) {
-      body.innerHTML = '<div class="reader-msg">ยังไม่มีข้อมูลรายชื่อตอน ลองรีเฟรชเรื่องนี้ในแท็บ "ตั้งค่า" ก่อน</div>';
+      const hint = state.currentUser.is_admin
+        ? 'ลองรีเฟรชเรื่องนี้ในแท็บ "ตั้งค่า" ก่อน'
+        : "แจ้ง admin ให้กดรีเฟรชเรื่องนี้ก่อน";
+      body.innerHTML = `<div class="reader-msg">ยังไม่มีข้อมูลรายชื่อตอน ${hint}</div>`;
       return;
     }
 
@@ -514,15 +647,18 @@ async function closeReader() {
   }
 }
 
-function init() {
+async function init() {
   initTabs();
   initAddForm();
   initChapterSearch();
+  initCatalogSearch();
+  initAddUserForm();
   el("#refreshAllBtn").addEventListener("click", refreshAll);
   el("#readerClose").addEventListener("click", closeReader);
   el("#chapterListClose").addEventListener("click", closeChapterList);
   el("#readerPrev").addEventListener("click", goPrevChapter);
   el("#readerNext").addEventListener("click", goNextChapter);
+  await loadCurrentUser();
   loadManga();
 }
 

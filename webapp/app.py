@@ -2,14 +2,17 @@ import hmac
 import os
 import re
 import secrets
+import shutil
 import time
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template, request, Response, session, url_for
+from werkzeug.security import check_password_hash, generate_password_hash
 
 import scraper
 import storage
@@ -40,10 +43,58 @@ CRON_TOKEN = os.environ.get("CRON_TOKEN")
 REQUEST_DELAY = 1.0  # หน่วงระหว่างเรื่องตอน refresh ทั้งหมด กันโดน block
 
 
+def _bootstrap_first_admin():
+    """ครั้งแรกที่รันหลังอัปเดตเป็นระบบหลายผู้ใช้: ย้าย WEB_USERNAME/WEB_PASSWORD เดิมจาก .env
+    มาเป็นบัญชี admin คนแรกในระบบ พร้อมย้ายประวัติการอ่านเดิม (read_state.json แบบเก่า) และตั้งให้
+    ติดตามทุกเรื่องที่มีอยู่แล้ว (ของเดิมเห็นทุกเรื่องหมดอยู่แล้วก่อนจะมีระบบติดตามรายคน)"""
+    if storage.load_users():
+        return
+    if not WEB_USERNAME or not WEB_PASSWORD:
+        return
+
+    storage.save_users(
+        {WEB_USERNAME: {"password_hash": generate_password_hash(WEB_PASSWORD), "is_admin": True}}
+    )
+
+    legacy_read_state = storage.DATA_DIR / "read_state.json"
+    new_read_state = storage.user_dir(WEB_USERNAME) / "read_state.json"
+    if legacy_read_state.exists() and not new_read_state.exists():
+        shutil.copy(legacy_read_state, new_read_state)
+
+    storage.save_subscriptions(WEB_USERNAME, [m["id"] for m in storage.load_manga()])
+
+
+_bootstrap_first_admin()
+
+
+def current_username():
+    return session.get("user")
+
+
+def is_admin() -> bool:
+    return bool(session.get("is_admin"))
+
+
+def admin_usernames() -> list[str]:
+    users = storage.load_users()
+    return [u for u, info in users.items() if info.get("is_admin")]
+
+
+def require_admin(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if not is_admin():
+            return jsonify({"error": "เฉพาะ admin เท่านั้น"}), 403
+        return view(*args, **kwargs)
+
+    return wrapper
+
+
 @app.before_request
 def require_login():
-    # ถ้าไม่ได้ตั้ง WEB_USERNAME/WEB_PASSWORD ไว้ใน .env (เช่นตอน dev บนเครื่อง) ปล่อยผ่านไม่บังคับ login
-    if not WEB_USERNAME or not WEB_PASSWORD:
+    # ถ้ายังไม่มีผู้ใช้ในระบบเลย (เช่น dev บนเครื่องตัวเอง ไม่เคยตั้ง WEB_USERNAME/WEB_PASSWORD)
+    # ปล่อยผ่านไม่บังคับ login
+    if not storage.load_users():
         return None
     if request.endpoint in ("login", "static"):
         return None
@@ -53,7 +104,7 @@ def require_login():
         and hmac.compare_digest(request.headers.get("X-Cron-Token", ""), CRON_TOKEN)
     ):
         return None
-    if session.get("authenticated"):
+    if current_username():
         return None
     if request.path.startswith("/api/"):
         return jsonify({"error": "unauthorized"}), 401
@@ -66,12 +117,12 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "")
         password = request.form.get("password", "")
-        ok = hmac.compare_digest(username, WEB_USERNAME or "") and hmac.compare_digest(
-            password, WEB_PASSWORD or ""
-        )
-        if ok:
+        users = storage.load_users()
+        user = users.get(username)
+        if user and check_password_hash(user["password_hash"], password):
             session.permanent = True
-            session["authenticated"] = True
+            session["user"] = username
+            session["is_admin"] = bool(user.get("is_admin"))
             return redirect(request.args.get("next") or url_for("index"))
         error = "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง"
     return render_template("login.html", error=error)
@@ -81,6 +132,44 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+@app.route("/api/me")
+def me():
+    if not current_username():
+        return jsonify({"username": None, "is_admin": False})
+    return jsonify({"username": current_username(), "is_admin": is_admin()})
+
+
+@app.route("/api/users", methods=["GET"])
+@require_admin
+def list_users():
+    users = storage.load_users()
+    return jsonify([{"username": u, "is_admin": bool(info.get("is_admin"))} for u, info in users.items()])
+
+
+@app.route("/api/users", methods=["POST"])
+@require_admin
+def add_user():
+    body = request.get_json(force=True) or {}
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+    new_is_admin = bool(body.get("is_admin"))
+
+    if not username or not password:
+        return jsonify({"error": "ต้องระบุชื่อผู้ใช้และรหัสผ่าน"}), 400
+    if len(password) < 4:
+        return jsonify({"error": "รหัสผ่านสั้นเกินไป"}), 400
+
+    users = storage.load_users()
+    if username in users:
+        return jsonify({"error": "มีชื่อผู้ใช้นี้อยู่แล้ว"}), 409
+
+    users[username] = {"password_hash": generate_password_hash(password), "is_admin": new_is_admin}
+    storage.save_users(users)
+    # สมาชิกใหม่เริ่มจากไม่ติดตามอะไรเลย ไปเลือกเองที่หน้า "เรื่องทั้งหมด"
+    storage.save_subscriptions(username, [])
+    return jsonify({"username": username, "is_admin": new_is_admin}), 201
 
 
 def now_iso() -> str:
@@ -126,6 +215,14 @@ def serialize(manga: dict, read_state: dict) -> dict:
     return out
 
 
+def notify_subscribed_admins(manga_id: str, name: str, chapter: str, cover_url: str | None):
+    """ส่ง Telegram แจ้งเตือนเฉพาะตอนที่ admin (ที่ตั้งค่า Telegram ไว้) ติดตามเรื่องนี้อยู่จริง"""
+    for admin_username in admin_usernames():
+        if manga_id in storage.load_subscriptions(admin_username):
+            send_telegram(name, chapter, cover_url)
+            return  # ส่งครั้งเดียวพอ (Telegram ตั้งค่าเป็นแชทเดียวอยู่แล้ว)
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -133,8 +230,11 @@ def index():
 
 @app.route("/api/manga", methods=["GET"])
 def list_manga():
+    subscribed_ids = set(storage.load_subscriptions(current_username())) if current_username() else None
     manga_items = storage.load_manga()
-    read_state = storage.load_read_state()
+    if subscribed_ids is not None:
+        manga_items = [m for m in manga_items if m["id"] in subscribed_ids]
+    read_state = storage.load_read_state(current_username()) if current_username() else {}
     items = [serialize(m, read_state) for m in manga_items]
     # เรื่องที่ยังไม่อ่านขึ้นก่อน แล้วภายในกลุ่มเดียวกันเรียงตามเวลาที่ "เจอตอนใหม่จริง ๆ"
     # ล่าสุดก่อน (last_updated_at เปลี่ยนเฉพาะตอนตอนล่าสุดเปลี่ยนจริง ไม่ใช่ทุกครั้งที่เช็ค)
@@ -143,7 +243,50 @@ def list_manga():
     return jsonify(items)
 
 
+@app.route("/api/catalog", methods=["GET"])
+def list_catalog():
+    """เรื่องทั้งหมดในระบบ (ไม่กรองตามที่ติดตาม) ไว้ให้เลือกติดตามเพิ่ม"""
+    subscribed_ids = set(storage.load_subscriptions(current_username())) if current_username() else set()
+    manga_items = storage.load_manga()
+    items = []
+    for m in manga_items:
+        out = dict(m)
+        out["is_subscribed"] = m["id"] in subscribed_ids
+        items.append(out)
+    items.sort(key=lambda m: m["name"])
+    return jsonify(items)
+
+
+@app.route("/api/catalog/<manga_id>/subscribe", methods=["POST"])
+def subscribe(manga_id):
+    username = current_username()
+    if not username:
+        return jsonify({"error": "unauthorized"}), 401
+    manga_items = storage.load_manga()
+    if not any(m["id"] == manga_id for m in manga_items):
+        return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
+
+    subs = storage.load_subscriptions(username)
+    if manga_id not in subs:
+        subs.append(manga_id)
+        storage.save_subscriptions(username, subs)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/catalog/<manga_id>/unsubscribe", methods=["POST"])
+def unsubscribe(manga_id):
+    username = current_username()
+    if not username:
+        return jsonify({"error": "unauthorized"}), 401
+    subs = storage.load_subscriptions(username)
+    if manga_id in subs:
+        subs.remove(manga_id)
+        storage.save_subscriptions(username, subs)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/manga", methods=["POST"])
+@require_admin
 def add_manga():
     body = request.get_json(force=True) or {}
     name = (body.get("name") or "").strip()
@@ -185,10 +328,17 @@ def add_manga():
 
     manga_items.append(new_item)
     storage.save_manga(manga_items)
+
+    # คนเพิ่มเรื่อง (admin) ให้ติดตามเรื่องนี้เองอัตโนมัติ
+    subs = storage.load_subscriptions(current_username())
+    subs.append(mid)
+    storage.save_subscriptions(current_username(), subs)
+
     return jsonify(new_item), 201
 
 
 @app.route("/api/manga/<manga_id>", methods=["DELETE"])
+@require_admin
 def delete_manga(manga_id):
     manga_items = storage.load_manga()
     remaining = [m for m in manga_items if m["id"] != manga_id]
@@ -196,15 +346,22 @@ def delete_manga(manga_id):
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
     storage.save_manga(remaining)
 
-    read_state = storage.load_read_state()
-    if manga_id in read_state:
-        del read_state[manga_id]
-        storage.save_read_state(read_state)
+    # เอาออกจาก subscriptions/read_state ของทุกคน กันข้อมูลค้าง
+    for username in storage.all_usernames():
+        subs = storage.load_subscriptions(username)
+        if manga_id in subs:
+            subs.remove(manga_id)
+            storage.save_subscriptions(username, subs)
+        read_state = storage.load_read_state(username)
+        if manga_id in read_state:
+            del read_state[manga_id]
+            storage.save_read_state(username, read_state)
 
     return jsonify({"ok": True})
 
 
 @app.route("/api/manga/<manga_id>/refresh", methods=["POST"])
+@require_admin
 def refresh_manga(manga_id):
     manga_items = storage.load_manga()
     manga = next((m for m in manga_items if m["id"] == manga_id), None)
@@ -225,16 +382,19 @@ def refresh_manga(manga_id):
     storage.save_manga(manga_items)
 
     if prev_chapter and parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
-        send_telegram(manga["name"], parsed["latest_chapter"], manga.get("cover_url"))
+        notify_subscribed_admins(manga_id, manga["name"], parsed["latest_chapter"], manga.get("cover_url"))
 
-    read_state = storage.load_read_state()
+    read_state = storage.load_read_state(current_username())
     return jsonify(serialize(manga, read_state))
 
 
 @app.route("/api/refresh_all", methods=["POST"])
 def refresh_all():
+    # เข้าถึงได้จาก CRON_TOKEN (refresh_loop.py, ไม่มี session) หรือ session ของ admin เท่านั้น
+    if current_username() and not is_admin():
+        return jsonify({"error": "เฉพาะ admin เท่านั้น"}), 403
+
     manga_items = storage.load_manga()
-    read_state = storage.load_read_state()
     updated_ids = []
     failed = []
 
@@ -252,12 +412,15 @@ def refresh_all():
                 updated_ids.append(manga["id"])
                 # แจ้งเตือนเฉพาะตอนที่เคยรู้ตอนล่าสุดมาก่อนแล้วเปลี่ยน (ไม่แจ้งตอนเพิ่งเพิ่มเรื่องใหม่)
                 if prev_chapter:
-                    send_telegram(manga["name"], parsed["latest_chapter"], manga.get("cover_url"))
+                    notify_subscribed_admins(manga["id"], manga["name"], parsed["latest_chapter"], manga.get("cover_url"))
         except Exception as e:
             failed.append({"id": manga["id"], "name": manga["name"], "error": str(e)})
 
     storage.save_manga(manga_items)
-    items = [serialize(m, read_state) for m in manga_items]
+    read_state = storage.load_read_state(current_username()) if current_username() else {}
+    subscribed_ids = set(storage.load_subscriptions(current_username())) if current_username() else None
+    visible = [m for m in manga_items if subscribed_ids is None or m["id"] in subscribed_ids]
+    items = [serialize(m, read_state) for m in visible]
     return jsonify({"items": items, "updated_ids": updated_ids, "failed": failed})
 
 
@@ -289,10 +452,11 @@ def get_chapter(manga_id):
             storage.save_chapter_cache(manga_id, chapter_url, data)
             storage.add_image_domains({urlparse(src).netloc for src in data["images"]})
 
-    # มาร์คเฉพาะ "ตอนที่เปิดดูจริง" ว่าอ่านแล้ว (ไม่กระทบตอนอื่นของเรื่องเดียวกัน)
-    read_state = storage.load_read_state()
-    mark_chapter_read(read_state, manga_id, chapter_url)
-    storage.save_read_state(read_state)
+    # มาร์คเฉพาะ "ตอนที่เปิดดูจริง" ว่าอ่านแล้ว (ไม่กระทบตอนอื่นของเรื่องเดียวกัน) เฉพาะของคนที่ login อยู่
+    if current_username():
+        read_state = storage.load_read_state(current_username())
+        mark_chapter_read(read_state, manga_id, chapter_url)
+        storage.save_read_state(current_username(), read_state)
 
     data["chapter_url"] = chapter_url
     data["manga_name"] = manga["name"]
@@ -306,7 +470,7 @@ def list_chapters(manga_id):
     if not manga:
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
 
-    read_state = storage.load_read_state()
+    read_state = storage.load_read_state(current_username()) if current_username() else {}
     entry = read_state.get(manga_id)
     chapters = manga.get("chapters") or []
     items = [
@@ -315,7 +479,7 @@ def list_chapters(manga_id):
     ]
 
     # ตอนล่าสุดที่กดอ่าน (ไว้ให้หน้าเว็บเลื่อนไปหาอัตโนมัติ) เอาจากตัวท้ายสุดของ read_urls
-    # (append ต่อท้ายทุกครั้งที่อ่าน จึงเป็นตอนล่าสุดที่อ่านจริง) หรือ fallback ข้อมูลเก่า
+    # (ย้ายไปท้ายลิสต์ทุกครั้งที่อ่าน จึงเป็นตอนล่าสุดที่อ่านจริง) หรือ fallback ข้อมูลเก่า
     last_read_url = None
     if entry:
         read_urls = entry.get("read_urls") or []
@@ -339,6 +503,8 @@ def list_chapters(manga_id):
 
 @app.route("/api/manga/<manga_id>/scroll_position", methods=["POST"])
 def save_scroll_position(manga_id):
+    if not current_username():
+        return jsonify({"error": "unauthorized"}), 401
     body = request.get_json(force=True) or {}
     chapter_url = body.get("url")
     fraction = body.get("fraction")
@@ -346,16 +512,18 @@ def save_scroll_position(manga_id):
         return jsonify({"error": "ข้อมูลไม่ครบ"}), 400
     fraction = max(0.0, min(1.0, float(fraction)))
 
-    read_state = storage.load_read_state()
+    read_state = storage.load_read_state(current_username())
     entry = read_state.setdefault(manga_id, {"read_urls": [], "last_read_at": None})
     # ถ้าอ่านจบตอนแล้ว (>=95%) ไม่ต้องเก็บตำแหน่งไว้ เปิดใหม่ควรเริ่มจากบนสุดตามปกติ
     entry["last_scroll"] = None if fraction >= 0.95 else {"url": chapter_url, "fraction": fraction}
-    storage.save_read_state(read_state)
+    storage.save_read_state(current_username(), read_state)
     return jsonify({"ok": True})
 
 
 @app.route("/api/manga/<manga_id>/mark_read", methods=["POST"])
 def mark_read(manga_id):
+    if not current_username():
+        return jsonify({"error": "unauthorized"}), 401
     manga_items = storage.load_manga()
     manga = next((m for m in manga_items if m["id"] == manga_id), None)
     if not manga:
@@ -363,25 +531,27 @@ def mark_read(manga_id):
     if not manga.get("latest_chapter_url"):
         return jsonify({"error": "ยังไม่ทราบลิงก์ตอนล่าสุด ลองรีเฟรชเรื่องนี้ก่อน"}), 400
 
-    read_state = storage.load_read_state()
+    read_state = storage.load_read_state(current_username())
     mark_chapter_read(read_state, manga_id, manga["latest_chapter_url"])
-    storage.save_read_state(read_state)
+    storage.save_read_state(current_username(), read_state)
     return jsonify({"ok": True})
 
 
 @app.route("/api/manga/<manga_id>/mark_unread", methods=["POST"])
 def mark_unread(manga_id):
+    if not current_username():
+        return jsonify({"error": "unauthorized"}), 401
     manga_items = storage.load_manga()
     manga = next((m for m in manga_items if m["id"] == manga_id), None)
     if not manga:
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
 
-    read_state = storage.load_read_state()
+    read_state = storage.load_read_state(current_username())
     entry = read_state.get(manga_id)
     latest_url = manga.get("latest_chapter_url")
     if entry and latest_url and latest_url in entry.get("read_urls", []):
         entry["read_urls"].remove(latest_url)
-        storage.save_read_state(read_state)
+        storage.save_read_state(current_username(), read_state)
     return jsonify({"ok": True})
 
 

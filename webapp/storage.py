@@ -5,12 +5,14 @@ from urllib.parse import urlparse
 
 DATA_DIR = Path(__file__).parent / "data"
 MANGA_FILE = DATA_DIR / "manga.json"
-READ_STATE_FILE = DATA_DIR / "read_state.json"
 CHAPTERS_DIR = DATA_DIR / "chapters"
 IMAGE_DOMAINS_FILE = DATA_DIR / "image_domains.json"
+USERS_FILE = DATA_DIR / "users.json"
+USERS_DIR = DATA_DIR / "users"
 
 DATA_DIR.mkdir(exist_ok=True)
 CHAPTERS_DIR.mkdir(exist_ok=True)
+USERS_DIR.mkdir(exist_ok=True)
 
 
 def make_id(url: str) -> str:
@@ -39,12 +41,43 @@ def save_manga(items: list[dict]):
     _save_json(MANGA_FILE, items)
 
 
-def load_read_state() -> dict:
-    return _load_json(READ_STATE_FILE, {})
+# ---------- ผู้ใช้ ----------
+
+def load_users() -> dict:
+    """username -> {"password_hash": ..., "is_admin": bool}"""
+    return _load_json(USERS_FILE, {})
 
 
-def save_read_state(state: dict):
-    _save_json(READ_STATE_FILE, state)
+def save_users(users: dict):
+    _save_json(USERS_FILE, users)
+
+
+def user_dir(username: str) -> Path:
+    d = USERS_DIR / username
+    d.mkdir(exist_ok=True)
+    return d
+
+
+# ---------- ข้อมูลรายคน (อ่านแล้ว/ติดตามเรื่องไหนบ้าง) ----------
+
+def load_read_state(username: str) -> dict:
+    return _load_json(user_dir(username) / "read_state.json", {})
+
+
+def save_read_state(username: str, state: dict):
+    _save_json(user_dir(username) / "read_state.json", state)
+
+
+def load_subscriptions(username: str) -> list[str]:
+    return _load_json(user_dir(username) / "subscriptions.json", [])
+
+
+def save_subscriptions(username: str, manga_ids: list[str]):
+    _save_json(user_dir(username) / "subscriptions.json", manga_ids)
+
+
+def all_usernames() -> list[str]:
+    return list(load_users().keys())
 
 
 def load_image_domains() -> set[str]:

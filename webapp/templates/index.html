@@ -19,12 +19,13 @@
     <h1>📚 Update Manga</h1>
     <nav class="tabs">
       <button class="tab-btn active" data-tab="list">หน้าแรก</button>
+      <button class="tab-btn" data-tab="catalog">เรื่องทั้งหมด</button>
     </nav>
     <div class="topbar-actions">
-      <button class="tab-btn icon-btn" data-tab="settings" title="ตั้งค่า">
+      <button class="tab-btn icon-btn admin-only" data-tab="settings" title="ตั้งค่า" hidden>
         <svg viewBox="0 0 24 24" width="20" height="20"><line x1="4" y1="6" x2="20" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="9" cy="6" r="2" fill="currentColor"/><line x1="4" y1="12" x2="20" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="15" cy="12" r="2" fill="currentColor"/><line x1="4" y1="18" x2="20" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="9" cy="18" r="2" fill="currentColor"/></svg>
       </button>
-      <button id="refreshAllBtn" class="icon-btn" title="รีเฟรชทั้งหมด">
+      <button id="refreshAllBtn" class="icon-btn admin-only" title="รีเฟรชทั้งหมด" hidden>
         <svg viewBox="0 0 24 24" width="20" height="20"><path d="M21 12a9 9 0 1 1-2.64-6.36" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M21 3v6h-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
       <a href="/logout" class="icon-btn" title="ออกจากระบบ">
@@ -38,21 +39,39 @@
       <div id="statusBar" class="status-bar" hidden></div>
       <div id="mangaGrid" class="manga-grid"></div>
       <div id="emptyState" class="empty-state" hidden>
-        ยังไม่มีเรื่องในรายการ ไปที่แท็บ "ตั้งค่า" เพื่อเพิ่มเรื่องที่ต้องการติดตาม
+        ยังไม่ได้ติดตามเรื่องไหนเลย ไปที่แท็บ "เรื่องทั้งหมด" เพื่อเลือกเรื่องที่อยากติดตาม
       </div>
+    </section>
+
+    <section id="catalogView" class="view">
+      <div class="chapter-search-bar" style="padding:0; background:none; border:none; margin-bottom:16px;">
+        <input type="text" id="catalogSearch" placeholder="ค้นหาชื่อเรื่อง..." />
+      </div>
+      <div id="catalogGrid" class="manga-grid"></div>
+      <div id="catalogEmpty" class="empty-state" hidden>ยังไม่มีเรื่องในระบบเลย</div>
     </section>
 
     <section id="settingsView" class="view">
       <form id="addForm" class="add-form">
-        <h2>เพิ่มเรื่องใหม่</h2>
+        <h2>เพิ่มเรื่องใหม่ (เข้าระบบ)</h2>
         <input type="text" id="addName" placeholder="ชื่อเรื่อง" required />
         <input type="url" id="addUrl" placeholder="URL หน้าเรื่อง เช่น https://www.go-manga.com/overgeared/" required />
         <button type="submit" class="btn primary">เพิ่ม</button>
       </form>
       <div id="addFormMsg" class="form-msg"></div>
 
-      <h2>เรื่องที่ติดตามอยู่</h2>
+      <h2>เรื่องทั้งหมดในระบบ</h2>
       <ul id="settingsList" class="settings-list"></ul>
+
+      <h2>จัดการสมาชิก</h2>
+      <form id="addUserForm" class="add-form">
+        <input type="text" id="newUsername" placeholder="ชื่อผู้ใช้" required />
+        <input type="password" id="newPassword" placeholder="รหัสผ่าน" required />
+        <label class="checkbox-label"><input type="checkbox" id="newIsAdmin" /> เป็น admin</label>
+        <button type="submit" class="btn primary">เพิ่มสมาชิก</button>
+      </form>
+      <div id="addUserMsg" class="form-msg"></div>
+      <ul id="userList" class="settings-list"></ul>
     </section>
   </main>
 
