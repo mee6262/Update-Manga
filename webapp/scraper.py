@@ -81,8 +81,15 @@ def _extract_balanced_json(text: str, marker: str) -> dict | None:
     return None
 
 
+def _chapter_num(text: str) -> float | None:
+    match = re.search(r"(\d+(?:\.\d+)?)", text)
+    return float(match.group(1)) if match else None
+
+
 def parse_chapter_list(soup: BeautifulSoup) -> list[dict]:
-    """ดึงรายชื่อตอนทั้งหมด (ใหม่ -> เก่า ตามลำดับที่เว็บแสดง) จาก #chapterlist"""
+    """ดึงรายชื่อตอนทั้งหมดจาก #chapterlist แล้วบังคับให้เรียงใหม่ -> เก่าเสมอ (ทั้งแอปนี้คาดหวัง
+    ลำดับนี้ เช่น ใช้ chapters[0] เป็นตอนล่าสุด) ส่วนใหญ่เว็บกลุ่มนี้แสดงมาเป็นใหม่ -> เก่าอยู่แล้ว
+    แต่บางเว็บ (เช่น flash-manga.net) ดันแสดงเก่า -> ใหม่ เลยต้องเช็คทิศทางจากเลขตอนจริงก่อน"""
     chapters = []
     for li in soup.select("#chapterlist li"):
         anchor = li.select_one(".eph-num a") or li.find("a")
@@ -93,6 +100,11 @@ def parse_chapter_list(soup: BeautifulSoup) -> list[dict]:
         date_span = anchor.select_one(".chapterdate")
         date = date_span.get_text(strip=True) if date_span else None
         chapters.append({"text": text, "url": anchor["href"], "date": date})
+
+    nums = [n for n in (_chapter_num(c["text"]) for c in chapters) if n is not None]
+    if len(nums) >= 2 and nums[0] < nums[-1]:
+        chapters.reverse()
+
     return chapters
 
 
@@ -118,6 +130,12 @@ def fetch_madara_chapters(manga_url: str) -> list[dict]:
         date_el = li.select_one(".chapter-release-date")
         date = date_el.get_text(strip=True) if date_el else None
         chapters.append({"text": anchor.get_text(strip=True), "url": anchor["href"], "date": date or None})
+
+    # กันเผื่อเว็บ Madara เจ้าอื่นเรียงกลับด้าน เหมือนที่เจอในเว็บกลุ่ม mangareader-family
+    nums = [n for n in (_chapter_num(c["text"]) for c in chapters) if n is not None]
+    if len(nums) >= 2 and nums[0] < nums[-1]:
+        chapters.reverse()
+
     return chapters
 
 
