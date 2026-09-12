@@ -328,8 +328,26 @@ def list_chapters(manga_id):
             "cover_url": manga.get("cover_url"),
             "chapters": items,
             "last_read_url": last_read_url,
+            "last_scroll": (entry or {}).get("last_scroll"),
         }
     )
+
+
+@app.route("/api/manga/<manga_id>/scroll_position", methods=["POST"])
+def save_scroll_position(manga_id):
+    body = request.get_json(force=True) or {}
+    chapter_url = body.get("url")
+    fraction = body.get("fraction")
+    if not chapter_url or not isinstance(fraction, (int, float)):
+        return jsonify({"error": "ข้อมูลไม่ครบ"}), 400
+    fraction = max(0.0, min(1.0, float(fraction)))
+
+    read_state = storage.load_read_state()
+    entry = read_state.setdefault(manga_id, {"read_urls": [], "last_read_at": None})
+    # ถ้าอ่านจบตอนแล้ว (>=95%) ไม่ต้องเก็บตำแหน่งไว้ เปิดใหม่ควรเริ่มจากบนสุดตามปกติ
+    entry["last_scroll"] = None if fraction >= 0.95 else {"url": chapter_url, "fraction": fraction}
+    storage.save_read_state(read_state)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/manga/<manga_id>/mark_read", methods=["POST"])

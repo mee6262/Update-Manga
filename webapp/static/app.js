@@ -174,6 +174,10 @@ function initAddForm() {
 let currentManga = null; // { id, name }
 let currentChapters = []; // รายการตอนทั้งหมดที่โหลดมา (ยังไม่กรอง) ไว้ใช้กรองตอนค้นหา
 let lastReadUrl = null; // ตอนล่าสุดที่อ่าน ไว้เลื่อนหาอัตโนมัติตอนเปิดหน้าเลือกตอน
+let lastScrollInfo = null; // { url, fraction } ตำแหน่งที่เลื่อนค้างไว้ในตอนล่าสุดที่อ่าน (ยังอ่านไม่จบ)
+
+const BOOKMARK_ICON =
+  '<svg class="bookmark-icon" viewBox="0 0 24 24" width="16" height="16"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" fill="currentColor"/></svg>';
 
 async function openChapterList(manga) {
   currentManga = { id: manga.id, name: manga.name };
@@ -202,6 +206,7 @@ async function renderChapterList() {
 
     currentChapters = data.chapters || [];
     lastReadUrl = data.last_read_url || null;
+    lastScrollInfo = data.last_scroll || null;
     if (currentChapters.length === 0) {
       body.innerHTML = '<div class="reader-msg">ยังไม่มีข้อมูลรายชื่อตอน ลองรีเฟรชเรื่องนี้ในแท็บ "ตั้งค่า" ก่อน</div>';
       return;
@@ -225,10 +230,12 @@ function renderChapterRows(chapters) {
   }
 
   for (const c of chapters) {
+    const isLastRead = c.url === lastReadUrl;
     const row = document.createElement("div");
-    row.className = "chapter-row" + (c.is_read ? " read" : "");
+    row.className = "chapter-row" + (c.is_read ? " read" : "") + (isLastRead ? " last-read" : "");
     row.dataset.url = c.url;
     row.innerHTML = `
+      ${isLastRead ? BOOKMARK_ICON : ""}
       <span class="chapter-text">${escapeHtml(c.text)}</span>
       ${c.date ? `<span class="chapter-date">${escapeHtml(c.date)}</span>` : ""}
       ${!c.is_read ? '<span class="new-badge">NEW!</span>' : ""}
@@ -280,9 +287,15 @@ let currentChapterData = { url: null, prevUrl: null, nextUrl: null };
 let autoAdvancing = false;
 let awaitingConfirmScroll = false; // ถึงล่างสุดแล้ว รอให้เลื่อน/สไลด์อีกทีเพื่อยืนยันไปตอนถัดไป
 
+let currentScrollFraction = 0; // สัดส่วนที่เลื่อนอ่านมาแล้วของตอนปัจจุบัน (0-1) อัปเดตทุกครั้งที่เลื่อน
+
 async function openReader(chapterUrl) {
   el("#chapterListView").hidden = true;
-  await loadChapter(currentManga.id, chapterUrl);
+  const restoreFraction =
+    chapterUrl === lastReadUrl && lastScrollInfo && lastScrollInfo.url === chapterUrl
+      ? lastScrollInfo.fraction
+      : null;
+  await loadChapter(currentManga.id, chapterUrl, restoreFraction);
 }
 
 function appendChapterImages(images) {
@@ -290,9 +303,31 @@ function appendChapterImages(images) {
   for (const src of images) {
     const img = document.createElement("img");
     img.src = proxied(src);
-    img.loading = "lazy";
     body.appendChild(img);
   }
+}
+
+// เก็บตำแหน่งที่เลื่อนค้างไว้ของตอนปัจจุบัน ไว้กลับมาอ่านต่อจากจุดเดิมได้ (fire-and-forget)
+function saveScrollPosition() {
+  if (!readerMangaId || !currentChapterData.url) return Promise.resolve();
+  return fetch(`/api/manga/${readerMangaId}/scroll_position`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: currentChapterData.url, fraction: currentScrollFraction }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
+// เลื่อนไปตำแหน่งที่ค้างไว้ ทำซ้ำหลายจังหวะเพราะรูปโหลดแบบทยอย ๆ scrollHeight รวมจะค่อย ๆ นิ่งขึ้นเรื่อย ๆ
+function restoreScrollPosition(fraction) {
+  const body = el("#readerBody");
+  const apply = () => {
+    const max = body.scrollHeight - body.clientHeight;
+    if (max > 0) body.scrollTop = fraction * max;
+  };
+  apply();
+  setTimeout(apply, 400);
+  setTimeout(apply, 1200);
 }
 
 function goPrevChapter() {
@@ -303,7 +338,7 @@ function goNextChapter() {
   if (currentChapterData.nextUrl) loadChapter(readerMangaId, currentChapterData.nextUrl);
 }
 
-async function loadChapter(mangaId, chapterUrl) {
+async function loadChapter(mangaId, chapterUrl, restoreFraction = null) {
   const reader = el("#reader");
   const body = el("#readerBody");
   const topbar = el("#readerTopbar");
@@ -343,9 +378,11 @@ async function loadChapter(mangaId, chapterUrl) {
     } else {
       body.innerHTML = "";
       appendChapterImages(data.images);
+      if (restoreFraction) restoreScrollPosition(restoreFraction);
     }
 
     currentChapterData = { url: data.chapter_url || chapterUrl, prevUrl: data.prev_url, nextUrl: data.next_url };
+    currentScrollFraction = restoreFraction || 0;
     el("#readerPrev").disabled = !data.prev_url;
     el("#readerNext").disabled = !data.next_url;
 
@@ -452,13 +489,21 @@ function initReaderAutoHide() {
         bottombar.classList.remove("nav-hidden");
       }
       lastScrollTop = scrollTop;
+      const max = body.scrollHeight - body.clientHeight;
+      currentScrollFraction = max > 0 ? Math.max(0, Math.min(1, scrollTop / max)) : 0;
       checkAutoAdvance();
       ticking = false;
     });
   });
+
+  // เผื่อกดออกแอป/สลับแท็บโดยไม่ได้กดปุ่มกลับ (เช่นมีธุระเข้ากะทันหัน) ยังเซฟตำแหน่งให้
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && !el("#reader").hidden) saveScrollPosition();
+  });
 }
 
-function closeReader() {
+async function closeReader() {
+  await saveScrollPosition();
   el("#reader").hidden = true;
   document.body.style.overflow = "";
   if (currentManga) {
