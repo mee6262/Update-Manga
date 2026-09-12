@@ -83,6 +83,10 @@ def admin_usernames() -> list[str]:
 def require_admin(view):
     @wraps(view)
     def wrapper(*args, **kwargs):
+        # ไม่มีผู้ใช้ในระบบเลย (dev บนเครื่องตัวเอง ไม่เคยตั้ง WEB_USERNAME/WEB_PASSWORD) ปล่อยผ่าน
+        # เหมือน require_login ไม่งั้น dev mode จะใช้ปุ่ม admin อะไรไม่ได้เลยสักอย่าง
+        if not storage.load_users():
+            return view(*args, **kwargs)
         if not is_admin():
             return jsonify({"error": "เฉพาะ admin เท่านั้น"}), 403
         return view(*args, **kwargs)
@@ -170,6 +174,17 @@ def add_user():
     # สมาชิกใหม่เริ่มจากไม่ติดตามอะไรเลย ไปเลือกเองที่หน้า "เรื่องทั้งหมด"
     storage.save_subscriptions(username, [])
     return jsonify({"username": username, "is_admin": new_is_admin}), 201
+
+
+def _normalize_host(netloc: str) -> str:
+    """แปลงโดเมนให้เป็นรูปแบบเดียวกันก่อนเทียบ กันเว็บที่ใช้โดเมนภาษาไทย/unicode (IDN) ตรง ๆ
+    เช่น สดใสเมะ.com แต่ลิงก์ตอน/รูปภายในเพจ (ที่ scrape มา) กลับเป็น punycode
+    (www.xn--l3c0azab5a2gta.com) — ถ้าเทียบ string ตรง ๆ จะเข้าใจผิดว่าเป็นคนละโดเมน"""
+    host = netloc.split(":")[0].lower()
+    try:
+        return host.encode("idna").decode("ascii")
+    except UnicodeError:
+        return host
 
 
 def now_iso() -> str:
@@ -329,10 +344,11 @@ def add_manga():
     manga_items.append(new_item)
     storage.save_manga(manga_items)
 
-    # คนเพิ่มเรื่อง (admin) ให้ติดตามเรื่องนี้เองอัตโนมัติ
-    subs = storage.load_subscriptions(current_username())
-    subs.append(mid)
-    storage.save_subscriptions(current_username(), subs)
+    # คนเพิ่มเรื่อง (admin) ให้ติดตามเรื่องนี้เองอัตโนมัติ (ถ้ามี session จริง — dev mode ไม่มี user เลยข้าม)
+    if current_username():
+        subs = storage.load_subscriptions(current_username())
+        subs.append(mid)
+        storage.save_subscriptions(current_username(), subs)
 
     return jsonify(new_item), 201
 
@@ -384,7 +400,7 @@ def refresh_manga(manga_id):
     if prev_chapter and parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
         notify_subscribed_admins(manga_id, manga["name"], parsed["latest_chapter"], manga.get("cover_url"))
 
-    read_state = storage.load_read_state(current_username())
+    read_state = storage.load_read_state(current_username()) if current_username() else {}
     return jsonify(serialize(manga, read_state))
 
 
@@ -435,8 +451,9 @@ def get_chapter(manga_id):
     if not chapter_url:
         return jsonify({"error": "ยังไม่ทราบลิงก์ตอนล่าสุด ลองรีเฟรชเรื่องนี้ก่อน"}), 400
 
-    # กันไม่ให้ยิงไปโดเมนอื่นที่ไม่เกี่ยวกับเรื่องนี้
-    if urlparse(chapter_url).netloc != urlparse(manga["url"]).netloc:
+    # กันไม่ให้ยิงไปโดเมนอื่นที่ไม่เกี่ยวกับเรื่องนี้ (เทียบแบบ normalize โดเมนก่อน กัน
+    # เว็บที่ใช้โดเมนภาษาไทย/unicode ตรง ๆ แต่ลิงก์ในเพจเป็น punycode คนละรูปแบบกัน)
+    if _normalize_host(urlparse(chapter_url).netloc) != _normalize_host(urlparse(manga["url"]).netloc):
         return jsonify({"error": "URL ตอนไม่ถูกต้อง"}), 400
 
     cached = storage.load_chapter_cache(manga_id, chapter_url)
@@ -444,7 +461,11 @@ def get_chapter(manga_id):
         data = cached
     else:
         try:
-            html = scraper.fetch(chapter_url, referer=manga["url"])
+            # ใช้โดเมนจาก chapter_url เอง (ผ่านการ fetch มาแล้วเลยเป็น ASCII/punycode ที่ปลอดภัย)
+            # แทน manga["url"] ตรง ๆ เพราะบางเว็บผู้ใช้กรอกโดเมนภาษาไทย/unicode ไว้ ซึ่งใส่เป็นค่า
+            # header (Referer) ไม่ได้ — HTTP header ต้อง encode เป็น latin-1 ได้เท่านั้น
+            referer = f"{urlparse(chapter_url).scheme}://{urlparse(chapter_url).netloc}/"
+            html = scraper.fetch(chapter_url, referer=referer)
             data = scraper.parse_chapter_page(html)
         except Exception as e:
             return jsonify({"error": f"ดึงหน้าตอนไม่สำเร็จ: {e}"}), 502
