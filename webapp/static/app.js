@@ -310,7 +310,7 @@ const BOOKMARK_ICON =
   '<svg class="bookmark-icon" viewBox="0 0 24 24" width="16" height="16"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" fill="currentColor"/></svg>';
 
 async function openChapterList(manga) {
-  currentManga = { id: manga.id, name: manga.name };
+  currentManga = { id: manga.id, name: manga.name, latest_chapter_url: manga.latest_chapter_url };
   const view = el("#chapterListView");
   const body = el("#chapterListBody");
   const search = el("#chapterSearch");
@@ -338,6 +338,18 @@ async function renderChapterList() {
     lastReadUrl = data.last_read_url || null;
     lastScrollInfo = data.last_scroll || null;
     if (currentChapters.length === 0) {
+      // บางเว็บ (ธีม Madara บางเจ้า) ดึงรายชื่อตอนทั้งหมดไม่ได้ แต่รู้ลิงก์ตอนล่าสุดแน่ ๆ
+      // เลยเปิดอ่านตอนล่าสุดตรง ๆ ได้ ถึงจะเลือกอ่านตอนอื่นย้อนหลังไม่ได้ก็ตาม
+      if (currentManga.latest_chapter_url) {
+        body.innerHTML = `
+          <div class="reader-msg">
+            เว็บนี้ยังไม่รองรับรายชื่อตอนทั้งหมด แต่อ่านตอนล่าสุดได้เลย<br><br>
+            <button class="btn primary" id="readLatestBtn">อ่านตอนล่าสุด</button>
+          </div>
+        `;
+        el("#readLatestBtn").addEventListener("click", () => openReader(currentManga.latest_chapter_url));
+        return;
+      }
       const hint = state.currentUser.is_admin
         ? 'ลองรีเฟรชเรื่องนี้ในแท็บ "ตั้งค่า" ก่อน'
         : "แจ้ง admin ให้กดรีเฟรชเรื่องนี้ก่อน";

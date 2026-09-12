@@ -96,6 +96,19 @@ def parse_chapter_list(soup: BeautifulSoup) -> list[dict]:
     return chapters
 
 
+def _parse_madara_latest(soup: BeautifulSoup) -> tuple[str | None, str | None]:
+    """เว็บกลุ่ม Madara (ธีม WordPress ยอดนิยมอีกกลุ่ม ต่างจาก mangareader-family) ไม่มี
+    span.epcurlast — ใช้ปุ่ม "Read Last" บนหน้าเรื่องแทน (ข้อความอาจสลับกับปุ่ม Read First
+    ในบางเว็บที่ตั้งค่าธีมผิด เลยต้องเช็คจากข้อความ ไม่ใช้ id ของปุ่ม)"""
+    for a in soup.find_all("a", href=True):
+        if "read last" in a.get_text(strip=True).lower():
+            href = a["href"]
+            num_match = re.search(r"(\d+)/?$", href.rstrip("/"))
+            text = f"ตอนที่ {num_match.group(1)}" if num_match else a.get_text(strip=True)
+            return text, href
+    return None, None
+
+
 def parse_index_page(html: str) -> dict:
     """ดึงตอนล่าสุด + ลิงก์ + รูปปก + รายชื่อตอนทั้งหมด จากหน้ารายละเอียดเรื่อง"""
     soup = BeautifulSoup(html, "html.parser")
@@ -129,6 +142,15 @@ def parse_index_page(html: str) -> dict:
 
     result["chapters"] = parse_chapter_list(soup)
 
+    # ไม่เจอตอนล่าสุดแบบ mangareader-family เลย ลองแบบ Madara แทน (เว็บกลุ่มนี้รายชื่อตอน
+    # ทั้งหมดมักโหลดผ่าน AJAX แยกต่างหาก ซึ่งแต่ละเว็บ endpoint ไม่เหมือนกัน เลยดึงได้แค่
+    # ตอนล่าสุดตอนเดียว ไม่ได้ลิสต์เต็ม — ตอนอื่นย้อนหลังต้องรอ implement เพิ่มทีหลัง)
+    if not result["latest_chapter_url"]:
+        text, url = _parse_madara_latest(soup)
+        if url:
+            result["latest_chapter"] = text
+            result["latest_chapter_url"] = url
+
     return result
 
 
@@ -136,18 +158,26 @@ def parse_chapter_page(html: str) -> dict:
     """ดึงรายการรูปหน้ามังงะ + ลิงก์ตอนก่อนหน้า/ถัดไป จากหน้าอ่านตอน"""
     data = _extract_balanced_json(html, "ts_reader.run(")
     result = {"images": [], "prev_url": None, "next_url": None, "chapter_text": None}
-    if not data:
-        return result
-
-    sources = data.get("sources") or []
-    if sources:
-        result["images"] = sources[0].get("images") or []
-
-    result["prev_url"] = data.get("prevUrl") or None
-    result["next_url"] = data.get("nextUrl") or None
-
     soup = BeautifulSoup(html, "html.parser")
-    title_tag = soup.select_one("h1")
+
+    if data:
+        sources = data.get("sources") or []
+        if sources:
+            result["images"] = sources[0].get("images") or []
+        result["prev_url"] = data.get("prevUrl") or None
+        result["next_url"] = data.get("nextUrl") or None
+    else:
+        # ไม่เจอ ts_reader (ไม่ใช่ mangareader-family) ลองแบบ Madara แทน: รูปอยู่ใน
+        # .reading-content เป็น <img src="..."> ตรง ๆ (ไม่มี prev/next link ให้ดึงบนหน้านี้
+        # เลยปล่อยเป็น None — ปุ่มตอนก่อนหน้า/ถัดไปจะกดไม่ได้สำหรับเว็บกลุ่มนี้)
+        reading = soup.select_one(".reading-content")
+        if reading:
+            for img in reading.select("img.wp-manga-chapter-img, img"):
+                src = (img.get("src") or img.get("data-src") or "").strip()
+                if src:
+                    result["images"].append(src)
+
+    title_tag = soup.select_one("h1") or soup.select_one("title")
     if title_tag:
         match = re.search(r"ตอนที่\s*\S+", title_tag.get_text())
         if match:
