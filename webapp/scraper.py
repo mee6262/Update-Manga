@@ -96,6 +96,31 @@ def parse_chapter_list(soup: BeautifulSoup) -> list[dict]:
     return chapters
 
 
+def fetch_madara_chapters(manga_url: str) -> list[dict]:
+    """เว็บกลุ่ม Madara ไม่ได้ฝังรายชื่อตอนมาในหน้าเรื่อง (มีแค่ไอคอนหมุน ๆ รอ AJAX) ต้องยิง
+    ขอลิสต์เต็มแยกอีกทีที่ {manga_url}/ajax/chapters/ — และต้องเป็น POST เท่านั้น
+    ถ้ายิง GET เว็บจะคืนหน้าเพจปกติมาแทน ไม่ใช่รายชื่อตอน"""
+    endpoint = manga_url.rstrip("/") + "/ajax/chapters/"
+    headers = dict(HEADERS)
+    headers["X-Requested-With"] = "XMLHttpRequest"
+    try:
+        resp = requests.post(endpoint, headers=headers, timeout=TIMEOUT)
+        resp.raise_for_status()
+    except requests.RequestException:
+        return []
+    resp.encoding = "utf-8"
+
+    chapters = []
+    for li in BeautifulSoup(resp.text, "html.parser").select("li.wp-manga-chapter"):
+        anchor = li.find("a", href=True)
+        if not anchor:
+            continue
+        date_el = li.select_one(".chapter-release-date")
+        date = date_el.get_text(strip=True) if date_el else None
+        chapters.append({"text": anchor.get_text(strip=True), "url": anchor["href"], "date": date or None})
+    return chapters
+
+
 def _parse_madara_latest(soup: BeautifulSoup) -> tuple[str | None, str | None]:
     """เว็บกลุ่ม Madara (ธีม WordPress ยอดนิยมอีกกลุ่ม ต่างจาก mangareader-family) ไม่มี
     span.epcurlast — ใช้ปุ่ม "Read Last" บนหน้าเรื่องแทน (ข้อความอาจสลับกับปุ่ม Read First
@@ -109,8 +134,9 @@ def _parse_madara_latest(soup: BeautifulSoup) -> tuple[str | None, str | None]:
     return None, None
 
 
-def parse_index_page(html: str) -> dict:
-    """ดึงตอนล่าสุด + ลิงก์ + รูปปก + รายชื่อตอนทั้งหมด จากหน้ารายละเอียดเรื่อง"""
+def parse_index_page(html: str, url: str | None = None) -> dict:
+    """ดึงตอนล่าสุด + ลิงก์ + รูปปก + รายชื่อตอนทั้งหมด จากหน้ารายละเอียดเรื่อง
+    (url ใช้เฉพาะตอนเจอเว็บกลุ่ม Madara ที่ต้องยิงขอรายชื่อตอนเพิ่มอีก request)"""
     soup = BeautifulSoup(html, "html.parser")
     result = {
         "latest_chapter": None,
@@ -142,14 +168,19 @@ def parse_index_page(html: str) -> dict:
 
     result["chapters"] = parse_chapter_list(soup)
 
-    # ไม่เจอตอนล่าสุดแบบ mangareader-family เลย ลองแบบ Madara แทน (เว็บกลุ่มนี้รายชื่อตอน
-    # ทั้งหมดมักโหลดผ่าน AJAX แยกต่างหาก ซึ่งแต่ละเว็บ endpoint ไม่เหมือนกัน เลยดึงได้แค่
-    # ตอนล่าสุดตอนเดียว ไม่ได้ลิสต์เต็ม — ตอนอื่นย้อนหลังต้องรอ implement เพิ่มทีหลัง)
+    # ไม่เจอ #chapterlist แบบ mangareader-family เลย ลองแบบ Madara แทน (ต้องยิงขอรายชื่อตอน
+    # เพิ่มอีก request เพราะหน้าเรื่องไม่ได้ฝังลิสต์มาให้)
+    if not result["chapters"] and url:
+        result["chapters"] = fetch_madara_chapters(url)
+
     if not result["latest_chapter_url"]:
-        text, url = _parse_madara_latest(soup)
-        if url:
+        text, chapter_url = _parse_madara_latest(soup)
+        if chapter_url:
             result["latest_chapter"] = text
-            result["latest_chapter_url"] = url
+            result["latest_chapter_url"] = chapter_url
+        elif result["chapters"]:
+            result["latest_chapter"] = result["chapters"][0]["text"]
+            result["latest_chapter_url"] = result["chapters"][0]["url"]
 
     return result
 

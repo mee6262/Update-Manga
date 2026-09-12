@@ -353,7 +353,7 @@ def add_manga():
     # ลองดึงข้อมูลทันทีตอนเพิ่ม เพื่อให้เห็นตอนล่าสุด/ปก ทันที
     try:
         html = scraper.fetch(url)
-        parsed = scraper.parse_index_page(html)
+        parsed = scraper.parse_index_page(html, url)
         new_item.update(parsed)
         new_item["last_checked_at"] = now_iso()
         if parsed.get("latest_chapter"):
@@ -406,7 +406,7 @@ def refresh_manga(manga_id):
 
     try:
         html = scraper.fetch(manga["url"])
-        parsed = scraper.parse_index_page(html)
+        parsed = scraper.parse_index_page(html, manga["url"])
         prev_chapter = manga.get("latest_chapter")
         manga.update(parsed)
         manga["last_checked_at"] = now_iso()
@@ -439,7 +439,7 @@ def refresh_all():
             time.sleep(REQUEST_DELAY)
         try:
             html = scraper.fetch(manga["url"])
-            parsed = scraper.parse_index_page(html)
+            parsed = scraper.parse_index_page(html, manga["url"])
             prev_chapter = manga.get("latest_chapter")
             manga.update(parsed)
             manga["last_checked_at"] = now_iso()
@@ -492,6 +492,15 @@ def get_chapter(manga_id):
         if data.get("images"):
             storage.save_chapter_cache(manga_id, chapter_url, data)
             storage.add_image_domains({urlparse(src).netloc for src in data["images"]})
+
+    # เว็บกลุ่ม Madara ไม่มีลิงก์ตอนก่อนหน้า/ถัดไปในหน้าอ่าน หาเอาจากลำดับในรายชื่อตอนแทน
+    # (ลิสต์เรียงใหม่->เก่า ตอนถัดไปจึงอยู่ก่อนหน้าในลิสต์)
+    if not data.get("prev_url") and not data.get("next_url"):
+        chapters = manga.get("chapters") or []
+        idx = next((i for i, c in enumerate(chapters) if c["url"] == chapter_url), None)
+        if idx is not None:
+            data["next_url"] = chapters[idx - 1]["url"] if idx > 0 else None
+            data["prev_url"] = chapters[idx + 1]["url"] if idx + 1 < len(chapters) else None
 
     # มาร์คเฉพาะ "ตอนที่เปิดดูจริง" ว่าอ่านแล้ว (ไม่กระทบตอนอื่นของเรื่องเดียวกัน) เฉพาะของคนที่ login อยู่
     if current_username():
