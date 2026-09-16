@@ -229,6 +229,69 @@ def _source_domains(manga: dict) -> set[str]:
     }
 
 
+def _chapter_key(text: str | None, url_fallback: str | None = None):
+    """คีย์เอกลักษณ์ของตอน คงที่ไม่ว่าจะดึงจากแหล่งไหน/URL ไหนก็ตาม (เดียวกับที่ใช้ตัดตัวซ้ำตอน
+    ตอนรวมหลายแหล่งที่มาใน refresh_from_sources) — ใช้เลขตอนเป็นหลัก ไม่ใช่ URL เพราะเรื่องที่มี
+    หลายแหล่งที่มา พอสลับลำดับแหล่งหรือแหล่งเดิมหายไป URL ของตอนเดียวกันจะเปลี่ยน ถ้าประวัติการ
+    อ่าน/bookmark อิงกับ URL ตรง ๆ จะหายไปทั้งที่จริง ๆ ยังอ่านตอนนั้นอยู่ ตอนที่ไม่มีเลข (เช่นตอน
+    พิเศษ) ใช้ข้อความแทน — ถ้าไม่มีข้อความเลย (เช่นดึง chapter_text จากหน้าตอนไม่สำเร็จ) ใช้
+    url_fallback แทนที่จะไม่มาร์คว่าอ่านแล้วเสียเฉย ๆ"""
+    if not text:
+        return url_fallback
+    num = scraper.chapter_number(text)
+    return num if num is not None else text
+
+
+def _guess_chapter_number_from_url(url: str) -> float | None:
+    """เดาเลขตอนจากเลขท้าย URL (เช่น .../magic-emperor-908/ -> 908) ใช้เฉพาะตอน migrate
+    ข้อมูลอ่านแล้วแบบเก่าที่เก็บ URL ไว้ตรง ๆ และหาข้อความตอนจากรายชื่อตอนปัจจุบันไม่เจอแล้ว"""
+    match = re.search(r"(\d+)/?$", url.rstrip("/"))
+    return float(match.group(1)) if match else None
+
+
+def _migrate_read_state_to_keys():
+    """ของเดิม read_state เก็บ read_urls (URL ตรง ๆ) ตอนนี้เปลี่ยนมาเก็บ read_keys (คีย์เอกลักษณ์
+    จาก _chapter_key) แทน เพราะเรื่องที่มีหลายแหล่งที่มา พอสลับลำดับแหล่งหรือแหล่งเดิมหายไป URL
+    ของตอนเดียวกันจะเปลี่ยน ทำให้ประวัติการอ่าน/bookmark ที่อิงกับ URL ตรง ๆ หายไปทั้งที่จริง ๆ ยัง
+    อ่านตอนนั้นอยู่ — ย้ายครั้งเดียวตอนสตาร์ท: หาเลขตอนจากรายชื่อตอนปัจจุบันของเรื่องนั้นก่อน (แม่น
+    สุด) ไม่เจอค่อยเดาจากเลขท้าย URL แทน (เผื่อ URL เก่าไม่อยู่ในลิสต์เรื่องนั้นแล้วเพราะสลับแหล่ง
+    ไปแล้ว เช่นเคสที่ทำให้เจอบั๊กนี้)"""
+    chapters_by_manga = {m["id"]: m.get("chapters") or [] for m in storage.load_manga()}
+
+    for username in storage.all_usernames():
+        read_state = storage.load_read_state(username)
+        changed = False
+        for manga_id, entry in read_state.items():
+            if "read_urls" not in entry:
+                continue
+            changed = True
+            url_to_text = {c["url"]: c["text"] for c in chapters_by_manga.get(manga_id, [])}
+
+            def resolve_key(url: str):
+                # ห้ามใช้ `or` เชื่อมสอง fallback เพราะเลขตอน 0 (ตอน prologue) เป็นค่า falsy
+                # ใน Python แต่เป็นคีย์ที่ถูกต้อง ต้องเช็ค `is None` ตรง ๆ เท่านั้น
+                key = _chapter_key(url_to_text.get(url))
+                return key if key is not None else _guess_chapter_number_from_url(url)
+
+            keys = []
+            for url in entry.pop("read_urls"):
+                key = resolve_key(url)
+                if key is not None and key not in keys:
+                    keys.append(key)
+            entry["read_keys"] = keys
+
+            raw_scroll = entry.get("last_scroll")
+            if raw_scroll and "url" in raw_scroll:
+                key = resolve_key(raw_scroll["url"])
+                entry["last_scroll"] = {"key": key, "fraction": raw_scroll["fraction"]} if key is not None else None
+
+        if changed:
+            storage.save_read_state(username, read_state)
+
+
+_migrate_read_state_to_keys()
+
+
 def refresh_from_sources(sources: list[dict]) -> dict:
     """ดึงข้อมูลจากทุกแหล่งที่มาของเรื่องเดียวกันแล้วรวมเป็นชุดเดียว กันเรื่องที่แหล่งใดแหล่งหนึ่ง
     เงียบหายไม่อัพเดต — ตอนล่าสุดเอาจากแหล่งที่มีเลขตอนสูงสุด ส่วนรายชื่อตอนรวมจากทุกแหล่งเข้า
@@ -251,10 +314,7 @@ def refresh_from_sources(sources: list[dict]) -> dict:
     by_num = {}
     for parsed in per_source:
         for c in parsed["chapters"]:
-            key = scraper.chapter_number(c["text"])
-            if key is None:
-                key = c["text"]
-            by_num.setdefault(key, c)
+            by_num.setdefault(_chapter_key(c["text"]), c)
     merged_chapters = sorted(
         by_num.values(),
         key=lambda c: scraper.chapter_number(c["text"]) if scraper.chapter_number(c["text"]) is not None else -1,
@@ -291,36 +351,37 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def is_chapter_read(entry: dict | None, chapter_url: str, chapter_text: str | None = None) -> bool:
-    """เช็คว่าตอนนี้ (ระบุด้วย url) อ่านแล้วหรือยัง"""
-    if not entry:
+def is_chapter_read(entry: dict | None, key) -> bool:
+    """เช็คว่าตอนนี้ (ระบุด้วยคีย์เอกลักษณ์จาก _chapter_key) อ่านแล้วหรือยัง"""
+    if not entry or key is None:
         return False
-    if chapter_url in entry.get("read_urls", []):
+    if key in entry.get("read_keys", []):
         return True
-    # fallback สำหรับข้อมูลเก่าก่อนมีระบบติดตามรายตอน (มีแค่ last_read_chapter เป็นข้อความ)
+    # fallback สำหรับข้อมูลเก่ามาก (ก่อนมีระบบติดตามรายตอน มีแค่ last_read_chapter เป็นข้อความ)
     old_last = entry.get("last_read_chapter")
-    if old_last and chapter_text and old_last == chapter_text:
+    if old_last is not None and _chapter_key(old_last) == key:
         return True
     return False
 
 
 def is_new(manga: dict, read_state: dict) -> bool:
-    url = manga.get("latest_chapter_url")
-    if not url:
+    if not manga.get("latest_chapter_url"):
         return False
     entry = read_state.get(manga["id"])
-    return not is_chapter_read(entry, url, manga.get("latest_chapter"))
+    return not is_chapter_read(entry, _chapter_key(manga.get("latest_chapter")))
 
 
-def mark_chapter_read(read_state: dict, manga_id: str, chapter_url: str):
-    entry = read_state.setdefault(manga_id, {"read_urls": [], "last_read_at": None})
-    read_urls = entry.setdefault("read_urls", [])
+def mark_chapter_read(read_state: dict, manga_id: str, key):
+    if key is None:
+        return
+    entry = read_state.setdefault(manga_id, {"read_keys": [], "last_read_at": None})
+    read_keys = entry.setdefault("read_keys", [])
     # ย้ายไปท้ายลิสต์เสมอ (ไม่ใช่แค่ append ตอนยังไม่เคยอ่าน) เพราะ "ตอนล่าสุดที่อ่าน" (สำหรับ
     # bookmark/auto-scroll) อิงจากตัวท้ายสุดของลิสต์นี้ ถ้ากดกลับไปอ่านตอนเก่าที่เคยอ่านแล้วซ้ำ
     # ต้องขยับมาเป็น "ล่าสุด" ด้วย ไม่ใช่ค้างอยู่ตำแหน่งเดิมตอนอ่านครั้งแรก
-    if chapter_url in read_urls:
-        read_urls.remove(chapter_url)
-    read_urls.append(chapter_url)
+    if key in read_keys:
+        read_keys.remove(key)
+    read_keys.append(key)
     entry["last_read_at"] = now_iso()
 
 
@@ -647,7 +708,7 @@ def get_chapter(manga_id):
     # มาร์คเฉพาะ "ตอนที่เปิดดูจริง" ว่าอ่านแล้ว (ไม่กระทบตอนอื่นของเรื่องเดียวกัน) เฉพาะของคนที่ login อยู่
     if current_username():
         read_state = storage.load_read_state(current_username())
-        mark_chapter_read(read_state, manga_id, chapter_url)
+        mark_chapter_read(read_state, manga_id, _chapter_key(data.get("chapter_text"), chapter_url))
         storage.save_read_state(current_username(), read_state)
 
     data["chapter_url"] = chapter_url
@@ -666,21 +727,35 @@ def list_chapters(manga_id):
     entry = read_state.get(manga_id)
     chapters = manga.get("chapters") or []
     items = [
-        {**c, "is_read": is_chapter_read(entry, c["url"], c["text"])}
+        {**c, "is_read": is_chapter_read(entry, _chapter_key(c["text"]))}
         for c in chapters
     ]
 
-    # ตอนล่าสุดที่กดอ่าน (ไว้ให้หน้าเว็บเลื่อนไปหาอัตโนมัติ) เอาจากตัวท้ายสุดของ read_urls
-    # (ย้ายไปท้ายลิสต์ทุกครั้งที่อ่าน จึงเป็นตอนล่าสุดที่อ่านจริง) หรือ fallback ข้อมูลเก่า
+    # ตอนล่าสุดที่กดอ่าน (ไว้ให้หน้าเว็บเลื่อนไปหาอัตโนมัติ) เอาจากตัวท้ายสุดของ read_keys (ย้ายไป
+    # ท้ายลิสต์ทุกครั้งที่อ่าน จึงเป็นตอนล่าสุดที่อ่านจริง) แล้วหา URL ปัจจุบันของตอนนั้นจากรายชื่อ
+    # ตอนตอนนี้ (ไม่ใช้ URL ที่เก็บไว้ตรง ๆ เพราะเรื่องที่มีหลายแหล่งที่มา พอสลับลำดับแหล่ง URL ของ
+    # ตอนเดียวกันอาจเปลี่ยนได้) หรือ fallback ข้อมูลเก่ามาก ๆ ที่มีแค่ last_read_chapter
     last_read_url = None
     if entry:
-        read_urls = entry.get("read_urls") or []
-        if read_urls:
-            last_read_url = read_urls[-1]
+        read_keys = entry.get("read_keys") or []
+        if read_keys:
+            last_key = read_keys[-1]
+            match = next((c for c in chapters if _chapter_key(c["text"]) == last_key), None)
+            if match:
+                last_read_url = match["url"]
         elif entry.get("last_read_chapter"):
             match = next((c for c in chapters if c["text"] == entry["last_read_chapter"]), None)
             if match:
                 last_read_url = match["url"]
+
+    # last_scroll เก็บคีย์เอกลักษณ์ของตอนไว้ (ไม่ใช่ URL ตรง ๆ) ด้วยเหตุผลเดียวกัน — แปลงกลับเป็น
+    # URL ปัจจุบันก่อนส่งให้หน้าเว็บ เพื่อให้เทียบกับตอนที่เปิดอยู่ตรงกันเสมอ
+    last_scroll = None
+    raw_scroll = (entry or {}).get("last_scroll")
+    if raw_scroll:
+        match = next((c for c in chapters if _chapter_key(c["text"]) == raw_scroll.get("key")), None)
+        if match:
+            last_scroll = {"url": match["url"], "fraction": raw_scroll["fraction"]}
 
     return jsonify(
         {
@@ -688,7 +763,7 @@ def list_chapters(manga_id):
             "cover_url": manga.get("cover_url"),
             "chapters": items,
             "last_read_url": last_read_url,
-            "last_scroll": (entry or {}).get("last_scroll"),
+            "last_scroll": last_scroll,
         }
     )
 
@@ -704,10 +779,16 @@ def save_scroll_position(manga_id):
         return jsonify({"error": "ข้อมูลไม่ครบ"}), 400
     fraction = max(0.0, min(1.0, float(fraction)))
 
+    manga_items = storage.load_manga()
+    manga = next((m for m in manga_items if m["id"] == manga_id), None)
+    chapter = next((c for c in (manga.get("chapters") or []) if c["url"] == chapter_url), None) if manga else None
+    key = _chapter_key(chapter["text"] if chapter else None, chapter_url)
+
     read_state = storage.load_read_state(current_username())
-    entry = read_state.setdefault(manga_id, {"read_urls": [], "last_read_at": None})
-    # ถ้าอ่านจบตอนแล้ว (>=95%) ไม่ต้องเก็บตำแหน่งไว้ เปิดใหม่ควรเริ่มจากบนสุดตามปกติ
-    entry["last_scroll"] = None if fraction >= 0.95 else {"url": chapter_url, "fraction": fraction}
+    entry = read_state.setdefault(manga_id, {"read_keys": [], "last_read_at": None})
+    # ถ้าอ่านจบตอนแล้ว (>=95%) ไม่ต้องเก็บตำแหน่งไว้ เปิดใหม่ควรเริ่มจากบนสุดตามปกติ — เก็บเป็นคีย์
+    # เอกลักษณ์ของตอน ไม่ใช่ URL ตรง ๆ ด้วยเหตุผลเดียวกับ read_keys (เรื่องหลายแหล่งที่มา URL เปลี่ยนได้)
+    entry["last_scroll"] = None if fraction >= 0.95 else {"key": key, "fraction": fraction}
     storage.save_read_state(current_username(), read_state)
     return jsonify({"ok": True})
 
@@ -724,7 +805,7 @@ def mark_read(manga_id):
         return jsonify({"error": "ยังไม่ทราบลิงก์ตอนล่าสุด ลองรีเฟรชเรื่องนี้ก่อน"}), 400
 
     read_state = storage.load_read_state(current_username())
-    mark_chapter_read(read_state, manga_id, manga["latest_chapter_url"])
+    mark_chapter_read(read_state, manga_id, _chapter_key(manga.get("latest_chapter"), manga["latest_chapter_url"]))
     storage.save_read_state(current_username(), read_state)
     return jsonify({"ok": True})
 
@@ -740,9 +821,9 @@ def mark_unread(manga_id):
 
     read_state = storage.load_read_state(current_username())
     entry = read_state.get(manga_id)
-    latest_url = manga.get("latest_chapter_url")
-    if entry and latest_url and latest_url in entry.get("read_urls", []):
-        entry["read_urls"].remove(latest_url)
+    key = _chapter_key(manga.get("latest_chapter"), manga.get("latest_chapter_url"))
+    if entry and key is not None and key in entry.get("read_keys", []):
+        entry["read_keys"].remove(key)
         storage.save_read_state(current_username(), read_state)
     return jsonify({"ok": True})
 
