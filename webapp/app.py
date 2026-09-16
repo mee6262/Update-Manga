@@ -684,10 +684,12 @@ def get_chapter(manga_id):
         data = cached
     else:
         try:
-            # ใช้โดเมนจาก chapter_url เอง (ผ่านการ fetch มาแล้วเลยเป็น ASCII/punycode ที่ปลอดภัย)
-            # แทน manga["url"] ตรง ๆ เพราะบางเว็บผู้ใช้กรอกโดเมนภาษาไทย/unicode ไว้ ซึ่งใส่เป็นค่า
-            # header (Referer) ไม่ได้ — HTTP header ต้อง encode เป็น latin-1 ได้เท่านั้น
-            referer = f"{urlparse(chapter_url).scheme}://{urlparse(chapter_url).netloc}/"
+            # ใช้โดเมนจาก chapter_url เอง แทน manga["url"] ตรง ๆ เพราะบางเว็บผู้ใช้กรอกโดเมนภาษาไทย/
+            # unicode ไว้ — แต่ต้อง normalize เป็น punycode ก่อนเสมอ (เผื่อ chapter_url ที่ส่งมาดัน
+            # เป็นโดเมนภาษาไทยตรง ๆ ด้วย ไม่ใช่แค่ที่ scrape มาซึ่งมักเป็น punycode อยู่แล้ว) เพราะ
+            # ใส่เป็นค่า header (Referer) แบบ unicode ตรง ๆ ไม่ได้ — HTTP header ต้อง encode เป็น
+            # latin-1 ได้เท่านั้น
+            referer = f"{urlparse(chapter_url).scheme}://{_normalize_host(urlparse(chapter_url).netloc)}/"
             html = scraper.fetch(chapter_url, referer=referer)
             data = scraper.parse_chapter_page(html)
         except Exception as e:

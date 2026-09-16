@@ -248,9 +248,11 @@ def parse_chapter_page(html: str) -> dict:
         result["next_url"] = data.get("nextUrl") or None
     else:
         # ไม่เจอ ts_reader (ไม่ใช่ mangareader-family) ลองแบบ Madara แทน: รูปอยู่ใน
-        # .reading-content เป็น <img src="..."> ตรง ๆ (ไม่มี prev/next link ให้ดึงบนหน้านี้
-        # เลยปล่อยเป็น None — ปุ่มตอนก่อนหน้า/ถัดไปจะกดไม่ได้สำหรับเว็บกลุ่มนี้)
-        reading = soup.select_one(".reading-content")
+        # .reading-content เป็น <img src="..."> ตรง ๆ ไม่ก็แบบธีมที่ใช้ #readerarea แทน (เจอใน
+        # สดใสเมะ.com บางเรื่อง — เว็บเดียวกันแต่บางเรื่องยังใช้เทมเพลตเก่าที่ไม่มี ts_reader)
+        # ทั้งสองแบบไม่มี prev/next link ที่ใช้ได้จริงในหน้านี้ (เป็น # เปล่า ๆ รอ JS เติมทีหลัง)
+        # เลยปล่อยเป็น None — ฝั่ง app.py จะ derive จากลำดับในรายชื่อตอนแทนอยู่แล้ว
+        reading = soup.select_one(".reading-content") or soup.select_one("#readerarea")
         if reading:
             for img in reading.select("img.wp-manga-chapter-img, img"):
                 src = (img.get("src") or img.get("data-src") or "").strip()
