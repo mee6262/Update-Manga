@@ -70,7 +70,7 @@ def _migrate_manga_sources():
     manga_items = storage.load_manga()
     changed = False
     for m in manga_items:
-        if not m.get("sources"):
+        if not m.get("sources") and m.get("url"):
             m["sources"] = [{"url": m["url"]}]
             changed = True
     if changed:
@@ -256,16 +256,18 @@ def _migrate_read_state_to_keys():
     อ่านตอนนั้นอยู่ — ย้ายครั้งเดียวตอนสตาร์ท: หาเลขตอนจากรายชื่อตอนปัจจุบันของเรื่องนั้นก่อน (แม่น
     สุด) ไม่เจอค่อยเดาจากเลขท้าย URL แทน (เผื่อ URL เก่าไม่อยู่ในลิสต์เรื่องนั้นแล้วเพราะสลับแหล่ง
     ไปแล้ว เช่นเคสที่ทำให้เจอบั๊กนี้)"""
-    chapters_by_manga = {m["id"]: m.get("chapters") or [] for m in storage.load_manga()}
+    chapters_by_manga = {m["id"]: m.get("chapters") or [] for m in storage.load_manga() if m.get("id")}
 
     for username in storage.all_usernames():
         read_state = storage.load_read_state(username)
         changed = False
         for manga_id, entry in read_state.items():
-            if "read_urls" not in entry:
+            if not isinstance(entry, dict) or "read_urls" not in entry:
                 continue
             changed = True
-            url_to_text = {c["url"]: c["text"] for c in chapters_by_manga.get(manga_id, [])}
+            url_to_text = {
+                c["url"]: c.get("text") for c in chapters_by_manga.get(manga_id, []) if c.get("url")
+            }
 
             def resolve_key(url: str):
                 # ห้ามใช้ `or` เชื่อมสอง fallback เพราะเลขตอน 0 (ตอน prologue) เป็นค่า falsy
@@ -274,14 +276,16 @@ def _migrate_read_state_to_keys():
                 return key if key is not None else _guess_chapter_number_from_url(url)
 
             keys = []
-            for url in entry.pop("read_urls"):
+            for url in entry.pop("read_urls") or []:
+                if not isinstance(url, str):
+                    continue
                 key = resolve_key(url)
                 if key is not None and key not in keys:
                     keys.append(key)
             entry["read_keys"] = keys
 
             raw_scroll = entry.get("last_scroll")
-            if raw_scroll and "url" in raw_scroll:
+            if isinstance(raw_scroll, dict) and raw_scroll.get("url"):
                 key = resolve_key(raw_scroll["url"])
                 entry["last_scroll"] = {"key": key, "fraction": raw_scroll["fraction"]} if key is not None else None
 
