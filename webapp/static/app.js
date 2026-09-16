@@ -122,17 +122,21 @@ function renderSettings() {
   const list = el("#settingsList");
   list.innerHTML = "";
   for (const m of state.catalog) {
+    const sourceCount = (m.sources || []).length;
+    const sourceLabel = sourceCount > 1 ? `${escapeHtml(m.source)} +${sourceCount - 1} แหล่ง` : escapeHtml(m.source);
     const row = document.createElement("li");
     row.className = "settings-row";
     row.innerHTML = `
       <img src="${m.cover_url ? proxied(m.cover_url) : ""}" alt="" onerror="this.style.opacity=0" />
       <div class="grow">
         <div class="name">${escapeHtml(m.name)}</div>
-        <div class="meta">${escapeHtml(m.source)} — ${m.latest_chapter ? escapeHtml(m.latest_chapter) : "-"}</div>
+        <div class="meta">${sourceLabel} — ${m.latest_chapter ? escapeHtml(m.latest_chapter) : "-"}</div>
       </div>
+      <button class="btn" data-action="edit">แก้ไข</button>
       <button class="btn" data-action="refresh">รีเฟรช</button>
       <button class="btn danger" data-action="delete">ลบออกจากระบบ</button>
     `;
+    row.querySelector('[data-action="edit"]').addEventListener("click", () => openMangaModal(m));
     row.querySelector('[data-action="refresh"]').addEventListener("click", () => refreshOne(m.id));
     row.querySelector('[data-action="delete"]').addEventListener("click", () => deleteManga(m.id, m.name));
     list.appendChild(row);
@@ -304,30 +308,72 @@ function initAddUserForm() {
   });
 }
 
-function initAddForm() {
-  el("#addForm").addEventListener("submit", async (e) => {
+// ---------- ป็อปอัพเพิ่ม/แก้ไขเรื่อง (หลายแหล่งที่มาต่อเรื่อง) ----------
+let editingMangaId = null; // null = โหมดเพิ่มเรื่องใหม่, ไม่ null = โหมดแก้ไขเรื่องนี้
+
+function addSourceRow(value = "") {
+  const list = el("#mangaFormSources");
+  const row = document.createElement("div");
+  row.className = "source-row";
+  row.innerHTML = `
+    <input type="url" class="source-url" placeholder="URL หน้าเรื่อง เช่น https://www.go-manga.com/overgeared/" required />
+    <button type="button" class="icon-btn remove-source-btn" title="ลบแหล่งนี้">✕</button>
+  `;
+  row.querySelector(".source-url").value = value;
+  row.querySelector(".remove-source-btn").addEventListener("click", () => {
+    // เหลือช่องเดียวห้ามลบ ต้องมีแหล่งที่มาอย่างน้อย 1 เว็บเสมอ
+    if (list.children.length > 1) row.remove();
+  });
+  list.appendChild(row);
+}
+
+function openMangaModal(manga = null) {
+  editingMangaId = manga ? manga.id : null;
+  el("#mangaFormTitle").textContent = manga ? "แก้ไขเรื่อง" : "เพิ่มเรื่องใหม่";
+  el("#mangaFormName").value = manga ? manga.name : "";
+  el("#mangaFormSources").innerHTML = "";
+  const urls = manga ? (manga.sources || []).map((s) => s.url) : [""];
+  for (const u of urls) addSourceRow(u);
+  const msg = el("#mangaFormMsg");
+  msg.className = "form-msg";
+  msg.textContent = "";
+  el("#mangaFormModal").hidden = false;
+}
+
+function closeMangaModal() {
+  el("#mangaFormModal").hidden = true;
+}
+
+function initMangaForm() {
+  el("#openAddMangaBtn").addEventListener("click", () => openMangaModal());
+  el("#addSourceRowBtn").addEventListener("click", () => addSourceRow());
+  el("#mangaFormCancel").addEventListener("click", closeMangaModal);
+
+  el("#mangaForm").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const name = el("#addName").value.trim();
-    const url = el("#addUrl").value.trim();
-    const msg = el("#addFormMsg");
+    const name = el("#mangaFormName").value.trim();
+    const sources = els("#mangaFormSources .source-url")
+      .map((input) => input.value.trim())
+      .filter(Boolean);
+    const msg = el("#mangaFormMsg");
     msg.className = "form-msg";
-    msg.textContent = "กำลังเพิ่ม...";
+    msg.textContent = editingMangaId ? "กำลังบันทึก..." : "กำลังเพิ่ม...";
 
     try {
-      const res = await fetch("/api/manga", {
-        method: "POST",
+      const url = editingMangaId ? `/api/manga/${editingMangaId}` : "/api/manga";
+      const res = await fetch(url, {
+        method: editingMangaId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, url }),
+        body: JSON.stringify({ name, sources }),
       });
       const data = await res.json();
       if (!res.ok) {
         msg.classList.add("error");
-        msg.textContent = data.error || "เพิ่มไม่สำเร็จ";
+        msg.textContent = data.error || "บันทึกไม่สำเร็จ";
         return;
       }
-      msg.classList.add("success");
-      msg.textContent = `เพิ่ม "${name}" สำเร็จ`;
-      el("#addForm").reset();
+      closeMangaModal();
+      await loadCatalog();
       await loadManga();
       renderSettings();
     } catch (err) {
@@ -698,7 +744,7 @@ async function closeReader() {
 
 async function init() {
   initTabs();
-  initAddForm();
+  initMangaForm();
   initChapterSearch();
   await initCatalogSearch();
   initAddUserForm();

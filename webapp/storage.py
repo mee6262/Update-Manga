@@ -107,7 +107,9 @@ def add_image_domains(domains: set[str]):
 def get_allowed_domains() -> set[str]:
     domains = load_image_domains()
     for m in load_manga():
-        domains.add(urlparse(m["url"]).netloc)
+        for src in m.get("sources") or [{"url": m.get("url")}]:
+            if src.get("url"):
+                domains.add(urlparse(src["url"]).netloc)
         if m.get("latest_chapter_url"):
             domains.add(urlparse(m["latest_chapter_url"]).netloc)
         if m.get("cover_url"):

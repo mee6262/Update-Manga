@@ -64,7 +64,21 @@ def _bootstrap_first_admin():
     storage.save_subscriptions(WEB_USERNAME, [m["id"] for m in storage.load_manga()])
 
 
+def _migrate_manga_sources():
+    """ของเดิมมีแค่ manga["url"] เดียว ก่อนจะรองรับหลายแหล่งที่มาต่อเรื่อง ย้ายให้เป็น
+    manga["sources"] = [{"url": ...}] ครั้งเดียวตอนสตาร์ท กันโค้ดที่เหลือต้องเช็ค key ไม่มีอยู่ทุกที่"""
+    manga_items = storage.load_manga()
+    changed = False
+    for m in manga_items:
+        if not m.get("sources"):
+            m["sources"] = [{"url": m["url"]}]
+            changed = True
+    if changed:
+        storage.save_manga(manga_items)
+
+
 _bootstrap_first_admin()
+_migrate_manga_sources()
 
 
 def current_username():
@@ -207,6 +221,72 @@ def _normalize_host(netloc: str) -> str:
         return host
 
 
+def _source_domains(manga: dict) -> set[str]:
+    return {
+        _normalize_host(urlparse(s["url"]).netloc)
+        for s in manga.get("sources") or [{"url": manga.get("url")}]
+        if s.get("url")
+    }
+
+
+def refresh_from_sources(sources: list[dict]) -> dict:
+    """ดึงข้อมูลจากทุกแหล่งที่มาของเรื่องเดียวกันแล้วรวมเป็นชุดเดียว กันเรื่องที่แหล่งใดแหล่งหนึ่ง
+    เงียบหายไม่อัพเดต — ตอนล่าสุดเอาจากแหล่งที่มีเลขตอนสูงสุด ส่วนรายชื่อตอนรวมจากทุกแหล่งเข้า
+    ด้วยกัน (ตัวซ้ำตามเลขตอน แหล่งที่มาก่อนในลิสต์ชนะถ้าเลขตอนซ้ำ) เพื่อให้อ่านตอนเก่าจากแหล่งที่
+    ยังมีอยู่ได้ปกติ ถึงแหล่งอื่นจะตายไปแล้วก็ตาม แหล่งไหนดึงพลาดก็ข้ามไป ไม่ล้มทั้งเรื่อง"""
+    per_source = []
+    for src in sources:
+        url = src.get("url")
+        if not url:
+            continue
+        try:
+            html = scraper.fetch(url)
+            per_source.append(scraper.parse_index_page(html, url))
+        except Exception as e:
+            print(f"⚠️ ดึงข้อมูลจาก {url} ไม่สำเร็จ: {e}")
+
+    if not per_source:
+        return {}
+
+    by_num = {}
+    for parsed in per_source:
+        for c in parsed["chapters"]:
+            key = scraper.chapter_number(c["text"])
+            if key is None:
+                key = c["text"]
+            by_num.setdefault(key, c)
+    merged_chapters = sorted(
+        by_num.values(),
+        key=lambda c: scraper.chapter_number(c["text"]) if scraper.chapter_number(c["text"]) is not None else -1,
+        reverse=True,
+    )
+
+    # เผื่อทุกแหล่งไม่มี #chapterlist/AJAX เลย (เช่น Madara ที่ดึงลิสต์ไม่ได้) แต่ยังรู้ตอนล่าสุด
+    # จากปุ่ม "Read Last" อยู่ — เทียบตอนล่าสุดของแต่ละแหล่งเข้าไปในกองเดียวกันด้วย
+    candidates = list(merged_chapters)
+    known_urls = {c["url"] for c in candidates}
+    for parsed in per_source:
+        if parsed.get("latest_chapter_url") and parsed["latest_chapter_url"] not in known_urls:
+            candidates.append({"text": parsed.get("latest_chapter"), "url": parsed["latest_chapter_url"], "date": None})
+            known_urls.add(parsed["latest_chapter_url"])
+
+    best = max(
+        candidates,
+        key=lambda c: scraper.chapter_number(c["text"]) if scraper.chapter_number(c["text"]) is not None else -1,
+        default=None,
+    )
+
+    return {
+        "chapters": merged_chapters,
+        "cover_url": next((p["cover_url"] for p in per_source if p.get("cover_url")), None),
+        "latest_chapter": best["text"] if best else None,
+        "latest_chapter_url": best["url"] if best else None,
+        "latest_chapter_date": next(
+            (d for c in merged_chapters if (d := scraper.parse_release_date(c.get("date")))), None
+        ),
+    }
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -320,28 +400,49 @@ def unsubscribe(manga_id):
     return jsonify({"ok": True})
 
 
+def _parse_sources_body(body: dict) -> tuple[list[str] | None, str | None]:
+    """อ่านรายการ URL แหล่งที่มาจาก request body คืน (urls, error) — รองรับ body["sources"]
+    เป็น list ของ url string ล้วน ๆ, ตัดช่องว่าง/ช่องว่างเปล่าทิ้ง, กันซ้ำ (คงลำดับเดิม)"""
+    raw = body.get("sources")
+    if not isinstance(raw, list):
+        return None, "ต้องระบุแหล่งที่มาอย่างน้อย 1 เว็บ"
+    urls = []
+    for u in raw:
+        u = (u or "").strip()
+        if not u:
+            continue
+        if not u.startswith("http://") and not u.startswith("https://"):
+            return None, f"URL ไม่ถูกต้อง: {u}"
+        if u not in urls:
+            urls.append(u)
+    if not urls:
+        return None, "ต้องระบุแหล่งที่มาอย่างน้อย 1 เว็บ"
+    return urls, None
+
+
 @app.route("/api/manga", methods=["POST"])
 @require_admin
 def add_manga():
     body = request.get_json(force=True) or {}
     name = (body.get("name") or "").strip()
-    url = (body.get("url") or "").strip()
+    urls, error = _parse_sources_body(body)
 
-    if not name or not url:
-        return jsonify({"error": "ต้องระบุชื่อและ URL"}), 400
-    if not url.startswith("http://") and not url.startswith("https://"):
-        return jsonify({"error": "URL ไม่ถูกต้อง"}), 400
+    if not name:
+        return jsonify({"error": "ต้องระบุชื่อเรื่อง"}), 400
+    if error:
+        return jsonify({"error": error}), 400
 
     manga_items = storage.load_manga()
-    mid = storage.make_id(url)
+    mid = storage.make_id(urls[0])
     if any(m["id"] == mid for m in manga_items):
         return jsonify({"error": "มีเรื่องนี้อยู่แล้ว"}), 409
 
     new_item = {
         "id": mid,
         "name": name,
-        "url": url,
-        "source": urlparse(url).netloc,
+        "url": urls[0],
+        "sources": [{"url": u} for u in urls],
+        "source": urlparse(urls[0]).netloc,
         "latest_chapter": None,
         "latest_chapter_url": None,
         "cover_url": None,
@@ -351,15 +452,14 @@ def add_manga():
     }
 
     # ลองดึงข้อมูลทันทีตอนเพิ่ม เพื่อให้เห็นตอนล่าสุด/ปก ทันที
-    try:
-        html = scraper.fetch(url)
-        parsed = scraper.parse_index_page(html, url)
+    parsed = refresh_from_sources(new_item["sources"])
+    if parsed:
         new_item.update(parsed)
         new_item["last_checked_at"] = now_iso()
+        if parsed.get("latest_chapter_url"):
+            new_item["source"] = urlparse(parsed["latest_chapter_url"]).netloc
         if parsed.get("latest_chapter"):
             new_item["last_updated_at"] = new_item["last_checked_at"]
-    except Exception as e:
-        print(f"⚠️ ดึงข้อมูลตอนเพิ่มเรื่องใหม่ไม่สำเร็จ: {e}")
 
     manga_items.append(new_item)
     storage.save_manga(manga_items)
@@ -371,6 +471,44 @@ def add_manga():
         storage.save_subscriptions(current_username(), subs)
 
     return jsonify(new_item), 201
+
+
+@app.route("/api/manga/<manga_id>", methods=["PUT"])
+@require_admin
+def edit_manga(manga_id):
+    """แก้ไขชื่อ/แหล่งที่มาของเรื่องที่มีอยู่แล้ว (id เดิมไม่เปลี่ยน ต่อให้แหล่งแรกจะถูกแก้ก็ตาม
+    เพื่อไม่ให้กระทบ subscriptions/read_state ของทุกคนที่ผูกกับ id เดิมอยู่)"""
+    manga_items = storage.load_manga()
+    manga = next((m for m in manga_items if m["id"] == manga_id), None)
+    if not manga:
+        return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
+
+    body = request.get_json(force=True) or {}
+    name = (body.get("name") or "").strip()
+    urls, error = _parse_sources_body(body)
+
+    if not name:
+        return jsonify({"error": "ต้องระบุชื่อเรื่อง"}), 400
+    if error:
+        return jsonify({"error": error}), 400
+
+    manga["name"] = name
+    manga["sources"] = [{"url": u} for u in urls]
+    manga["url"] = urls[0]
+
+    # ดึงข้อมูลใหม่ทันทีตามแหล่งที่มาชุดล่าสุด เพื่อให้เห็นผลทันทีไม่ต้องรอรีเฟรชรอบถัดไป
+    parsed = refresh_from_sources(manga["sources"])
+    if parsed:
+        prev_chapter = manga.get("latest_chapter")
+        manga.update(parsed)
+        manga["last_checked_at"] = now_iso()
+        if parsed.get("latest_chapter_url"):
+            manga["source"] = urlparse(parsed["latest_chapter_url"]).netloc
+        if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
+            manga["last_updated_at"] = manga["last_checked_at"]
+
+    storage.save_manga(manga_items)
+    return jsonify(manga)
 
 
 @app.route("/api/manga/<manga_id>", methods=["DELETE"])
@@ -404,16 +542,17 @@ def refresh_manga(manga_id):
     if not manga:
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
 
-    try:
-        html = scraper.fetch(manga["url"])
-        parsed = scraper.parse_index_page(html, manga["url"])
-        prev_chapter = manga.get("latest_chapter")
-        manga.update(parsed)
-        manga["last_checked_at"] = now_iso()
-        if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
-            manga["last_updated_at"] = manga["last_checked_at"]
-    except Exception as e:
-        return jsonify({"error": f"ดึงข้อมูลไม่สำเร็จ: {e}"}), 502
+    parsed = refresh_from_sources(manga.get("sources") or [{"url": manga["url"]}])
+    if not parsed:
+        return jsonify({"error": "ดึงข้อมูลไม่สำเร็จ (ทุกแหล่งที่มา)"}), 502
+
+    prev_chapter = manga.get("latest_chapter")
+    manga.update(parsed)
+    manga["last_checked_at"] = now_iso()
+    if parsed.get("latest_chapter_url"):
+        manga["source"] = urlparse(parsed["latest_chapter_url"]).netloc
+    if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
+        manga["last_updated_at"] = manga["last_checked_at"]
 
     storage.save_manga(manga_items)
 
@@ -437,20 +576,22 @@ def refresh_all():
     for idx, manga in enumerate(manga_items):
         if idx > 0:
             time.sleep(REQUEST_DELAY)
-        try:
-            html = scraper.fetch(manga["url"])
-            parsed = scraper.parse_index_page(html, manga["url"])
-            prev_chapter = manga.get("latest_chapter")
-            manga.update(parsed)
-            manga["last_checked_at"] = now_iso()
-            if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
-                manga["last_updated_at"] = manga["last_checked_at"]
-                updated_ids.append(manga["id"])
-                # แจ้งเตือนเฉพาะตอนที่เคยรู้ตอนล่าสุดมาก่อนแล้วเปลี่ยน (ไม่แจ้งตอนเพิ่งเพิ่มเรื่องใหม่)
-                if prev_chapter:
-                    notify_subscribed_admins(manga["id"], manga["name"], parsed["latest_chapter"], manga.get("cover_url"))
-        except Exception as e:
-            failed.append({"id": manga["id"], "name": manga["name"], "error": str(e)})
+        parsed = refresh_from_sources(manga.get("sources") or [{"url": manga["url"]}])
+        if not parsed:
+            failed.append({"id": manga["id"], "name": manga["name"], "error": "ดึงข้อมูลไม่สำเร็จ (ทุกแหล่งที่มา)"})
+            continue
+
+        prev_chapter = manga.get("latest_chapter")
+        manga.update(parsed)
+        manga["last_checked_at"] = now_iso()
+        if parsed.get("latest_chapter_url"):
+            manga["source"] = urlparse(parsed["latest_chapter_url"]).netloc
+        if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
+            manga["last_updated_at"] = manga["last_checked_at"]
+            updated_ids.append(manga["id"])
+            # แจ้งเตือนเฉพาะตอนที่เคยรู้ตอนล่าสุดมาก่อนแล้วเปลี่ยน (ไม่แจ้งตอนเพิ่งเพิ่มเรื่องใหม่)
+            if prev_chapter:
+                notify_subscribed_admins(manga["id"], manga["name"], parsed["latest_chapter"], manga.get("cover_url"))
 
     storage.save_manga(manga_items)
     read_state = storage.load_read_state(current_username()) if current_username() else {}
@@ -472,8 +613,9 @@ def get_chapter(manga_id):
         return jsonify({"error": "ยังไม่ทราบลิงก์ตอนล่าสุด ลองรีเฟรชเรื่องนี้ก่อน"}), 400
 
     # กันไม่ให้ยิงไปโดเมนอื่นที่ไม่เกี่ยวกับเรื่องนี้ (เทียบแบบ normalize โดเมนก่อน กัน
-    # เว็บที่ใช้โดเมนภาษาไทย/unicode ตรง ๆ แต่ลิงก์ในเพจเป็น punycode คนละรูปแบบกัน)
-    if _normalize_host(urlparse(chapter_url).netloc) != _normalize_host(urlparse(manga["url"]).netloc):
+    # เว็บที่ใช้โดเมนภาษาไทย/unicode ตรง ๆ แต่ลิงก์ในเพจเป็น punycode คนละรูปแบบกัน) เทียบกับ
+    # โดเมนของทุกแหล่งที่มาของเรื่องนี้ ไม่ใช่แค่แหล่งแรก เพราะตอนล่าสุดอาจมาจากแหล่งอื่นก็ได้
+    if _normalize_host(urlparse(chapter_url).netloc) not in _source_domains(manga):
         return jsonify({"error": "URL ตอนไม่ถูกต้อง"}), 400
 
     cached = storage.load_chapter_cache(manga_id, chapter_url)

@@ -106,7 +106,7 @@ def parse_release_date(text: str | None) -> str | None:
     return f"{int(year):04d}-{month:02d}-{int(day):02d}"
 
 
-def _chapter_num(text: str) -> float | None:
+def chapter_number(text: str) -> float | None:
     match = re.search(r"(\d+(?:\.\d+)?)", text)
     return float(match.group(1)) if match else None
 
@@ -126,7 +126,7 @@ def parse_chapter_list(soup: BeautifulSoup) -> list[dict]:
         date = date_span.get_text(strip=True) if date_span else None
         chapters.append({"text": text, "url": anchor["href"], "date": date})
 
-    nums = [n for n in (_chapter_num(c["text"]) for c in chapters) if n is not None]
+    nums = [n for n in (chapter_number(c["text"]) for c in chapters) if n is not None]
     if len(nums) >= 2 and nums[0] < nums[-1]:
         chapters.reverse()
 
@@ -157,7 +157,7 @@ def fetch_madara_chapters(manga_url: str) -> list[dict]:
         chapters.append({"text": anchor.get_text(strip=True), "url": anchor["href"], "date": date or None})
 
     # กันเผื่อเว็บ Madara เจ้าอื่นเรียงกลับด้าน เหมือนที่เจอในเว็บกลุ่ม mangareader-family
-    nums = [n for n in (_chapter_num(c["text"]) for c in chapters) if n is not None]
+    nums = [n for n in (chapter_number(c["text"]) for c in chapters) if n is not None]
     if len(nums) >= 2 and nums[0] < nums[-1]:
         chapters.reverse()
 

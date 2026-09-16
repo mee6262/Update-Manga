@@ -59,13 +59,7 @@
     </section>
 
     <section id="settingsView" class="view">
-      <form id="addForm" class="add-form">
-        <h2>เพิ่มเรื่องใหม่ (เข้าระบบ)</h2>
-        <input type="text" id="addName" placeholder="ชื่อเรื่อง" required />
-        <input type="url" id="addUrl" placeholder="URL หน้าเรื่อง เช่น https://www.go-manga.com/overgeared/" required />
-        <button type="submit" class="btn primary">เพิ่ม</button>
-      </form>
-      <div id="addFormMsg" class="form-msg"></div>
+      <button id="openAddMangaBtn" class="btn primary">+ เพิ่มเรื่องใหม่</button>
 
       <h2>เรื่องทั้งหมดในระบบ</h2>
       <ul id="settingsList" class="settings-list"></ul>
@@ -81,6 +75,23 @@
       <ul id="userList" class="settings-list"></ul>
     </section>
   </main>
+
+  <div id="mangaFormModal" class="modal" hidden>
+    <div class="modal-content">
+      <h2 id="mangaFormTitle">เพิ่มเรื่องใหม่</h2>
+      <form id="mangaForm">
+        <input type="text" id="mangaFormName" placeholder="ชื่อเรื่อง" required />
+        <div class="form-label">แหล่งที่มา (ดึงตอนล่าสุดจากทุกเว็บที่ใส่ไว้ เว็บไหนมีตอนใหม่กว่าใช้เว็บนั้น)</div>
+        <div id="mangaFormSources" class="source-list"></div>
+        <button type="button" id="addSourceRowBtn" class="btn">+ เพิ่มแหล่งที่มา</button>
+        <div id="mangaFormMsg" class="form-msg"></div>
+        <div class="modal-actions">
+          <button type="button" id="mangaFormCancel" class="btn">ยกเลิก</button>
+          <button type="submit" class="btn primary">บันทึก</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <div id="chapterListView" class="reader" hidden>
     <div class="reader-topbar">
