@@ -1,5 +1,6 @@
 import gzip
 import hmac
+import io
 import os
 import re
 import secrets
@@ -17,6 +18,12 @@ from werkzeug.security import check_password_hash, generate_password_hash
 import scraper
 import storage
 from telegram_notify import send_telegram
+
+try:
+    from PIL import Image, ImageOps
+except ImportError:
+    # ไม่มี Pillow ก็ยังใช้งานได้ปกติ แค่ส่งรูปต้นฉบับไปตรง ๆ ไม่ย่อให้
+    Image = ImageOps = None
 
 # โหลด .env จาก root ของโปรเจกต์ (ไฟล์เดียวกับที่ใช้ทั้ง Linux/Windows ไม่ต้องพึ่ง export/set เอง)
 load_dotenv(Path(__file__).parent.parent / ".env")
@@ -961,6 +968,41 @@ def mark_unread(manga_id):
     return jsonify({"ok": True})
 
 
+# ความกว้างที่ยอมให้ย่อได้ (เท่าที่หน้าเว็บใช้จริง: การ์ดในกริด และรูปเล็กในหน้าตั้งค่า) — จำกัดไว้
+# เป็นชุด ไม่รับเลขอะไรก็ได้ กันคนยิงสุ่มความกว้างจนเครื่องไล่ย่อรูป/สร้างไฟล์แคชไม่จำกัด
+COVER_WIDTHS = {120, 400}
+MAX_RESIZE_BYTES = 25 * 1024 * 1024  # รูปใหญ่เกินนี้ไม่ย่อ (กันโหลดทั้งก้อนเข้าหน่วยความจำ)
+
+IMAGE_HEADERS = {
+    # รูปของตอน/ปกไม่เปลี่ยนตาม URL เดิม ให้ browser เก็บไว้ยาว ๆ ไม่ต้องถามซ้ำ (private = ไม่ให้
+    # proxy/CDN กลางทางแคชแทน เพราะ endpoint นี้ต้อง login)
+    "Cache-Control": "private, max-age=2592000, immutable",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; sandbox",
+}
+
+
+def _resize_cover(raw: bytes, width: int) -> bytes | None:
+    """ย่อรูปปกให้พอดีกับขนาดที่หน้าเว็บใช้จริง แล้วแปลงเป็น WebP — ปกจากเว็บต้นทางมักเป็นไฟล์เต็ม
+    ขนาด (ที่เจอคือ 1516x2020 หนัก 250 KB) ทั้งที่การ์ดบนหน้าเว็บกว้างแค่ ~160px คืน None ถ้าย่อ
+    ไม่ได้ (ไม่มี Pillow/ไฟล์เพี้ยน) ให้ผู้เรียกส่งรูปต้นฉบับแทน"""
+    if Image is None:
+        return None
+    try:
+        with Image.open(io.BytesIO(raw)) as img:
+            img = ImageOps.exif_transpose(img)
+            if img.width > width:
+                img = img.resize((width, round(img.height * width / img.width)), Image.LANCZOS)
+            has_alpha = img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info
+            img = img.convert("RGBA" if has_alpha else "RGB")
+            out = io.BytesIO()
+            img.save(out, format="WEBP", quality=80, method=4)
+            return out.getvalue()
+    except Exception as e:
+        print(f"⚠️ ย่อรูปปกไม่สำเร็จ ({e}) ส่งรูปต้นฉบับแทน")
+        return None
+
+
 @app.route("/api/img")
 def proxy_image():
     src = request.args.get("src")
@@ -982,6 +1024,18 @@ def proxy_image():
         return "domain not allowed", 403
 
     try:
+        width = int(request.args.get("w", ""))
+    except ValueError:
+        width = 0
+    if width not in COVER_WIDTHS:
+        width = 0
+
+    if width:
+        cached = storage.load_cover_cache(src, width)
+        if cached:
+            return Response(cached, content_type="image/webp", headers=IMAGE_HEADERS)
+
+    try:
         resp = scraper.session().get(
             src,
             headers={
@@ -989,11 +1043,18 @@ def proxy_image():
                 "Referer": f"https://{netloc}/",
             },
             timeout=20,
-            stream=True,
+            stream=not width,
         )
         resp.raise_for_status()
     except Exception as e:
         return f"fetch failed: {e}", 502
+
+    # เฉพาะ path นี้ที่โหลดทั้งรูปเข้าหน่วยความจำ (stream=False ด้านบน) เพราะต้องมีไฟล์ครบก่อนถึงย่อได้
+    if width and len(resp.content) <= MAX_RESIZE_BYTES:
+        resized = _resize_cover(resp.content, width)
+        if resized:
+            storage.save_cover_cache(src, width, resized)
+            return Response(resized, content_type="image/webp", headers=IMAGE_HEADERS)
 
     content_type = resp.headers.get("Content-Type", "image/jpeg")
     if not content_type.lower().startswith("image/"):
@@ -1001,13 +1062,7 @@ def proxy_image():
         # ภายใต้โดเมนเรา (แท็ก <img> ยังแสดงรูปได้ปกติ แม้ CDN บางเจ้าจะส่ง type มาไม่ตรง)
         content_type = "application/octet-stream"
 
-    headers = {
-        # รูปของตอน/ปกไม่เปลี่ยนตาม URL เดิม ให้ browser เก็บไว้ยาว ๆ ไม่ต้องถามซ้ำ (private = ไม่ให้
-        # proxy/CDN กลางทางแคชแทน เพราะ endpoint นี้ต้อง login)
-        "Cache-Control": "private, max-age=2592000, immutable",
-        "X-Content-Type-Options": "nosniff",
-        "Content-Security-Policy": "default-src 'none'; sandbox",
-    }
+    headers = dict(IMAGE_HEADERS)
     if resp.headers.get("Content-Length") and not resp.headers.get("Content-Encoding"):
         headers["Content-Length"] = resp.headers["Content-Length"]
 

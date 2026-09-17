@@ -8,12 +8,14 @@ from urllib.parse import urlparse
 DATA_DIR = Path(__file__).parent / "data"
 MANGA_FILE = DATA_DIR / "manga.json"
 CHAPTERS_DIR = DATA_DIR / "chapters"
+COVERS_DIR = DATA_DIR / "covers"
 IMAGE_DOMAINS_FILE = DATA_DIR / "image_domains.json"
 USERS_FILE = DATA_DIR / "users.json"
 USERS_DIR = DATA_DIR / "users"
 
 DATA_DIR.mkdir(exist_ok=True)
 CHAPTERS_DIR.mkdir(exist_ok=True)
+COVERS_DIR.mkdir(exist_ok=True)
 USERS_DIR.mkdir(exist_ok=True)
 
 
@@ -211,3 +213,24 @@ def load_chapter_cache(manga_id: str, chapter_url: str) -> dict | None:
 
 def save_chapter_cache(manga_id: str, chapter_url: str, data: dict):
     _save_json(chapter_cache_path(manga_id, chapter_url), data, compact=True)
+
+
+# ---------- รูปปกที่ย่อแล้ว ----------
+
+def cover_cache_path(src: str, width: int) -> Path:
+    key = hashlib.sha1(src.encode("utf-8")).hexdigest()[:16]
+    return COVERS_DIR / f"{key}_{width}.webp"
+
+
+def load_cover_cache(src: str, width: int) -> bytes | None:
+    try:
+        return cover_cache_path(src, width).read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def save_cover_cache(src: str, width: int, data: bytes):
+    path = cover_cache_path(src, width)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_bytes(data)
+    tmp.replace(path)

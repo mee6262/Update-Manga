@@ -7,5 +7,6 @@ venv/
 # ข้อมูลส่วนตัว (บัญชีผู้ใช้/รหัสผ่าน, ตอนที่อ่านแล้ว, ติดตามเรื่องไหนบ้าง, cache รูปตอน) ไม่ต้อง commit
 webapp/data/read_state.json
 webapp/data/chapters/
+webapp/data/covers/
 webapp/data/users.json
 webapp/data/users/

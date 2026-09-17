@@ -12,10 +12,15 @@ const state = {
 const el = (sel) => document.querySelector(sel);
 const els = (sel) => Array.from(document.querySelectorAll(sel));
 
-function proxied(url) {
+// width = ขอรูปที่ย่อมาให้พอดีกับที่จะแสดงจริง (เฉพาะรูปปก ไม่ใช่รูปหน้ามังงะ) ประหยัดเน็ตหลายเท่า
+function proxied(url, width = 0) {
   if (!url) return "";
-  return "/api/img?src=" + encodeURIComponent(url);
+  return "/api/img?src=" + encodeURIComponent(url) + (width ? "&w=" + width : "");
 }
+
+// การ์ดในกริดกว้างราว 160-200px, รูปในหน้าตั้งค่ากว้าง 36px — เผื่อจอ retina ไว้เท่าตัว
+const COVER_WIDTH = 400;
+const THUMB_WIDTH = 120;
 
 // ดึง JSON แบบไม่ให้ค้างถาวรถ้าเน็ตแกว่ง และคืน null เมื่อพลาด (ผู้เรียกใช้ของเดิมต่อได้)
 async function getJSON(url) {
@@ -98,7 +103,7 @@ function cardHtml(m, extra = "") {
   return `
     <div class="manga-card" data-id="${escapeHtml(m.id)}">
       ${m.is_new ? '<span class="new-badge">NEW!</span>' : ""}
-      <img class="manga-cover" src="${proxied(m.cover_url)}" alt="${escapeHtml(m.name)}" loading="lazy" decoding="async" onerror="this.style.opacity=0" />
+      <img class="manga-cover" src="${proxied(m.cover_url, COVER_WIDTH)}" alt="${escapeHtml(m.name)}" loading="lazy" decoding="async" onerror="this.style.opacity=0" />
       <div class="manga-info">
         <div class="manga-name">${escapeHtml(m.name)}</div>
         <div class="manga-chapter">${m.latest_chapter ? escapeHtml(m.latest_chapter) : "ยังไม่ทราบตอนล่าสุด"}</div>
@@ -195,7 +200,7 @@ function renderSettings() {
         sourceCount > 1 ? `${escapeHtml(m.source)} +${sourceCount - 1} แหล่ง` : escapeHtml(m.source);
       return `
         <li class="settings-row" data-id="${escapeHtml(m.id)}">
-          <img src="${proxied(m.cover_url)}" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0" />
+          <img src="${proxied(m.cover_url, THUMB_WIDTH)}" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0" />
           <div class="grow">
             <div class="name">${escapeHtml(m.name)}</div>
             <div class="meta">${sourceLabel} — ${m.latest_chapter ? escapeHtml(m.latest_chapter) : "-"}</div>
