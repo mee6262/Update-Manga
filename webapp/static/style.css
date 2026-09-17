@@ -459,6 +459,10 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
   overflow-y: auto;
   /* เลื่อนสุดขอบแล้วไม่ให้ไปลากหน้าเว็บด้านหลังต่อ (มือถือจะรู้สึกลื่นกว่า ไม่มีจังหวะสะดุด) */
   overscroll-behavior: contain;
+  /* ปิด scroll anchoring: ตอนเปลี่ยนตอน รูปชุดใหม่เริ่มจากความสูง 0 แล้วค่อยโตขึ้นตอนโหลดเสร็จ
+     เบราว์เซอร์จะพยายาม "ตรึงเนื้อหาเดิมไว้ที่เดิม" ด้วยการเลื่อน scroll ตามความสูงที่เพิ่ม
+     ทำให้หน้าใหม่ไม่ได้เริ่มที่บนสุดอย่างที่ควรเป็น */
+  overflow-anchor: none;
   display: flex;
   flex-direction: column;
   align-items: center;

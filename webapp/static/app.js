@@ -635,6 +635,7 @@ let readerMangaId = null;
 let currentChapterData = { url: null, prevUrl: null, nextUrl: null };
 let autoAdvancing = false;
 let awaitingConfirmScroll = false; // ถึงล่างสุดแล้ว รอให้เลื่อน/สไลด์อีกทีเพื่อยืนยันไปตอนถัดไป
+let gestureArmed = true; // พร้อมเปลี่ยนตอนไหม — ปลดเป็น false หลังเปลี่ยน 1 ตอน รอสไลด์รอบใหม่
 
 let currentScrollFraction = 0; // สัดส่วนที่เลื่อนอ่านมาแล้วของตอนปัจจุบัน (0-1) อัปเดตทุกครั้งที่เลื่อน
 
@@ -674,6 +675,14 @@ function saveScrollPosition() {
     body: JSON.stringify({ url: currentChapterData.url, fraction: currentScrollFraction }),
     keepalive: true,
   }).catch(() => {});
+}
+
+// เปลี่ยนตอนแล้วต้องเริ่มอ่านจากบนสุดเสมอ — ต้องสั่งซ้ำอีกเฟรมด้วย เพราะตอนเปลี่ยนตอนด้วยการสไลด์
+// นิ้วยังลากค้างอยู่ (หรือยังมีแรงเฉื่อยเหลือ) เบราว์เซอร์จะเลื่อนเนื้อหาชุดใหม่ต่อให้อีกนิดหลังเฟรมนี้
+function scrollReaderToTop() {
+  const body = el("#readerBody");
+  body.scrollTop = 0;
+  requestAnimationFrame(() => { body.scrollTop = 0; });
 }
 
 // เลื่อนไปตำแหน่งที่ค้างไว้ ทำซ้ำหลายจังหวะเพราะรูปโหลดแบบทยอย ๆ scrollHeight รวมจะค่อย ๆ นิ่งขึ้นเรื่อย ๆ
@@ -724,6 +733,7 @@ function renderChapter(data, chapterUrl, restoreFraction) {
     body.innerHTML = "";
     appendChapterImages(data.images);
     if (restoreFraction) restoreScrollPosition(restoreFraction);
+    else scrollReaderToTop();
   }
 
   currentChapterData = { url: data.chapter_url || chapterUrl, prevUrl: data.prev_url, nextUrl: data.next_url };
@@ -804,7 +814,10 @@ function checkAutoAdvance() {
   if (!currentChapterData.nextUrl) return;
   const body = el("#readerBody");
   const remaining = body.scrollHeight - body.scrollTop - body.clientHeight;
-  const atBottom = remaining < 40;
+  // ต้องมีเนื้อหาให้เลื่อนจริง ๆ ก่อน — ช่วงแรกหลังเปลี่ยนตอน รูปยังโหลดไม่เสร็จจึงยังไม่มีความสูง
+  // ถ้าไม่เช็คตรงนี้ หน้าที่ยังว่างอยู่จะนับว่า "ถึงล่างสุดแล้ว" ทันที แล้วสไลด์ทีเดียวข้ามไปหลายตอนรวด
+  const scrollable = body.scrollHeight > body.clientHeight + 40;
+  const atBottom = scrollable && remaining < 40;
   awaitingConfirmScroll = atBottom;
   if (hint) hint.classList.toggle("show", atBottom);
   // อ่านมาเกินครึ่งตอนแล้ว เริ่มโหลดตอนถัดไปรอไว้เงียบ ๆ
@@ -812,9 +825,11 @@ function checkAutoAdvance() {
 }
 
 function confirmAdvanceToNext() {
-  if (autoAdvancing || !awaitingConfirmScroll || !currentChapterData.nextUrl) return;
+  if (autoAdvancing || !gestureArmed || !awaitingConfirmScroll || !currentChapterData.nextUrl) return;
   autoAdvancing = true;
   awaitingConfirmScroll = false;
+  // หนึ่งครั้งที่สไลด์ = เปลี่ยนได้ตอนเดียว ต้องยกนิ้วแล้วสไลด์ใหม่ถึงจะไปตอนถัดไปได้อีก
+  gestureArmed = false;
   loadChapter(readerMangaId, currentChapterData.nextUrl);
 }
 
@@ -826,10 +841,15 @@ function initNextChapterConfirm() {
   nextChapterConfirmInit = true;
 
   const body = el("#readerBody");
+  // เมาส์/trackpad ไม่มีจังหวะ "ยกนิ้ว" ให้จับ ใช้การหยุดหมุนสั้น ๆ แทนเป็นตัวแบ่งว่าเป็นคนละครั้ง
+  // (trackpad ส่ง event ต่อเนื่องจากแรงเฉื่อยอีกพักหลังยกนิ้ว ถ้าไม่รอให้นิ่งก่อนจะข้ามตอนรวด)
+  let wheelIdleTimer = null;
   body.addEventListener(
     "wheel",
     (e) => {
       if (awaitingConfirmScroll && e.deltaY > 0) confirmAdvanceToNext();
+      clearTimeout(wheelIdleTimer);
+      wheelIdleTimer = setTimeout(() => { gestureArmed = true; }, 400);
     },
     { passive: true }
   );
@@ -839,6 +859,7 @@ function initNextChapterConfirm() {
     "touchstart",
     (e) => {
       touchStartY = e.touches[0].clientY;
+      gestureArmed = true; // แตะใหม่ = เริ่มนับเป็นการสไลด์ครั้งใหม่
     },
     { passive: true }
   );
