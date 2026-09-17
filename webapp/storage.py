@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -63,6 +64,20 @@ def _load_json(path: Path, default, fresh: bool = False):
     return data
 
 
+def _atomic_replace(tmp: Path, path: Path):
+    """ย้ายไฟล์ชั่วคราวทับไฟล์จริง — บน Windows ถ้ามี thread/process อื่นกำลังเปิดอ่านไฟล์ปลายทางอยู่
+    พอดี การเขียนทับจะล้มด้วย PermissionError (Linux ไม่มีปัญหานี้) ลองใหม่สั้น ๆ ไม่กี่ครั้งก็ผ่าน
+    เพราะการอ่านไฟล์ใช้เวลาแค่ไม่กี่มิลลิวินาที"""
+    for attempt in range(5):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.05)
+
+
 def _save_json(path: Path, data, compact: bool = False):
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
@@ -70,7 +85,7 @@ def _save_json(path: Path, data, compact: bool = False):
             json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
         else:
             json.dump(data, f, ensure_ascii=False, indent=2)
-    tmp.replace(path)
+    _atomic_replace(tmp, path)
     with _cache_lock:
         _cache.pop(path, None)
 
@@ -233,4 +248,4 @@ def save_cover_cache(src: str, width: int, data: bytes):
     path = cover_cache_path(src, width)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_bytes(data)
-    tmp.replace(path)
+    _atomic_replace(tmp, path)

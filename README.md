@@ -166,6 +166,18 @@ python run_windows.py    # ทดสอบก่อน เปิด http://127.0
    Action: Program `C:\Project\Update-Manga\.venv\Scripts\python.exe`,
    Arguments `webapp\refresh_cron.py`, Start in `C:\Project\Update-Manga`
 
+### อัปเดตโค้ดบน Windows VPS
+
+```powershell
+cd C:\Project\Update-Manga
+git pull
+.venv\Scripts\pip install -r webapp\requirements.txt   # เผื่อมี dependency ใหม่ (เช่น Pillow)
+```
+
+จากนั้นสั่ง Task Scheduler ให้รันงาน webapp ใหม่ (End แล้ว Run) โค้ดใหม่ถึงจะมีผล — ฝั่ง Windows
+ไม่ต้องแก้ไฟล์ตั้งค่าอะไรเพิ่ม เพราะจำนวน thread ของ waitress อยู่ใน `run_windows.py` ซึ่งมากับ
+`git pull` อยู่แล้ว
+
 กันเข้าถึงจากอินเทอร์เน็ต: บล็อกพอร์ต 5050 ที่ Windows Firewall แล้วเข้าเว็บผ่าน RDP บนตัว VPS เอง
 (`http://127.0.0.1:5050`) หรือถ้าอยากเข้าจากนอกบ้านด้วย แนะนำ Cloudflare Tunnel แทนการเปิดพอร์ตตรง ๆ
 
