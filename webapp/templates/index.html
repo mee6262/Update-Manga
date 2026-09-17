@@ -59,20 +59,26 @@
     </section>
 
     <section id="settingsView" class="view">
-      <button id="openAddMangaBtn" class="btn primary">+ เพิ่มเรื่องใหม่</button>
+      <nav class="sub-tabs">
+        <button class="sub-tab-btn active" data-subtab="mangaManage">จัดการเรื่อง</button>
+        <button class="sub-tab-btn" data-subtab="userManage">จัดการสมาชิก</button>
+      </nav>
 
-      <h2>เรื่องทั้งหมดในระบบ</h2>
-      <ul id="settingsList" class="settings-list"></ul>
+      <div id="mangaManageSubview" class="subview active">
+        <button id="openAddMangaBtn" class="btn primary">+ เพิ่มเรื่องใหม่</button>
+        <ul id="settingsList" class="settings-list"></ul>
+      </div>
 
-      <h2>จัดการสมาชิก</h2>
-      <form id="addUserForm" class="add-form">
-        <input type="text" id="newUsername" placeholder="ชื่อผู้ใช้" required />
-        <input type="password" id="newPassword" placeholder="รหัสผ่าน" required />
-        <label class="checkbox-label"><input type="checkbox" id="newIsAdmin" /> เป็น admin</label>
-        <button type="submit" class="btn primary">เพิ่มสมาชิก</button>
-      </form>
-      <div id="addUserMsg" class="form-msg"></div>
-      <ul id="userList" class="settings-list"></ul>
+      <div id="userManageSubview" class="subview">
+        <form id="addUserForm" class="add-form">
+          <input type="text" id="newUsername" placeholder="ชื่อผู้ใช้" required />
+          <input type="password" id="newPassword" placeholder="รหัสผ่าน" required />
+          <label class="checkbox-label"><input type="checkbox" id="newIsAdmin" /> เป็น admin</label>
+          <button type="submit" class="btn primary">เพิ่มสมาชิก</button>
+        </form>
+        <div id="addUserMsg" class="form-msg"></div>
+        <ul id="userList" class="settings-list"></ul>
+      </div>
     </section>
   </main>
 

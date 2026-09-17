@@ -50,6 +50,18 @@ function initTabs() {
   });
 }
 
+// ---------- แท็บย่อยในหน้าตั้งค่า (จัดการเรื่อง / จัดการสมาชิก) ----------
+function initSubTabs() {
+  els(".sub-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      els(".sub-tab-btn").forEach((b) => b.classList.remove("active"));
+      els(".subview").forEach((v) => v.classList.remove("active"));
+      btn.classList.add("active");
+      el(`#${btn.dataset.subtab}Subview`).classList.add("active");
+    });
+  });
+}
+
 // ---------- List view ----------
 async function loadManga() {
   const res = await fetch("/api/manga");
@@ -744,6 +756,7 @@ async function closeReader() {
 
 async function init() {
   initTabs();
+  initSubTabs();
   initMangaForm();
   initChapterSearch();
   await initCatalogSearch();
