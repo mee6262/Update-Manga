@@ -355,6 +355,24 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _apply_refresh(manga: dict, parsed: dict) -> str | None:
+    """เอาผลจาก refresh_from_sources มาอัพเดตลง manga record คืนค่าตอนล่าสุดก่อนหน้า (ให้ caller
+    เอาไปเทียบว่าเปลี่ยนไหมสำหรับแจ้งเตือน) — ถ้ารอบนี้ดึงรายชื่อตอนมาได้ว่างเปล่า (เช่นโดน
+    rate-limit หรือหน้าเพจเพี้ยนชั่วคราว) แต่ก่อนหน้านี้เคยมีรายชื่อตอนอยู่แล้ว จะไม่ยอมทับด้วยลิสต์
+    ว่าง เพราะเรื่องที่ตอนล่าสุดหายไปจากลิสต์ (ถึง latest_chapter_url จะยังถูกต้อง) ทำให้ประวัติการ
+    อ่าน/bookmark ของตอนอื่น ๆ ในเรื่องนั้นหาตัวเองในลิสต์ไม่เจอ แล้วมองว่ายังไม่เคยอ่านทั้งหมด"""
+    prev_chapter = manga.get("latest_chapter")
+    if not parsed.get("chapters") and manga.get("chapters"):
+        parsed = {**parsed, "chapters": manga["chapters"]}
+    manga.update(parsed)
+    manga["last_checked_at"] = now_iso()
+    if parsed.get("latest_chapter_url"):
+        manga["source"] = urlparse(parsed["latest_chapter_url"]).netloc
+    if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
+        manga["last_updated_at"] = manga["last_checked_at"]
+    return prev_chapter
+
+
 def is_chapter_read(entry: dict | None, key) -> bool:
     """เช็คว่าตอนนี้ (ระบุด้วยคีย์เอกลักษณ์จาก _chapter_key) อ่านแล้วหรือยัง"""
     if not entry or key is None:
@@ -564,13 +582,7 @@ def edit_manga(manga_id):
     # ดึงข้อมูลใหม่ทันทีตามแหล่งที่มาชุดล่าสุด เพื่อให้เห็นผลทันทีไม่ต้องรอรีเฟรชรอบถัดไป
     parsed = refresh_from_sources(manga["sources"])
     if parsed:
-        prev_chapter = manga.get("latest_chapter")
-        manga.update(parsed)
-        manga["last_checked_at"] = now_iso()
-        if parsed.get("latest_chapter_url"):
-            manga["source"] = urlparse(parsed["latest_chapter_url"]).netloc
-        if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
-            manga["last_updated_at"] = manga["last_checked_at"]
+        _apply_refresh(manga, parsed)
 
     storage.save_manga(manga_items)
     return jsonify(manga)
@@ -611,13 +623,7 @@ def refresh_manga(manga_id):
     if not parsed:
         return jsonify({"error": "ดึงข้อมูลไม่สำเร็จ (ทุกแหล่งที่มา)"}), 502
 
-    prev_chapter = manga.get("latest_chapter")
-    manga.update(parsed)
-    manga["last_checked_at"] = now_iso()
-    if parsed.get("latest_chapter_url"):
-        manga["source"] = urlparse(parsed["latest_chapter_url"]).netloc
-    if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
-        manga["last_updated_at"] = manga["last_checked_at"]
+    prev_chapter = _apply_refresh(manga, parsed)
 
     storage.save_manga(manga_items)
 
@@ -646,13 +652,8 @@ def refresh_all():
             failed.append({"id": manga["id"], "name": manga["name"], "error": "ดึงข้อมูลไม่สำเร็จ (ทุกแหล่งที่มา)"})
             continue
 
-        prev_chapter = manga.get("latest_chapter")
-        manga.update(parsed)
-        manga["last_checked_at"] = now_iso()
-        if parsed.get("latest_chapter_url"):
-            manga["source"] = urlparse(parsed["latest_chapter_url"]).netloc
+        prev_chapter = _apply_refresh(manga, parsed)
         if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
-            manga["last_updated_at"] = manga["last_checked_at"]
             updated_ids.append(manga["id"])
             # แจ้งเตือนเฉพาะตอนที่เคยรู้ตอนล่าสุดมาก่อนแล้วเปลี่ยน (ไม่แจ้งตอนเพิ่งเพิ่มเรื่องใหม่)
             if prev_chapter:
@@ -702,19 +703,25 @@ def get_chapter(manga_id):
             storage.save_chapter_cache(manga_id, chapter_url, data)
             storage.add_image_domains({urlparse(src).netloc for src in data["images"]})
 
+    chapters = manga.get("chapters") or []
+    idx = next((i for i, c in enumerate(chapters) if c["url"] == chapter_url), None)
+
     # เว็บกลุ่ม Madara ไม่มีลิงก์ตอนก่อนหน้า/ถัดไปในหน้าอ่าน หาเอาจากลำดับในรายชื่อตอนแทน
     # (ลิสต์เรียงใหม่->เก่า ตอนถัดไปจึงอยู่ก่อนหน้าในลิสต์)
-    if not data.get("prev_url") and not data.get("next_url"):
-        chapters = manga.get("chapters") or []
-        idx = next((i for i, c in enumerate(chapters) if c["url"] == chapter_url), None)
-        if idx is not None:
-            data["next_url"] = chapters[idx - 1]["url"] if idx > 0 else None
-            data["prev_url"] = chapters[idx + 1]["url"] if idx + 1 < len(chapters) else None
+    if not data.get("prev_url") and not data.get("next_url") and idx is not None:
+        data["next_url"] = chapters[idx - 1]["url"] if idx > 0 else None
+        data["prev_url"] = chapters[idx + 1]["url"] if idx + 1 < len(chapters) else None
 
     # มาร์คเฉพาะ "ตอนที่เปิดดูจริง" ว่าอ่านแล้ว (ไม่กระทบตอนอื่นของเรื่องเดียวกัน) เฉพาะของคนที่ login อยู่
+    # ใช้ข้อความตอนจากรายชื่อตอนที่ scrape ไว้แล้ว (แม่นกว่าเสมอ) แทนการพาร์สจากหน้าตอนเอง
+    # (data["chapter_text"]) เพราะบางเว็บ h1/title ของหน้าตอนไม่มีเลขตอนกำกับชัดเจนแบบที่คาดไว้
+    # (เช่น h1 เป็นหัวข้อทั่วไปของเว็บ ไม่ใช่ชื่อตอน) ถ้าเจอใน chapters ก็ใช้ text เดียวกับที่
+    # list_chapters ใช้เช็ค is_read เป๊ะ ๆ เลย รับประกันว่าจะตรงกันเสมอ
     if current_username():
+        known_text = chapters[idx]["text"] if idx is not None else None
+        key = _chapter_key(known_text or data.get("chapter_text"), chapter_url)
         read_state = storage.load_read_state(current_username())
-        mark_chapter_read(read_state, manga_id, _chapter_key(data.get("chapter_text"), chapter_url))
+        mark_chapter_read(read_state, manga_id, key)
         storage.save_read_state(current_username(), read_state)
 
     data["chapter_url"] = chapter_url

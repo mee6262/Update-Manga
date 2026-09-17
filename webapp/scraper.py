@@ -259,10 +259,24 @@ def parse_chapter_page(html: str) -> dict:
                 if src:
                     result["images"].append(src)
 
-    title_tag = soup.select_one("h1") or soup.select_one("title")
-    if title_tag:
-        match = re.search(r"ตอนที่\s*\S+", title_tag.get_text())
+    # บางเว็บ h1 บนหน้าตอนเป็นหัวข้อทั่วไปของทั้งเว็บ (ไม่ใช่ชื่อตอน) เช่น "อ่านมังงะอ่านการ์ตูน
+    # ออนไลน์แปลไทย 2026" — ลองทุก tag ที่มักมีเลขตอนกำกับ ใช้ตัวแรกที่แมตช์ได้จริง ๆ ไม่ใช่
+    # ตัวแรกที่มี tag อยู่ (ไม่งั้นถ้า h1 ทั่วไปแบบนี้เจอก่อน จะไม่ลอง title เลย)
+    texts = [t.get_text() for t in (soup.select_one("h1"), soup.select_one("title")) if t]
+
+    for text in texts:
+        match = re.search(r"ตอนที่\s*\S+", text)
         if match:
             result["chapter_text"] = match.group(0)
+            break
+    else:
+        # บางเว็บ (เช่น slow-manga.net) ไม่มีคำว่า "ตอนที่" เลย มีแค่เลขตอนต่อท้ายชื่อเรื่องตรง ๆ
+        # (เช่น "What a Bountiful Harvest, Demon Lord! 77") เช็คทีหลังสุด กันไปแมตช์เลขอื่นที่ไม่ใช่
+        # เลขตอนจริง (เช่นปี ค.ศ. ใน h1 ทั่วไปของเว็บ) ในเว็บที่จริง ๆ มีคำว่า "ตอนที่" อยู่แล้ว
+        for text in texts:
+            match = re.search(r"(\d+(?:\.\d+)?)\s*$", text.strip())
+            if match:
+                result["chapter_text"] = f"ตอนที่ {match.group(1)}"
+                break
 
     return result
