@@ -65,6 +65,25 @@ COMPRESSIBLE_MIMETYPES = {
 NO_VARY_COOKIE_ENDPOINTS = {"static", "proxy_image"}
 
 
+def build_id() -> str:
+    """รหัสเวอร์ชันของหน้าเว็บ = เวลาที่แก้ไฟล์หน้าบ้านล่าสุด ใช้ให้หน้าเว็บที่เปิดค้างอยู่รู้ว่ามีของ
+    ใหม่แล้วควรโหลดตัวเองใหม่ — คิดจากไฟล์ static เท่านั้น (เสิร์ฟจากดิสก์ตรง ๆ จึงตรงกับของที่
+    ผู้ใช้ได้รับจริงเสมอ) ไม่รวม app.py เพราะโค้ดฝั่ง server ที่แก้แล้วยังไม่รีสตาร์ท ของที่รันอยู่
+    ยังเป็นตัวเก่า ถ้าเอามานับด้วยหน้าเว็บจะรีโหลดวนไม่จบ"""
+    stamp = 0
+    for name in ("app.js", "style.css"):
+        try:
+            stamp = max(stamp, int(os.stat(Path(app.static_folder) / name).st_mtime))
+        except OSError:
+            pass
+    return str(stamp)
+
+
+@app.route("/api/version")
+def version():
+    return jsonify({"build": build_id()})
+
+
 @app.url_defaults
 def _static_cache_buster(endpoint, values):
     if endpoint == "static" and "filename" in values and "v" not in values:
@@ -530,6 +549,7 @@ def index():
         session.modified = True
     # ฝังข้อมูลเริ่มต้นมาในหน้าเลย หน้าแรกขึ้นทันทีไม่ต้องรอยิง API ต่อกันหลายรอบ
     boot = {
+        "build": build_id(),
         "me": {"username": username, "is_admin": is_admin()},
         "prefs": storage.load_prefs(username) if username else {},
         "manga": manga_list_payload(username),

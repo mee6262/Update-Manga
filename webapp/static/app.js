@@ -46,6 +46,28 @@ function escapeHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, (ch) => ESCAPE_MAP[ch]);
 }
 
+// ---------- อัปเดตเวอร์ชันอัตโนมัติ ----------
+// บนมือถือ (โดยเฉพาะตอนเพิ่มเป็นแอปบนหน้าจอโฮม) การสั่งล้างแคชเองทำได้ยากมาก เลยให้หน้าเว็บเช็คเอง
+// ว่ามีเวอร์ชันใหม่ไหมทุกครั้งที่กลับมาเปิดแอป แล้วโหลดตัวเองใหม่ให้เลย ผู้ใช้ไม่ต้องทำอะไร
+let pendingReload = false;
+
+async function checkForUpdate() {
+  if (!BOOT.build) return;
+  try {
+    const data = await getJSON("/api/version");
+    if (!data.build || data.build === BOOT.build) return;
+    // กำลังอ่านอยู่ห้ามรีโหลดขัดจังหวะ รอจนกดปิดกลับมาหน้ารวมก่อน
+    if (el("#reader").hidden && el("#chapterListView").hidden) location.reload();
+    else pendingReload = true;
+  } catch (e) {
+    // เน็ตสะดุด/ยังไม่ได้ login — ไว้เช็คใหม่รอบหน้า
+  }
+}
+
+function reloadIfPending() {
+  if (pendingReload) location.reload();
+}
+
 function applyAdminGating() {
   els(".admin-only").forEach((elm) => { elm.hidden = !state.currentUser.is_admin; });
 }
@@ -620,6 +642,7 @@ function closeChapterList() {
     mangaListStale = false;
     loadManga();
   }
+  reloadIfPending();
 }
 
 function findChapterText(url) {
@@ -947,6 +970,10 @@ function init() {
   initChapterSearch();
   initCatalogSearch();
   initAddUserForm();
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) checkForUpdate();
+  });
+
   el("#refreshAllBtn").addEventListener("click", refreshAll);
   el("#readerClose").addEventListener("click", closeReader);
   el("#chapterListClose").addEventListener("click", closeChapterList);
