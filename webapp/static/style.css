@@ -142,6 +142,8 @@ body {
 .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
 .icon-btn:disabled { opacity: 0.35; cursor: default; }
 .icon-btn:disabled:hover { border-color: var(--border); color: var(--text); }
+.icon-btn.danger { color: var(--danger); border-color: var(--danger); }
+.icon-btn.danger:hover { color: var(--danger); border-color: var(--danger); opacity: 0.8; }
 .icon-btn[hidden], .tab-btn[hidden] { display: none; }
 
 .tab-btn.icon-btn.active { background: var(--accent); color: #0a0f0c; border-color: var(--accent); }
