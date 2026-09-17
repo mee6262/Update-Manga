@@ -1,15 +1,15 @@
+import gzip
 import hmac
 import os
 import re
 import secrets
 import shutil
-import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from urllib.parse import urlparse
 
-import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template, request, Response, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -21,7 +21,17 @@ from telegram_notify import send_telegram
 # โหลด .env จาก root ของโปรเจกต์ (ไฟล์เดียวกับที่ใช้ทั้ง Linux/Windows ไม่ต้องพึ่ง export/set เอง)
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-app = Flask(__name__)
+STATIC_MAX_AGE = 365 * 24 * 3600
+
+
+class MangaApp(Flask):
+    def get_send_file_max_age(self, filename):
+        # ไฟล์ static ที่มี ?v=<mtime> (ใส่ให้อัตโนมัติผ่าน url_for) แคชได้ยาวเป็นปี เพราะแก้ไฟล์เมื่อไหร่
+        # URL ก็เปลี่ยนเอง ส่วนที่ไม่มี v (เช่นไอคอนที่อ้างจาก manifest.json) แคชแค่ 1 วัน
+        return STATIC_MAX_AGE if request.args.get("v") else 86400
+
+
+app = MangaApp(__name__)
 
 # SECRET_KEY ต้องคงที่ (ใส่ใน .env) ไม่งั้น session จะหลุดทุกครั้งที่รีสตาร์ทแอป
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
@@ -30,7 +40,78 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=True,
+    # ไม่ต่ออายุ cookie ทุก request (ไม่งั้นทุกรูป/ทุก API ได้ Set-Cookie ค่าใหม่ ทำให้ browser cache
+    # ที่ Vary: Cookie ใช้ไม่ได้เลย) — ต่ออายุเฉพาะตอนเปิดหน้าเว็บแทน (ดู index())
+    SESSION_REFRESH_EACH_REQUEST=False,
 )
+app.json.sort_keys = False
+
+COMPRESSIBLE_MIMETYPES = {
+    "application/json",
+    "text/html",
+    "text/css",
+    "text/javascript",
+    "application/javascript",
+    "application/manifest+json",
+    "image/svg+xml",
+}
+NO_VARY_COOKIE_ENDPOINTS = {"static", "proxy_image"}
+
+
+@app.url_defaults
+def _static_cache_buster(endpoint, values):
+    if endpoint == "static" and "filename" in values and "v" not in values:
+        try:
+            values["v"] = int(os.stat(Path(app.static_folder) / values["filename"]).st_mtime)
+        except OSError:
+            pass
+
+
+@app.after_request
+def _optimize_response(response):
+    if request.endpoint in NO_VARY_COOKIE_ENDPOINTS:
+        # เนื้อหาเหมือนกันทุกคน อย่าให้ cache แยกตาม cookie
+        response.vary.discard("Cookie")
+        if request.endpoint == "static" and request.args.get("v"):
+            response.cache_control.immutable = True
+
+    if (
+        request.method == "GET"
+        and response.status_code == 200
+        and response.mimetype == "application/json"
+        and request.path.startswith("/api/")
+    ):
+        # ให้ browser ถามซ้ำได้ด้วย If-None-Match แล้วได้ 304 เปล่า ๆ ถ้าข้อมูลไม่เปลี่ยน
+        response.cache_control.private = True
+        response.cache_control.no_cache = True
+        response.add_etag(weak=True)
+        response.make_conditional(request)
+
+    _maybe_gzip(response)
+    return response
+
+
+def _maybe_gzip(response):
+    if (
+        response.status_code != 200
+        or response.mimetype not in COMPRESSIBLE_MIMETYPES
+        or response.headers.get("Content-Encoding")
+        or "gzip" not in request.headers.get("Accept-Encoding", "").lower()
+        or response.is_streamed and not response.direct_passthrough
+    ):
+        return
+    if response.direct_passthrough:
+        # ไฟล์ static (send_file) — อ่านเข้ามาบีบอัดเองได้เพราะไฟล์เล็ก และหลังแคชแล้วแทบไม่โดนเรียกซ้ำ
+        response.direct_passthrough = False
+    data = response.get_data()
+    if len(data) < 1024:
+        return
+    response.set_data(gzip.compress(data, compresslevel=6))
+    response.headers["Content-Encoding"] = "gzip"
+    response.vary.add("Accept-Encoding")
+    etag, weak = response.get_etag()
+    if etag and not weak:
+        response.set_etag(etag, weak=True)
 
 WEB_USERNAME = os.environ.get("WEB_USERNAME")
 WEB_PASSWORD = os.environ.get("WEB_PASSWORD")
@@ -40,7 +121,8 @@ WEB_PASSWORD = os.environ.get("WEB_PASSWORD")
 # เช็คแค่ IP จะเท่ากับเปิดช่องให้ใครก็ได้จากอินเทอร์เน็ตข้าม login ได้)
 CRON_TOKEN = os.environ.get("CRON_TOKEN")
 
-REQUEST_DELAY = 1.0  # หน่วงระหว่างเรื่องตอน refresh ทั้งหมด กันโดน block
+REQUEST_DELAY = 1.0  # เว้นระยะคำขอไปเว็บเดียวกันตอน refresh ทั้งหมด กันโดน block
+REFRESH_WORKERS = 4  # เว็บต่างกันดึงพร้อมกันได้ (เว็บเดียวกันยังเว้นระยะตาม REQUEST_DELAY)
 
 
 def _bootstrap_first_admin():
@@ -67,7 +149,7 @@ def _bootstrap_first_admin():
 def _migrate_manga_sources():
     """ของเดิมมีแค่ manga["url"] เดียว ก่อนจะรองรับหลายแหล่งที่มาต่อเรื่อง ย้ายให้เป็น
     manga["sources"] = [{"url": ...}] ครั้งเดียวตอนสตาร์ท กันโค้ดที่เหลือต้องเช็ค key ไม่มีอยู่ทุกที่"""
-    manga_items = storage.load_manga()
+    manga_items = storage.load_manga(fresh=True)
     changed = False
     for m in manga_items:
         if not m.get("sources") and m.get("url"):
@@ -110,11 +192,11 @@ def require_admin(view):
 
 @app.before_request
 def require_login():
+    if request.endpoint in ("login", "static"):
+        return None
     # ถ้ายังไม่มีผู้ใช้ในระบบเลย (เช่น dev บนเครื่องตัวเอง ไม่เคยตั้ง WEB_USERNAME/WEB_PASSWORD)
     # ปล่อยผ่านไม่บังคับ login
     if not storage.load_users():
-        return None
-    if request.endpoint in ("login", "static"):
         return None
     if (
         request.endpoint == "refresh_all"
@@ -152,28 +234,15 @@ def logout():
     return redirect(url_for("login"))
 
 
-@app.route("/api/me")
-def me():
-    if not current_username():
-        return jsonify({"username": None, "is_admin": False})
-    return jsonify({"username": current_username(), "is_admin": is_admin()})
-
-
-@app.route("/api/prefs", methods=["GET"])
-def get_prefs():
-    # ค่าตั้งค่าส่วนตัว (เช่น ลำดับการเรียงเรื่องทั้งหมด) เก็บแยกบัญชีใครบัญชีมัน
-    # dev mode ที่ไม่มีบัญชี (current_username()==None) ไม่ต้องจำอะไรเลย
-    if not current_username():
-        return jsonify({})
-    return jsonify(storage.load_prefs(current_username()))
-
-
 @app.route("/api/prefs", methods=["POST"])
 def update_prefs():
+    # ค่าตั้งค่าส่วนตัว (เช่น ลำดับการเรียงเรื่องทั้งหมด) เก็บแยกบัญชีใครบัญชีมัน — ตอนอ่านไม่มี
+    # endpoint แยก เพราะส่งไปพร้อมหน้าเว็บตั้งแต่แรกแล้ว (ดู index())
+    # dev mode ที่ไม่มีบัญชี (current_username()==None) ไม่ต้องจำอะไรเลย
     if not current_username():
         return jsonify({"ok": True})
     body = request.get_json(force=True) or {}
-    prefs = storage.load_prefs(current_username())
+    prefs = storage.load_prefs(current_username(), fresh=True)
     prefs.update(body)
     storage.save_prefs(current_username(), prefs)
     return jsonify({"ok": True})
@@ -199,7 +268,7 @@ def add_user():
     if len(password) < 4:
         return jsonify({"error": "รหัสผ่านสั้นเกินไป"}), 400
 
-    users = storage.load_users()
+    users = storage.load_users(fresh=True)
     if username in users:
         return jsonify({"error": "มีชื่อผู้ใช้นี้อยู่แล้ว"}), 409
 
@@ -259,7 +328,7 @@ def _migrate_read_state_to_keys():
     chapters_by_manga = {m["id"]: m.get("chapters") or [] for m in storage.load_manga() if m.get("id")}
 
     for username in storage.all_usernames():
-        read_state = storage.load_read_state(username)
+        read_state = storage.load_read_state(username, fresh=True)
         changed = False
         for manga_id, entry in read_state.items():
             if not isinstance(entry, dict) or "read_urls" not in entry:
@@ -296,7 +365,12 @@ def _migrate_read_state_to_keys():
 _migrate_read_state_to_keys()
 
 
-def refresh_from_sources(sources: list[dict]) -> dict:
+def _num_or_neg(c: dict) -> float:
+    n = scraper.chapter_number(c["text"]) if c.get("text") else None
+    return n if n is not None else -1
+
+
+def refresh_from_sources(sources: list[dict], min_interval: float = 0.0) -> dict:
     """ดึงข้อมูลจากทุกแหล่งที่มาของเรื่องเดียวกันแล้วรวมเป็นชุดเดียว กันเรื่องที่แหล่งใดแหล่งหนึ่ง
     เงียบหายไม่อัพเดต — ตอนล่าสุดเอาจากแหล่งที่มีเลขตอนสูงสุด ส่วนรายชื่อตอนรวมจากทุกแหล่งเข้า
     ด้วยกัน (ตัวซ้ำตามเลขตอน แหล่งที่มาก่อนในลิสต์ชนะถ้าเลขตอนซ้ำ) เพื่อให้อ่านตอนเก่าจากแหล่งที่
@@ -307,8 +381,8 @@ def refresh_from_sources(sources: list[dict]) -> dict:
         if not url:
             continue
         try:
-            html = scraper.fetch(url)
-            per_source.append(scraper.parse_index_page(html, url))
+            html = scraper.fetch(url, min_interval=min_interval)
+            per_source.append(scraper.parse_index_page(html, url, min_interval))
         except Exception as e:
             print(f"⚠️ ดึงข้อมูลจาก {url} ไม่สำเร็จ: {e}")
 
@@ -319,11 +393,7 @@ def refresh_from_sources(sources: list[dict]) -> dict:
     for parsed in per_source:
         for c in parsed["chapters"]:
             by_num.setdefault(_chapter_key(c["text"]), c)
-    merged_chapters = sorted(
-        by_num.values(),
-        key=lambda c: scraper.chapter_number(c["text"]) if scraper.chapter_number(c["text"]) is not None else -1,
-        reverse=True,
-    )
+    merged_chapters = sorted(by_num.values(), key=_num_or_neg, reverse=True)
 
     # เผื่อทุกแหล่งไม่มี #chapterlist/AJAX เลย (เช่น Madara ที่ดึงลิสต์ไม่ได้) แต่ยังรู้ตอนล่าสุด
     # จากปุ่ม "Read Last" อยู่ — เทียบตอนล่าสุดของแต่ละแหล่งเข้าไปในกองเดียวกันด้วย
@@ -334,11 +404,7 @@ def refresh_from_sources(sources: list[dict]) -> dict:
             candidates.append({"text": parsed.get("latest_chapter"), "url": parsed["latest_chapter_url"], "date": None})
             known_urls.add(parsed["latest_chapter_url"])
 
-    best = max(
-        candidates,
-        key=lambda c: scraper.chapter_number(c["text"]) if scraper.chapter_number(c["text"]) is not None else -1,
-        default=None,
-    )
+    best = max(candidates, key=_num_or_neg, default=None)
 
     return {
         "chapters": merged_chapters,
@@ -373,17 +439,25 @@ def _apply_refresh(manga: dict, parsed: dict) -> str | None:
     return prev_chapter
 
 
+class ReadChecker:
+    """เช็คว่าตอนไหน (ระบุด้วยคีย์เอกลักษณ์จาก _chapter_key) อ่านแล้วบ้างของเรื่องหนึ่ง — แปลง
+    read_keys เป็น set ครั้งเดียว เรื่องที่มีเป็นพันตอนจะไม่ต้องไล่ลิสต์ซ้ำทุกตอน"""
+
+    def __init__(self, entry: dict | None):
+        entry = entry or {}
+        self.read_keys = set(entry.get("read_keys") or [])
+        # fallback สำหรับข้อมูลเก่ามาก (ก่อนมีระบบติดตามรายตอน มีแค่ last_read_chapter เป็นข้อความ)
+        old_last = entry.get("last_read_chapter")
+        self.old_key = _chapter_key(old_last) if old_last is not None else None
+
+    def __call__(self, key) -> bool:
+        if key is None:
+            return False
+        return key in self.read_keys or (self.old_key is not None and self.old_key == key)
+
+
 def is_chapter_read(entry: dict | None, key) -> bool:
-    """เช็คว่าตอนนี้ (ระบุด้วยคีย์เอกลักษณ์จาก _chapter_key) อ่านแล้วหรือยัง"""
-    if not entry or key is None:
-        return False
-    if key in entry.get("read_keys", []):
-        return True
-    # fallback สำหรับข้อมูลเก่ามาก (ก่อนมีระบบติดตามรายตอน มีแค่ last_read_chapter เป็นข้อความ)
-    old_last = entry.get("last_read_chapter")
-    if old_last is not None and _chapter_key(old_last) == key:
-        return True
-    return False
+    return ReadChecker(entry)(key)
 
 
 def is_new(manga: dict, read_state: dict) -> bool:
@@ -407,10 +481,30 @@ def mark_chapter_read(read_state: dict, manga_id: str, key):
     entry["last_read_at"] = now_iso()
 
 
+def public_manga(manga: dict) -> dict:
+    """ข้อมูลเรื่องสำหรับส่งให้หน้าเว็บในหน้ารวม — ตัดรายชื่อตอนทั้งหมดออก (ใหญ่ที่สุดในไฟล์ และหน้า
+    รวมไม่ได้ใช้ หน้าเลือกตอนดึงแยกจาก /api/manga/<id>/chapters อยู่แล้ว)"""
+    return {k: v for k, v in manga.items() if k != "chapters"}
+
+
 def serialize(manga: dict, read_state: dict) -> dict:
-    out = dict(manga)
+    out = public_manga(manga)
     out["is_new"] = is_new(manga, read_state)
     return out
+
+
+def manga_list_payload(username: str | None) -> list[dict]:
+    manga_items = storage.load_manga()
+    if username:
+        subscribed_ids = set(storage.load_subscriptions(username))
+        manga_items = [m for m in manga_items if m["id"] in subscribed_ids]
+    read_state = storage.load_read_state(username) if username else {}
+    items = [serialize(m, read_state) for m in manga_items]
+    # เรื่องที่ยังไม่อ่านขึ้นก่อน แล้วภายในกลุ่มเดียวกันเรียงตามเวลาที่ "เจอตอนใหม่จริง ๆ"
+    # ล่าสุดก่อน (last_updated_at เปลี่ยนเฉพาะตอนตอนล่าสุดเปลี่ยนจริง ไม่ใช่ทุกครั้งที่เช็ค)
+    items.sort(key=lambda m: m.get("last_updated_at") or "", reverse=True)
+    items.sort(key=lambda m: m["is_new"], reverse=True)
+    return items
 
 
 def notify_subscribed_admins(manga_id: str, name: str, chapter: str, cover_url: str | None):
@@ -423,32 +517,34 @@ def notify_subscribed_admins(manga_id: str, name: str, chapter: str, cover_url: 
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    username = current_username()
+    if username:
+        # ต่ออายุ cookie 90 วันนับจากครั้งล่าสุดที่เปิดเว็บ (ปิด SESSION_REFRESH_EACH_REQUEST ไว้แล้ว)
+        session.modified = True
+    # ฝังข้อมูลเริ่มต้นมาในหน้าเลย หน้าแรกขึ้นทันทีไม่ต้องรอยิง API ต่อกันหลายรอบ
+    boot = {
+        "me": {"username": username, "is_admin": is_admin()},
+        "prefs": storage.load_prefs(username) if username else {},
+        "manga": manga_list_payload(username),
+    }
+    resp = app.make_response(render_template("index.html", boot=boot))
+    resp.cache_control.private = True
+    resp.cache_control.no_cache = True
+    return resp
 
 
 @app.route("/api/manga", methods=["GET"])
 def list_manga():
-    subscribed_ids = set(storage.load_subscriptions(current_username())) if current_username() else None
-    manga_items = storage.load_manga()
-    if subscribed_ids is not None:
-        manga_items = [m for m in manga_items if m["id"] in subscribed_ids]
-    read_state = storage.load_read_state(current_username()) if current_username() else {}
-    items = [serialize(m, read_state) for m in manga_items]
-    # เรื่องที่ยังไม่อ่านขึ้นก่อน แล้วภายในกลุ่มเดียวกันเรียงตามเวลาที่ "เจอตอนใหม่จริง ๆ"
-    # ล่าสุดก่อน (last_updated_at เปลี่ยนเฉพาะตอนตอนล่าสุดเปลี่ยนจริง ไม่ใช่ทุกครั้งที่เช็ค)
-    items.sort(key=lambda m: m.get("last_updated_at") or "", reverse=True)
-    items.sort(key=lambda m: m["is_new"], reverse=True)
-    return jsonify(items)
+    return jsonify(manga_list_payload(current_username()))
 
 
 @app.route("/api/catalog", methods=["GET"])
 def list_catalog():
     """เรื่องทั้งหมดในระบบ (ไม่กรองตามที่ติดตาม) ไว้ให้เลือกติดตามเพิ่ม"""
     subscribed_ids = set(storage.load_subscriptions(current_username())) if current_username() else set()
-    manga_items = storage.load_manga()
     items = []
-    for m in manga_items:
-        out = dict(m)
+    for m in storage.load_manga():
+        out = public_manga(m)
         out["is_subscribed"] = m["id"] in subscribed_ids
         items.append(out)
     items.sort(key=lambda m: m["name"])
@@ -460,11 +556,10 @@ def subscribe(manga_id):
     username = current_username()
     if not username:
         return jsonify({"error": "unauthorized"}), 401
-    manga_items = storage.load_manga()
-    if not any(m["id"] == manga_id for m in manga_items):
+    if not storage.get_manga(manga_id):
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
 
-    subs = storage.load_subscriptions(username)
+    subs = storage.load_subscriptions(username, fresh=True)
     if manga_id not in subs:
         subs.append(manga_id)
         storage.save_subscriptions(username, subs)
@@ -476,7 +571,7 @@ def unsubscribe(manga_id):
     username = current_username()
     if not username:
         return jsonify({"error": "unauthorized"}), 401
-    subs = storage.load_subscriptions(username)
+    subs = storage.load_subscriptions(username, fresh=True)
     if manga_id in subs:
         subs.remove(manga_id)
         storage.save_subscriptions(username, subs)
@@ -515,9 +610,8 @@ def add_manga():
     if error:
         return jsonify({"error": error}), 400
 
-    manga_items = storage.load_manga()
     mid = storage.make_id(urls[0])
-    if any(m["id"] == mid for m in manga_items):
+    if storage.get_manga(mid):
         return jsonify({"error": "มีเรื่องนี้อยู่แล้ว"}), 409
 
     new_item = {
@@ -544,16 +638,21 @@ def add_manga():
         if parsed.get("latest_chapter"):
             new_item["last_updated_at"] = new_item["last_checked_at"]
 
+    # โหลดใหม่หลังดึงข้อมูลเสร็จ (ใช้เวลาหลายวินาที) กันทับของที่คนอื่นแก้ระหว่างนั้น
+    manga_items = storage.load_manga(fresh=True)
+    if any(m["id"] == mid for m in manga_items):
+        return jsonify({"error": "มีเรื่องนี้อยู่แล้ว"}), 409
     manga_items.append(new_item)
     storage.save_manga(manga_items)
 
     # คนเพิ่มเรื่อง (admin) ให้ติดตามเรื่องนี้เองอัตโนมัติ (ถ้ามี session จริง — dev mode ไม่มี user เลยข้าม)
     if current_username():
-        subs = storage.load_subscriptions(current_username())
-        subs.append(mid)
-        storage.save_subscriptions(current_username(), subs)
+        subs = storage.load_subscriptions(current_username(), fresh=True)
+        if mid not in subs:
+            subs.append(mid)
+            storage.save_subscriptions(current_username(), subs)
 
-    return jsonify(new_item), 201
+    return jsonify(public_manga(new_item)), 201
 
 
 @app.route("/api/manga/<manga_id>", methods=["PUT"])
@@ -561,9 +660,7 @@ def add_manga():
 def edit_manga(manga_id):
     """แก้ไขชื่อ/แหล่งที่มาของเรื่องที่มีอยู่แล้ว (id เดิมไม่เปลี่ยน ต่อให้แหล่งแรกจะถูกแก้ก็ตาม
     เพื่อไม่ให้กระทบ subscriptions/read_state ของทุกคนที่ผูกกับ id เดิมอยู่)"""
-    manga_items = storage.load_manga()
-    manga = next((m for m in manga_items if m["id"] == manga_id), None)
-    if not manga:
+    if not storage.get_manga(manga_id):
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
 
     body = request.get_json(force=True) or {}
@@ -575,23 +672,29 @@ def edit_manga(manga_id):
     if error:
         return jsonify({"error": error}), 400
 
-    manga["name"] = name
-    manga["sources"] = [{"url": u} for u in urls]
-    manga["url"] = urls[0]
-
+    sources = [{"url": u} for u in urls]
     # ดึงข้อมูลใหม่ทันทีตามแหล่งที่มาชุดล่าสุด เพื่อให้เห็นผลทันทีไม่ต้องรอรีเฟรชรอบถัดไป
-    parsed = refresh_from_sources(manga["sources"])
+    # (ดึงก่อนโหลดไฟล์มาแก้ ช่วงรอเว็บต้นทางหลายวินาทีจะได้ไม่ทับของที่คนอื่นบันทึกไประหว่างนั้น)
+    parsed = refresh_from_sources(sources)
+
+    manga_items = storage.load_manga(fresh=True)
+    manga = next((m for m in manga_items if m["id"] == manga_id), None)
+    if not manga:
+        return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
+    manga["name"] = name
+    manga["sources"] = sources
+    manga["url"] = urls[0]
     if parsed:
         _apply_refresh(manga, parsed)
 
     storage.save_manga(manga_items)
-    return jsonify(manga)
+    return jsonify(public_manga(manga))
 
 
 @app.route("/api/manga/<manga_id>", methods=["DELETE"])
 @require_admin
 def delete_manga(manga_id):
-    manga_items = storage.load_manga()
+    manga_items = storage.load_manga(fresh=True)
     remaining = [m for m in manga_items if m["id"] != manga_id]
     if len(remaining) == len(manga_items):
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
@@ -599,11 +702,11 @@ def delete_manga(manga_id):
 
     # เอาออกจาก subscriptions/read_state ของทุกคน กันข้อมูลค้าง
     for username in storage.all_usernames():
-        subs = storage.load_subscriptions(username)
+        subs = storage.load_subscriptions(username, fresh=True)
         if manga_id in subs:
             subs.remove(manga_id)
             storage.save_subscriptions(username, subs)
-        read_state = storage.load_read_state(username)
+        read_state = storage.load_read_state(username, fresh=True)
         if manga_id in read_state:
             del read_state[manga_id]
             storage.save_read_state(username, read_state)
@@ -611,25 +714,50 @@ def delete_manga(manga_id):
     return jsonify({"ok": True})
 
 
+def _sources_of(manga: dict) -> list[dict]:
+    return manga.get("sources") or [{"url": manga["url"]}]
+
+
+def _commit_refreshes(results: dict[str, dict]) -> list[str]:
+    """บันทึกผลดึงข้อมูลหลายเรื่องลงไฟล์ครั้งเดียว — โหลดไฟล์ใหม่ตอนจะบันทึก (ไม่ใช้ชุดที่โหลดไว้
+    ก่อนเริ่มดึง ซึ่งอาจนานหลายนาที) กันทับเรื่องที่ถูกเพิ่ม/แก้/ลบระหว่างนั้น แล้วค่อยแจ้งเตือน
+    หลังบันทึกเสร็จ คืนค่า id เรื่องที่ตอนล่าสุดเปลี่ยน"""
+    if not results:
+        return []
+    manga_items = storage.load_manga(fresh=True)
+    changed = []
+    for manga in manga_items:
+        parsed = results.get(manga["id"])
+        if not parsed:
+            continue
+        prev_chapter = _apply_refresh(manga, parsed)
+        if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
+            changed.append((manga, prev_chapter))
+    storage.save_manga(manga_items)
+
+    for manga, prev_chapter in changed:
+        # แจ้งเตือนเฉพาะตอนที่เคยรู้ตอนล่าสุดมาก่อนแล้วเปลี่ยน (ไม่แจ้งตอนเพิ่งเพิ่มเรื่องใหม่)
+        if prev_chapter:
+            notify_subscribed_admins(manga["id"], manga["name"], manga["latest_chapter"], manga.get("cover_url"))
+    return [manga["id"] for manga, _ in changed]
+
+
 @app.route("/api/manga/<manga_id>/refresh", methods=["POST"])
 @require_admin
 def refresh_manga(manga_id):
-    manga_items = storage.load_manga()
-    manga = next((m for m in manga_items if m["id"] == manga_id), None)
+    manga = storage.get_manga(manga_id)
     if not manga:
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
 
-    parsed = refresh_from_sources(manga.get("sources") or [{"url": manga["url"]}])
+    parsed = refresh_from_sources(_sources_of(manga))
     if not parsed:
         return jsonify({"error": "ดึงข้อมูลไม่สำเร็จ (ทุกแหล่งที่มา)"}), 502
 
-    prev_chapter = _apply_refresh(manga, parsed)
+    _commit_refreshes({manga_id: parsed})
 
-    storage.save_manga(manga_items)
-
-    if prev_chapter and parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
-        notify_subscribed_admins(manga_id, manga["name"], parsed["latest_chapter"], manga.get("cover_url"))
-
+    manga = storage.get_manga(manga_id)
+    if not manga:
+        return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
     read_state = storage.load_read_state(current_username()) if current_username() else {}
     return jsonify(serialize(manga, read_state))
 
@@ -640,37 +768,33 @@ def refresh_all():
     if current_username() and not is_admin():
         return jsonify({"error": "เฉพาะ admin เท่านั้น"}), 403
 
-    manga_items = storage.load_manga()
-    updated_ids = []
+    manga_items = list(storage.load_manga())
+    results: dict[str, dict] = {}
     failed = []
 
-    for idx, manga in enumerate(manga_items):
-        if idx > 0:
-            time.sleep(REQUEST_DELAY)
-        parsed = refresh_from_sources(manga.get("sources") or [{"url": manga["url"]}])
-        if not parsed:
-            failed.append({"id": manga["id"], "name": manga["name"], "error": "ดึงข้อมูลไม่สำเร็จ (ทุกแหล่งที่มา)"})
-            continue
+    def work(manga):
+        try:
+            return manga, refresh_from_sources(_sources_of(manga), min_interval=REQUEST_DELAY)
+        except Exception as e:
+            # เรื่องเดียวพังต้องไม่ทำให้ทั้งรอบล้ม (ไม่งั้นผลของเรื่องที่ดึงสำเร็จแล้วหายไปทั้งหมด)
+            print(f"⚠️ รีเฟรช {manga['name']} ไม่สำเร็จ: {e}")
+            return manga, None
 
-        prev_chapter = _apply_refresh(manga, parsed)
-        if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
-            updated_ids.append(manga["id"])
-            # แจ้งเตือนเฉพาะตอนที่เคยรู้ตอนล่าสุดมาก่อนแล้วเปลี่ยน (ไม่แจ้งตอนเพิ่งเพิ่มเรื่องใหม่)
-            if prev_chapter:
-                notify_subscribed_admins(manga["id"], manga["name"], parsed["latest_chapter"], manga.get("cover_url"))
+    with ThreadPoolExecutor(max_workers=REFRESH_WORKERS) as pool:
+        for manga, parsed in pool.map(work, manga_items):
+            if parsed:
+                results[manga["id"]] = parsed
+            else:
+                failed.append({"id": manga["id"], "name": manga["name"], "error": "ดึงข้อมูลไม่สำเร็จ (ทุกแหล่งที่มา)"})
 
-    storage.save_manga(manga_items)
-    read_state = storage.load_read_state(current_username()) if current_username() else {}
-    subscribed_ids = set(storage.load_subscriptions(current_username())) if current_username() else None
-    visible = [m for m in manga_items if subscribed_ids is None or m["id"] in subscribed_ids]
-    items = [serialize(m, read_state) for m in visible]
+    updated_ids = _commit_refreshes(results)
+    items = manga_list_payload(current_username())
     return jsonify({"items": items, "updated_ids": updated_ids, "failed": failed})
 
 
 @app.route("/api/manga/<manga_id>/chapter", methods=["GET"])
 def get_chapter(manga_id):
-    manga_items = storage.load_manga()
-    manga = next((m for m in manga_items if m["id"] == manga_id), None)
+    manga = storage.get_manga(manga_id)
     if not manga:
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
 
@@ -717,10 +841,11 @@ def get_chapter(manga_id):
     # (data["chapter_text"]) เพราะบางเว็บ h1/title ของหน้าตอนไม่มีเลขตอนกำกับชัดเจนแบบที่คาดไว้
     # (เช่น h1 เป็นหัวข้อทั่วไปของเว็บ ไม่ใช่ชื่อตอน) ถ้าเจอใน chapters ก็ใช้ text เดียวกับที่
     # list_chapters ใช้เช็ค is_read เป๊ะ ๆ เลย รับประกันว่าจะตรงกันเสมอ
-    if current_username():
+    # peek=1 = หน้าเว็บโหลดล่วงหน้าไว้ก่อนผู้ใช้จะเลื่อนไปถึงตอนนั้นจริง ห้ามมาร์คว่าอ่านแล้ว
+    if current_username() and request.args.get("peek") != "1":
         known_text = chapters[idx]["text"] if idx is not None else None
         key = _chapter_key(known_text or data.get("chapter_text"), chapter_url)
-        read_state = storage.load_read_state(current_username())
+        read_state = storage.load_read_state(current_username(), fresh=True)
         mark_chapter_read(read_state, manga_id, key)
         storage.save_read_state(current_username(), read_state)
 
@@ -731,18 +856,19 @@ def get_chapter(manga_id):
 
 @app.route("/api/manga/<manga_id>/chapters", methods=["GET"])
 def list_chapters(manga_id):
-    manga_items = storage.load_manga()
-    manga = next((m for m in manga_items if m["id"] == manga_id), None)
+    manga = storage.get_manga(manga_id)
     if not manga:
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
 
     read_state = storage.load_read_state(current_username()) if current_username() else {}
     entry = read_state.get(manga_id)
     chapters = manga.get("chapters") or []
-    items = [
-        {**c, "is_read": is_chapter_read(entry, _chapter_key(c["text"]))}
-        for c in chapters
-    ]
+    keys = [_chapter_key(c["text"]) for c in chapters]
+    is_read = ReadChecker(entry)
+    items = [{**c, "is_read": is_read(k)} for c, k in zip(chapters, keys)]
+    url_by_key = {}
+    for c, k in zip(chapters, keys):
+        url_by_key.setdefault(k, c["url"])
 
     # ตอนล่าสุดที่กดอ่าน (ไว้ให้หน้าเว็บเลื่อนไปหาอัตโนมัติ) เอาจากตัวท้ายสุดของ read_keys (ย้ายไป
     # ท้ายลิสต์ทุกครั้งที่อ่าน จึงเป็นตอนล่าสุดที่อ่านจริง) แล้วหา URL ปัจจุบันของตอนนั้นจากรายชื่อ
@@ -752,10 +878,7 @@ def list_chapters(manga_id):
     if entry:
         read_keys = entry.get("read_keys") or []
         if read_keys:
-            last_key = read_keys[-1]
-            match = next((c for c in chapters if _chapter_key(c["text"]) == last_key), None)
-            if match:
-                last_read_url = match["url"]
+            last_read_url = url_by_key.get(read_keys[-1])
         elif entry.get("last_read_chapter"):
             match = next((c for c in chapters if c["text"] == entry["last_read_chapter"]), None)
             if match:
@@ -766,9 +889,9 @@ def list_chapters(manga_id):
     last_scroll = None
     raw_scroll = (entry or {}).get("last_scroll")
     if raw_scroll:
-        match = next((c for c in chapters if _chapter_key(c["text"]) == raw_scroll.get("key")), None)
-        if match:
-            last_scroll = {"url": match["url"], "fraction": raw_scroll["fraction"]}
+        scroll_url = url_by_key.get(raw_scroll.get("key"))
+        if scroll_url:
+            last_scroll = {"url": scroll_url, "fraction": raw_scroll["fraction"]}
 
     return jsonify(
         {
@@ -792,12 +915,11 @@ def save_scroll_position(manga_id):
         return jsonify({"error": "ข้อมูลไม่ครบ"}), 400
     fraction = max(0.0, min(1.0, float(fraction)))
 
-    manga_items = storage.load_manga()
-    manga = next((m for m in manga_items if m["id"] == manga_id), None)
+    manga = storage.get_manga(manga_id)
     chapter = next((c for c in (manga.get("chapters") or []) if c["url"] == chapter_url), None) if manga else None
     key = _chapter_key(chapter["text"] if chapter else None, chapter_url)
 
-    read_state = storage.load_read_state(current_username())
+    read_state = storage.load_read_state(current_username(), fresh=True)
     entry = read_state.setdefault(manga_id, {"read_keys": [], "last_read_at": None})
     # ถ้าอ่านจบตอนแล้ว (>=95%) ไม่ต้องเก็บตำแหน่งไว้ เปิดใหม่ควรเริ่มจากบนสุดตามปกติ — เก็บเป็นคีย์
     # เอกลักษณ์ของตอน ไม่ใช่ URL ตรง ๆ ด้วยเหตุผลเดียวกับ read_keys (เรื่องหลายแหล่งที่มา URL เปลี่ยนได้)
@@ -810,14 +932,13 @@ def save_scroll_position(manga_id):
 def mark_read(manga_id):
     if not current_username():
         return jsonify({"error": "unauthorized"}), 401
-    manga_items = storage.load_manga()
-    manga = next((m for m in manga_items if m["id"] == manga_id), None)
+    manga = storage.get_manga(manga_id)
     if not manga:
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
     if not manga.get("latest_chapter_url"):
         return jsonify({"error": "ยังไม่ทราบลิงก์ตอนล่าสุด ลองรีเฟรชเรื่องนี้ก่อน"}), 400
 
-    read_state = storage.load_read_state(current_username())
+    read_state = storage.load_read_state(current_username(), fresh=True)
     mark_chapter_read(read_state, manga_id, _chapter_key(manga.get("latest_chapter"), manga["latest_chapter_url"]))
     storage.save_read_state(current_username(), read_state)
     return jsonify({"ok": True})
@@ -827,12 +948,11 @@ def mark_read(manga_id):
 def mark_unread(manga_id):
     if not current_username():
         return jsonify({"error": "unauthorized"}), 401
-    manga_items = storage.load_manga()
-    manga = next((m for m in manga_items if m["id"] == manga_id), None)
+    manga = storage.get_manga(manga_id)
     if not manga:
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
 
-    read_state = storage.load_read_state(current_username())
+    read_state = storage.load_read_state(current_username(), fresh=True)
     entry = read_state.get(manga_id)
     key = _chapter_key(manga.get("latest_chapter"), manga.get("latest_chapter_url"))
     if entry and key is not None and key in entry.get("read_keys", []):
@@ -862,7 +982,7 @@ def proxy_image():
         return "domain not allowed", 403
 
     try:
-        resp = requests.get(
+        resp = scraper.session().get(
             src,
             headers={
                 "User-Agent": scraper.HEADERS["User-Agent"],
@@ -876,11 +996,29 @@ def proxy_image():
         return f"fetch failed: {e}", 502
 
     content_type = resp.headers.get("Content-Type", "image/jpeg")
-    return Response(
-        resp.content,
-        content_type=content_type,
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
+    if not content_type.lower().startswith("image/"):
+        # โดเมนที่อนุญาตรวมถึงตัวเว็บมังงะเองด้วย กันไม่ให้ใช้ proxy นี้เสิร์ฟหน้า HTML/สคริปต์ของเว็บอื่น
+        # ภายใต้โดเมนเรา (แท็ก <img> ยังแสดงรูปได้ปกติ แม้ CDN บางเจ้าจะส่ง type มาไม่ตรง)
+        content_type = "application/octet-stream"
+
+    headers = {
+        # รูปของตอน/ปกไม่เปลี่ยนตาม URL เดิม ให้ browser เก็บไว้ยาว ๆ ไม่ต้องถามซ้ำ (private = ไม่ให้
+        # proxy/CDN กลางทางแคชแทน เพราะ endpoint นี้ต้อง login)
+        "Cache-Control": "private, max-age=2592000, immutable",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+    }
+    if resp.headers.get("Content-Length") and not resp.headers.get("Content-Encoding"):
+        headers["Content-Length"] = resp.headers["Content-Length"]
+
+    def stream():
+        # ส่งต่อทีละก้อน ไม่อ่านทั้งรูปเข้าหน่วยความจำก่อน
+        try:
+            yield from resp.iter_content(chunk_size=64 * 1024)
+        finally:
+            resp.close()
+
+    return Response(stream(), content_type=content_type, headers=headers, direct_passthrough=True)
 
 
 if __name__ == "__main__":

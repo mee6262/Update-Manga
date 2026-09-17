@@ -1,5 +1,7 @@
 import hashlib
 import json
+import os
+import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -19,33 +21,90 @@ def make_id(url: str) -> str:
     return hashlib.sha1(url.encode("utf-8")).hexdigest()[:10]
 
 
-def _load_json(path: Path, default):
-    if not path.exists():
+# ---------- JSON cache ----------
+# เก็บผล parse ไว้ในหน่วยความจำ ตรวจความสดด้วย (mtime_ns, size) ของไฟล์ — ทุก request แค่ stat()
+# ไม่ต้องอ่าน+parse ใหม่ และใช้ได้ข้าม gunicorn หลาย worker เพราะอีก process เขียนไฟล์ mtime ก็เปลี่ยน
+# ค่าที่ได้จาก cache (fresh=False) เป็นของที่แชร์กันทั้ง process ห้ามแก้ไขตรง ๆ — โค้ดที่จะแก้แล้ว
+# save กลับต้องขอ fresh=True เสมอ (ได้ object ใหม่จากดิสก์ ไม่กระทบคนอื่นที่อ่านอยู่พร้อมกัน)
+_cache: dict[Path, tuple[tuple[int, int], object]] = {}
+_cache_lock = threading.Lock()
+
+
+def _stat_sig(path: Path):
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _read_json(path: Path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
         return default
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
 
 
-def _save_json(path: Path, data):
-    tmp = path.with_suffix(".tmp")
+def _load_json(path: Path, default, fresh: bool = False):
+    if fresh:
+        return _read_json(path, default)
+    sig = _stat_sig(path)
+    if sig is None:
+        return default
+    hit = _cache.get(path)
+    if hit and hit[0] == sig:
+        return hit[1]
+    data = _read_json(path, default)
+    with _cache_lock:
+        _cache[path] = (sig, data)
+    return data
+
+
+def _save_json(path: Path, data, compact: bool = False):
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        if compact:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        else:
+            json.dump(data, f, ensure_ascii=False, indent=2)
     tmp.replace(path)
+    with _cache_lock:
+        _cache.pop(path, None)
 
 
-def load_manga() -> list[dict]:
-    return _load_json(MANGA_FILE, [])
+def load_manga(fresh: bool = False) -> list[dict]:
+    return _load_json(MANGA_FILE, [], fresh)
 
 
 def save_manga(items: list[dict]):
     _save_json(MANGA_FILE, items)
 
 
+def get_manga(manga_id: str) -> dict | None:
+    """หาเรื่องจาก id แบบอ่านอย่างเดียว (ใช้ index ที่ cache ไว้ ไม่ต้องไล่ลิสต์ทุกครั้ง)"""
+    return _manga_index().get(manga_id)
+
+
+_index_memo: tuple[list, dict] | None = None
+
+
+def _manga_index() -> dict:
+    global _index_memo
+    items = load_manga()
+    memo = _index_memo
+    if memo and memo[0] is items:
+        return memo[1]
+    index = {m["id"]: m for m in items if m.get("id")}
+    _index_memo = (items, index)
+    return index
+
+
 # ---------- ผู้ใช้ ----------
 
-def load_users() -> dict:
+def load_users(fresh: bool = False) -> dict:
     """username -> {"password_hash": ..., "is_admin": bool}"""
-    return _load_json(USERS_FILE, {})
+    return _load_json(USERS_FILE, {}, fresh)
 
 
 def save_users(users: dict):
@@ -58,34 +117,44 @@ def user_dir(username: str) -> Path:
     return d
 
 
+def _user_file(username: str, name: str) -> Path:
+    return USERS_DIR / username / name
+
+
+def _save_user_file(username: str, name: str, data):
+    d = USERS_DIR / username
+    d.mkdir(exist_ok=True)
+    _save_json(d / name, data)
+
+
 # ---------- ข้อมูลรายคน (อ่านแล้ว/ติดตามเรื่องไหนบ้าง) ----------
 
-def load_read_state(username: str) -> dict:
-    return _load_json(user_dir(username) / "read_state.json", {})
+def load_read_state(username: str, fresh: bool = False) -> dict:
+    return _load_json(_user_file(username, "read_state.json"), {}, fresh)
 
 
 def save_read_state(username: str, state: dict):
-    _save_json(user_dir(username) / "read_state.json", state)
+    _save_user_file(username, "read_state.json", state)
 
 
-def load_subscriptions(username: str) -> list[str]:
-    return _load_json(user_dir(username) / "subscriptions.json", [])
+def load_subscriptions(username: str, fresh: bool = False) -> list[str]:
+    return _load_json(_user_file(username, "subscriptions.json"), [], fresh)
 
 
 def save_subscriptions(username: str, manga_ids: list[str]):
-    _save_json(user_dir(username) / "subscriptions.json", manga_ids)
+    _save_user_file(username, "subscriptions.json", manga_ids)
 
 
 def all_usernames() -> list[str]:
     return list(load_users().keys())
 
 
-def load_prefs(username: str) -> dict:
-    return _load_json(user_dir(username) / "prefs.json", {})
+def load_prefs(username: str, fresh: bool = False) -> dict:
+    return _load_json(_user_file(username, "prefs.json"), {}, fresh)
 
 
 def save_prefs(username: str, prefs: dict):
-    _save_json(user_dir(username) / "prefs.json", prefs)
+    _save_user_file(username, "prefs.json", prefs)
 
 
 def load_image_domains() -> set[str]:
@@ -104,9 +173,21 @@ def add_image_domains(domains: set[str]):
     _save_json(IMAGE_DOMAINS_FILE, sorted(existing | domains))
 
 
+_allowed_memo: tuple[tuple[list, list], set[str]] | None = None
+
+
 def get_allowed_domains() -> set[str]:
-    domains = load_image_domains()
-    for m in load_manga():
+    """เรียกทุกครั้งที่พร็อกซีรูป (ตอนหนึ่งมีหลายสิบรูป) — คำนวณใหม่เฉพาะตอน manga.json หรือ
+    image_domains.json เปลี่ยนเท่านั้น"""
+    global _allowed_memo
+    manga_items = load_manga()
+    raw_domains = _load_json(IMAGE_DOMAINS_FILE, [])
+    memo = _allowed_memo
+    if memo and memo[0][0] is manga_items and memo[0][1] is raw_domains:
+        return memo[1]
+
+    domains = set(raw_domains)
+    for m in manga_items:
         for src in m.get("sources") or [{"url": m.get("url")}]:
             if src.get("url"):
                 domains.add(urlparse(src["url"]).netloc)
@@ -114,6 +195,7 @@ def get_allowed_domains() -> set[str]:
             domains.add(urlparse(m["latest_chapter_url"]).netloc)
         if m.get("cover_url"):
             domains.add(urlparse(m["cover_url"]).netloc)
+    _allowed_memo = ((manga_items, raw_domains), domains)
     return domains
 
 
@@ -123,12 +205,9 @@ def chapter_cache_path(manga_id: str, chapter_url: str) -> Path:
 
 
 def load_chapter_cache(manga_id: str, chapter_url: str) -> dict | None:
-    path = chapter_cache_path(manga_id, chapter_url)
-    if path.exists():
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return None
+    # อ่านจากดิสก์ตรง ๆ ทุกครั้ง (ไม่เข้า memory cache) เพราะมีได้เป็นพัน ๆ ไฟล์ และ caller แก้ dict ต่อ
+    return _read_json(chapter_cache_path(manga_id, chapter_url), None)
 
 
 def save_chapter_cache(manga_id: str, chapter_url: str, data: dict):
-    _save_json(chapter_cache_path(manga_id, chapter_url), data)
+    _save_json(chapter_cache_path(manga_id, chapter_url), data, compact=True)

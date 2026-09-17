@@ -10,7 +10,10 @@ Environment="PATH=/opt/Update-Manga/.venv/bin"
 # ใส่ TELEGRAM_TOKEN / TELEGRAM_CHAT_ID ไว้ในไฟล์นี้ (ดู .env.example) อย่าใส่ตรงนี้ตรง ๆ
 # เพราะไฟล์ .service มักอ่านได้จากทุก user ในเครื่อง
 EnvironmentFile=-/opt/Update-Manga/.env
-ExecStart=/opt/Update-Manga/.venv/bin/gunicorn -w 2 -b 127.0.0.1:5050 app:app
+# ใช้ worker แบบ thread (gthread) เพราะงานเกือบทั้งหมดคือรอเน็ต (พร็อกซีรูป/ดึงหน้าเว็บ) ไม่ใช่
+# งานคำนวณ — worker แบบ sync 2 ตัวรับได้ทีละ 2 คำขอเท่านั้น ตอนหนึ่งมีรูปหลายสิบใบเลยต่อคิวกันยาว
+# ทั้งเว็บหน่วงตามไปหมด ส่วน --timeout ต้องยาวพอสำหรับ /api/refresh_all ที่ใช้เวลาเป็นนาที
+ExecStart=/opt/Update-Manga/.venv/bin/gunicorn -k gthread -w 2 --threads 16 --timeout 300 -b 127.0.0.1:5050 app:app
 Restart=on-failure
 RestartSec=5
 

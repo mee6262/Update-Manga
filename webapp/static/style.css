@@ -154,7 +154,18 @@ body {
 main { padding: 20px; max-width: 1200px; margin: 0 auto; }
 
 .view { display: none; }
-.view.active { display: block; }
+.view.active { display: block; animation: fade-in 0.16s ease-out; }
+
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slide-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* ปิดอนิเมชันทั้งหมดให้คนที่ตั้งค่าเครื่องว่าไม่อยากเห็นการเคลื่อนไหว */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 
 .sub-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
 
@@ -204,6 +215,9 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
   transition: transform 0.15s, border-color 0.15s;
   display: flex;
   flex-direction: column;
+  /* ใบที่ยังไม่เลื่อนมาถึง browser ข้ามการ render ไปก่อน (กริดยาว ๆ จะขึ้นเร็วขึ้นมาก) */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
 }
 
 .manga-card:hover {
@@ -389,7 +403,7 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
 }
 
 .reader[hidden] { display: none; }
-.reader:not([hidden]) { display: flex; }
+.reader:not([hidden]) { display: flex; animation: slide-up 0.18s ease-out; }
 
 .reader-topbar {
   display: flex;
@@ -443,6 +457,8 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
 .reader-body {
   flex: 1;
   overflow-y: auto;
+  /* เลื่อนสุดขอบแล้วไม่ให้ไปลากหน้าเว็บด้านหลังต่อ (มือถือจะรู้สึกลื่นกว่า ไม่มีจังหวะสะดุด) */
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -518,6 +534,7 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
 .chapter-list-body {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 12px;
   max-width: 700px;
   width: 100%;
@@ -535,6 +552,9 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
   border-radius: 8px;
   margin-bottom: 8px;
   cursor: pointer;
+  /* เรื่องหนึ่งมีได้เป็นพันตอน — ข้ามการ render แถวที่ยังไม่เลื่อนมาถึง */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 46px;
 }
 
 .chapter-row:hover { border-color: var(--accent); }

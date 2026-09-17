@@ -2,12 +2,16 @@
 Scraper สำหรับกลุ่มเว็บที่ใช้ธีมเดียวกับ slow-manga / go-manga / up-manga / tanuki-manga
 ใช้ requests ธรรมดา (ไม่ต้องใช้ playwright) เพราะข้อมูลที่ต้องการ render มาใน HTML/JS อยู่แล้ว
 """
+import functools
 import json
 import re
+import threading
+import time
 from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
 
 HEADERS = {
     "User-Agent": (
@@ -28,15 +32,49 @@ COVER_FALLBACK_SELECTORS = [
 TIMEOUT = 20
 
 
+_local = threading.local()
+
+
+def session() -> requests.Session:
+    """Session ต่อ thread (requests.Session ไม่ thread-safe เต็มที่) ใช้ keep-alive ซ้ำกับเว็บ/CDN
+    เดิม ไม่ต้องจับมือ TCP+TLS ใหม่ทุกรูป/ทุกหน้า"""
+    s = getattr(_local, "session", None)
+    if s is None:
+        s = requests.Session()
+        adapter = HTTPAdapter(pool_connections=16, pool_maxsize=16)
+        s.mount("http://", adapter)
+        s.mount("https://", adapter)
+        _local.session = s
+    return s
+
+
+_host_next_at: dict[str, float] = {}
+_host_lock = threading.Lock()
+
+
+def throttle(url: str, min_interval: float):
+    """เว้นระยะคำขอไปโฮสต์เดียวกันอย่างน้อย min_interval วินาที (กันโดน block) แต่โฮสต์ต่างกัน
+    ยิงพร้อมกันได้ — ทำให้รีเฟรชทั้งหมดเร็วขึ้นโดยไม่ถล่มเว็บใดเว็บหนึ่ง"""
+    host = urlparse(url).netloc
+    with _host_lock:
+        now = time.monotonic()
+        start = max(now, _host_next_at.get(host, 0.0))
+        _host_next_at[host] = start + min_interval
+    if start > now:
+        time.sleep(start - now)
+
+
 def domain_of(url: str) -> str:
     return urlparse(url).netloc
 
 
-def fetch(url: str, referer: str | None = None) -> str:
+def fetch(url: str, referer: str | None = None, min_interval: float = 0.0) -> str:
     headers = dict(HEADERS)
     if referer:
         headers["Referer"] = referer
-    resp = requests.get(url, headers=headers, timeout=TIMEOUT)
+    if min_interval:
+        throttle(url, min_interval)
+    resp = session().get(url, headers=headers, timeout=TIMEOUT)
     resp.raise_for_status()
     # เว็บกลุ่มนี้ไม่ระบุ charset ใน Content-Type ทำให้ requests เดาเป็น ISO-8859-1
     # (ค่า default ตาม RFC 2616) แล้วข้อความไทยจะเพี้ยน ต้องบังคับเป็น utf-8 เสมอ
@@ -106,8 +144,12 @@ def parse_release_date(text: str | None) -> str | None:
     return f"{int(year):04d}-{month:02d}-{int(day):02d}"
 
 
+_NUM_RE = re.compile(r"(\d+(?:\.\d+)?)")
+
+
+@functools.lru_cache(maxsize=16384)
 def chapter_number(text: str) -> float | None:
-    match = re.search(r"(\d+(?:\.\d+)?)", text)
+    match = _NUM_RE.search(text)
     return float(match.group(1)) if match else None
 
 
@@ -133,15 +175,17 @@ def parse_chapter_list(soup: BeautifulSoup) -> list[dict]:
     return chapters
 
 
-def fetch_madara_chapters(manga_url: str) -> list[dict]:
+def fetch_madara_chapters(manga_url: str, min_interval: float = 0.0) -> list[dict]:
     """เว็บกลุ่ม Madara ไม่ได้ฝังรายชื่อตอนมาในหน้าเรื่อง (มีแค่ไอคอนหมุน ๆ รอ AJAX) ต้องยิง
     ขอลิสต์เต็มแยกอีกทีที่ {manga_url}/ajax/chapters/ — และต้องเป็น POST เท่านั้น
     ถ้ายิง GET เว็บจะคืนหน้าเพจปกติมาแทน ไม่ใช่รายชื่อตอน"""
     endpoint = manga_url.rstrip("/") + "/ajax/chapters/"
     headers = dict(HEADERS)
     headers["X-Requested-With"] = "XMLHttpRequest"
+    if min_interval:
+        throttle(endpoint, min_interval)
     try:
-        resp = requests.post(endpoint, headers=headers, timeout=TIMEOUT)
+        resp = session().post(endpoint, headers=headers, timeout=TIMEOUT)
         resp.raise_for_status()
     except requests.RequestException:
         return []
@@ -177,7 +221,7 @@ def _parse_madara_latest(soup: BeautifulSoup) -> tuple[str | None, str | None]:
     return None, None
 
 
-def parse_index_page(html: str, url: str | None = None) -> dict:
+def parse_index_page(html: str, url: str | None = None, min_interval: float = 0.0) -> dict:
     """ดึงตอนล่าสุด + ลิงก์ + รูปปก + รายชื่อตอนทั้งหมด จากหน้ารายละเอียดเรื่อง
     (url ใช้เฉพาะตอนเจอเว็บกลุ่ม Madara ที่ต้องยิงขอรายชื่อตอนเพิ่มอีก request)"""
     soup = BeautifulSoup(html, "html.parser")
@@ -214,7 +258,7 @@ def parse_index_page(html: str, url: str | None = None) -> dict:
     # ไม่เจอ #chapterlist แบบ mangareader-family เลย ลองแบบ Madara แทน (ต้องยิงขอรายชื่อตอน
     # เพิ่มอีก request เพราะหน้าเรื่องไม่ได้ฝังลิสต์มาให้)
     if not result["chapters"] and url:
-        result["chapters"] = fetch_madara_chapters(url)
+        result["chapters"] = fetch_madara_chapters(url, min_interval)
 
     if not result["latest_chapter_url"]:
         text, chapter_url = _parse_madara_latest(soup)

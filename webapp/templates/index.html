@@ -13,6 +13,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Manga" />
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <script>window.__BOOT__ = {{ boot|tojson }};</script>
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -135,6 +137,5 @@
     </div>
   </div>
 
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>
