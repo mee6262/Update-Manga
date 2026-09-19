@@ -268,9 +268,10 @@ def update_prefs():
     if not current_username():
         return jsonify({"ok": True})
     body = request.get_json(force=True) or {}
-    prefs = storage.load_prefs(current_username(), fresh=True)
-    prefs.update(body)
-    storage.save_prefs(current_username(), prefs)
+    with storage.state_lock:
+        prefs = storage.load_prefs(current_username(), fresh=True)
+        prefs.update(body)
+        storage.save_prefs(current_username(), prefs)
     return jsonify({"ok": True})
 
 
@@ -586,10 +587,11 @@ def subscribe(manga_id):
     if not storage.get_manga(manga_id):
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
 
-    subs = storage.load_subscriptions(username, fresh=True)
-    if manga_id not in subs:
-        subs.append(manga_id)
-        storage.save_subscriptions(username, subs)
+    with storage.state_lock:
+        subs = storage.load_subscriptions(username, fresh=True)
+        if manga_id not in subs:
+            subs.append(manga_id)
+            storage.save_subscriptions(username, subs)
     return jsonify({"ok": True})
 
 
@@ -598,10 +600,11 @@ def unsubscribe(manga_id):
     username = current_username()
     if not username:
         return jsonify({"error": "unauthorized"}), 401
-    subs = storage.load_subscriptions(username, fresh=True)
-    if manga_id in subs:
-        subs.remove(manga_id)
-        storage.save_subscriptions(username, subs)
+    with storage.state_lock:
+        subs = storage.load_subscriptions(username, fresh=True)
+        if manga_id in subs:
+            subs.remove(manga_id)
+            storage.save_subscriptions(username, subs)
     return jsonify({"ok": True})
 
 
@@ -728,15 +731,16 @@ def delete_manga(manga_id):
     storage.save_manga(remaining)
 
     # เอาออกจาก subscriptions/read_state ของทุกคน กันข้อมูลค้าง
-    for username in storage.all_usernames():
-        subs = storage.load_subscriptions(username, fresh=True)
-        if manga_id in subs:
-            subs.remove(manga_id)
-            storage.save_subscriptions(username, subs)
-        read_state = storage.load_read_state(username, fresh=True)
-        if manga_id in read_state:
-            del read_state[manga_id]
-            storage.save_read_state(username, read_state)
+    with storage.state_lock:
+        for username in storage.all_usernames():
+            subs = storage.load_subscriptions(username, fresh=True)
+            if manga_id in subs:
+                subs.remove(manga_id)
+                storage.save_subscriptions(username, subs)
+            read_state = storage.load_read_state(username, fresh=True)
+            if manga_id in read_state:
+                del read_state[manga_id]
+                storage.save_read_state(username, read_state)
 
     return jsonify({"ok": True})
 
@@ -872,9 +876,10 @@ def get_chapter(manga_id):
     if current_username() and request.args.get("peek") != "1":
         known_text = chapters[idx]["text"] if idx is not None else None
         key = _chapter_key(known_text or data.get("chapter_text"), chapter_url)
-        read_state = storage.load_read_state(current_username(), fresh=True)
-        mark_chapter_read(read_state, manga_id, key)
-        storage.save_read_state(current_username(), read_state)
+        with storage.state_lock:
+            read_state = storage.load_read_state(current_username(), fresh=True)
+            mark_chapter_read(read_state, manga_id, key)
+            storage.save_read_state(current_username(), read_state)
 
     data["chapter_url"] = chapter_url
     data["manga_name"] = manga["name"]
@@ -946,12 +951,13 @@ def save_scroll_position(manga_id):
     chapter = next((c for c in (manga.get("chapters") or []) if c["url"] == chapter_url), None) if manga else None
     key = _chapter_key(chapter["text"] if chapter else None, chapter_url)
 
-    read_state = storage.load_read_state(current_username(), fresh=True)
-    entry = read_state.setdefault(manga_id, {"read_keys": [], "last_read_at": None})
-    # ถ้าอ่านจบตอนแล้ว (>=95%) ไม่ต้องเก็บตำแหน่งไว้ เปิดใหม่ควรเริ่มจากบนสุดตามปกติ — เก็บเป็นคีย์
-    # เอกลักษณ์ของตอน ไม่ใช่ URL ตรง ๆ ด้วยเหตุผลเดียวกับ read_keys (เรื่องหลายแหล่งที่มา URL เปลี่ยนได้)
-    entry["last_scroll"] = None if fraction >= 0.95 else {"key": key, "fraction": fraction}
-    storage.save_read_state(current_username(), read_state)
+    with storage.state_lock:
+        read_state = storage.load_read_state(current_username(), fresh=True)
+        entry = read_state.setdefault(manga_id, {"read_keys": [], "last_read_at": None})
+        # ถ้าอ่านจบตอนแล้ว (>=95%) ไม่ต้องเก็บตำแหน่งไว้ เปิดใหม่ควรเริ่มจากบนสุดตามปกติ — เก็บเป็นคีย์
+        # เอกลักษณ์ของตอน ไม่ใช่ URL ตรง ๆ ด้วยเหตุผลเดียวกับ read_keys (เรื่องหลายแหล่งที่มา URL เปลี่ยนได้)
+        entry["last_scroll"] = None if fraction >= 0.95 else {"key": key, "fraction": fraction}
+        storage.save_read_state(current_username(), read_state)
     return jsonify({"ok": True})
 
 
@@ -965,9 +971,10 @@ def mark_read(manga_id):
     if not manga.get("latest_chapter_url"):
         return jsonify({"error": "ยังไม่ทราบลิงก์ตอนล่าสุด ลองรีเฟรชเรื่องนี้ก่อน"}), 400
 
-    read_state = storage.load_read_state(current_username(), fresh=True)
-    mark_chapter_read(read_state, manga_id, _chapter_key(manga.get("latest_chapter"), manga["latest_chapter_url"]))
-    storage.save_read_state(current_username(), read_state)
+    with storage.state_lock:
+        read_state = storage.load_read_state(current_username(), fresh=True)
+        mark_chapter_read(read_state, manga_id, _chapter_key(manga.get("latest_chapter"), manga["latest_chapter_url"]))
+        storage.save_read_state(current_username(), read_state)
     return jsonify({"ok": True})
 
 
@@ -979,12 +986,13 @@ def mark_unread(manga_id):
     if not manga:
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
 
-    read_state = storage.load_read_state(current_username(), fresh=True)
-    entry = read_state.get(manga_id)
-    key = _chapter_key(manga.get("latest_chapter"), manga.get("latest_chapter_url"))
-    if entry and key is not None and key in entry.get("read_keys", []):
-        entry["read_keys"].remove(key)
-        storage.save_read_state(current_username(), read_state)
+    with storage.state_lock:
+        read_state = storage.load_read_state(current_username(), fresh=True)
+        entry = read_state.get(manga_id)
+        key = _chapter_key(manga.get("latest_chapter"), manga.get("latest_chapter_url"))
+        if entry and key is not None and key in entry.get("read_keys", []):
+            entry["read_keys"].remove(key)
+            storage.save_read_state(current_username(), read_state)
     return jsonify({"ok": True})
 
 

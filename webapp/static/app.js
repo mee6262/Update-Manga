@@ -689,15 +689,48 @@ function appendChapterImages(images) {
   body.appendChild(frag);
 }
 
-// เก็บตำแหน่งที่เลื่อนค้างไว้ของตอนปัจจุบัน ไว้กลับมาอ่านต่อจากจุดเดิมได้ (fire-and-forget)
+// จำตำแหน่งที่อ่านค้างไว้ในหน้าเว็บเองทันที (ไม่รอเซิร์ฟเวอร์) — เดิมพึ่งการโหลดรายชื่อตอนใหม่จาก
+// เซิร์ฟเวอร์ทุกครั้งที่ปิดหน้าอ่าน ซึ่งวิ่งชนกับการบันทึกที่ส่งไปพร้อมกัน (โหลดเสร็จก่อนบันทึกเขียนถึงไฟล์
+// ได้ค่าเก่ากลับมา) จึงกลับมาอ่านแล้วไม่ไปที่เดิม ตัวเลข 0.95 ต้องตรงกับเซิร์ฟเวอร์ (อ่านจบแล้วไม่จำ)
+function rememberScroll() {
+  if (!readerMangaId || !currentChapterData.url) return;
+  const url = currentChapterData.url;
+  const info = currentScrollFraction >= 0.95 ? null : { url, fraction: currentScrollFraction };
+  lastReadUrl = url;
+  lastScrollInfo = info;
+  const cached = chapterListCache.get(readerMangaId);
+  if (cached) {
+    cached.last_read_url = url;
+    cached.last_scroll = info;
+  }
+}
+
+// เก็บตำแหน่งที่เลื่อนค้างไว้ของตอนปัจจุบัน ไว้กลับมาอ่านต่อจากจุดเดิมได้
+let lastSavedScroll = null; // "url|fraction" ที่ส่งเซิร์ฟเวอร์ไปล่าสุด กันส่งซ้ำค่าเดิม
+let scrollSaveTimer = null;
+
 function saveScrollPosition() {
+  clearTimeout(scrollSaveTimer);
   if (!readerMangaId || !currentChapterData.url) return Promise.resolve();
+  rememberScroll();
+  const signature = `${currentChapterData.url}|${currentScrollFraction.toFixed(3)}`;
+  if (signature === lastSavedScroll) return Promise.resolve();
+  lastSavedScroll = signature;
   return fetch(`/api/manga/${readerMangaId}/scroll_position`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url: currentChapterData.url, fraction: currentScrollFraction }),
     keepalive: true,
-  }).catch(() => {});
+  }).catch(() => {
+    lastSavedScroll = null; // ส่งไม่สำเร็จ ให้ลองใหม่รอบหน้า
+  });
+}
+
+// บันทึกระหว่างอ่านด้วย (หน่วงไว้หลังหยุดเลื่อน) ไม่ใช่แค่ตอนกดปิด — บนมือถือแอปโดนระบบปิด/เบราว์เซอร์
+// โดนเคลียร์ตอนสลับแอปไปมาได้ ถ้าพึ่งแค่ตอนปิดตำแหน่งจะหายทั้งที่อ่านไปไกลแล้ว
+function scheduleScrollSave() {
+  clearTimeout(scrollSaveTimer);
+  scrollSaveTimer = setTimeout(saveScrollPosition, 1500);
 }
 
 // เปลี่ยนตอนแล้วต้องเริ่มอ่านจากบนสุดเสมอ — ตั้ง scrollTop=0 ครั้งเดียว (หรือสองครั้ง) ไม่พอ เพราะ
@@ -742,16 +775,54 @@ function initTopPin() {
   document.addEventListener("keydown", releaseTopPin);
 }
 
-// เลื่อนไปตำแหน่งที่ค้างไว้ ทำซ้ำหลายจังหวะเพราะรูปโหลดแบบทยอย ๆ scrollHeight รวมจะค่อย ๆ นิ่งขึ้นเรื่อย ๆ
+// เลื่อนไปตำแหน่งที่ค้างไว้ — รูปหน้ามังงะโหลดทยอยกัน (ตอนหนึ่งหลาย MB บนมือถือใช้เวลาหลายวินาที)
+// ความสูงรวมจึงยังไม่นิ่ง เดิมลองแค่ 3 ครั้งภายใน 1.2 วิ ถ้ารูปยังโหลดไม่ทันจะเลื่อนไปผิดที่ (ติดเพดาน
+// ความสูงที่มีตอนนั้น) แถมพอเลื่อนแล้ว scroll handler ก็ไปเขียนทับตำแหน่งที่จะบันทึกด้วยค่าผิดนั้นอีก
+// ตอนนี้เลื่อนซ้ำทุกครั้งที่รูปโหลดเสร็จ จนกว่าผู้ใช้จะเริ่มเลื่อนเอง (หรือรูปครบ / ครบ 30 วิ)
+// และระหว่างนั้นไม่ให้ตำแหน่งที่จะบันทึกถูกเขียนทับ
+let restoreTarget = null;
+let restoreTimer = null;
+
+function cancelRestore() {
+  restoreTarget = null;
+  clearTimeout(restoreTimer);
+}
+
 function restoreScrollPosition(fraction) {
   const body = el("#readerBody");
+  restoreTarget = fraction;
+  currentScrollFraction = fraction;
+  clearTimeout(restoreTimer);
+  restoreTimer = setTimeout(cancelRestore, 30000);
+
   const apply = () => {
+    if (restoreTarget === null) return;
     const max = body.scrollHeight - body.clientHeight;
-    if (max > 0) body.scrollTop = fraction * max;
+    if (max > 0) body.scrollTop = restoreTarget * max;
+    currentScrollFraction = restoreTarget;
   };
   apply();
-  setTimeout(apply, 400);
-  setTimeout(apply, 1200);
+
+  const imgs = [...body.querySelectorAll("img")];
+  let pending = imgs.filter((img) => !img.complete).length;
+  const onSettled = () => {
+    apply();
+    if (--pending <= 0) setTimeout(() => { apply(); cancelRestore(); }, 150);
+  };
+  imgs.filter((img) => !img.complete).forEach((img) => {
+    img.addEventListener("load", onSettled, { once: true });
+    img.addEventListener("error", onSettled, { once: true });
+  });
+  if (pending === 0) setTimeout(() => { apply(); cancelRestore(); }, 150);
+}
+
+// ผู้ใช้เริ่มเลื่อนเองแล้ว เลิกดึงกลับไปตำแหน่งเดิม ไม่งั้นจะสู้กับนิ้วผู้ใช้
+function initRestoreCancel() {
+  const body = el("#readerBody");
+  ["touchstart", "wheel", "mousedown"].forEach((type) =>
+    body.addEventListener(type, cancelRestore, { passive: true })
+  );
+  document.addEventListener("keydown", cancelRestore);
 }
 
 function goPrevChapter() {
@@ -793,6 +864,7 @@ function renderChapter(data, chapterUrl, restoreFraction) {
       releaseTopPin();
       restoreScrollPosition(restoreFraction);
     } else {
+      cancelRestore();
       scrollReaderToTop();
     }
   }
@@ -817,6 +889,8 @@ function renderChapter(data, chapterUrl, restoreFraction) {
   if (row) {
     row.is_read = true;
     lastReadUrl = row.url;
+    const cached = chapterListCache.get(readerMangaId);
+    if (cached) cached.last_read_url = row.url;
   }
   mangaListStale = true;
 }
@@ -901,6 +975,7 @@ function initNextChapterConfirm() {
   if (nextChapterConfirmInit) return;
   nextChapterConfirmInit = true;
   initTopPin();
+  initRestoreCancel();
 
   const body = el("#readerBody");
   // เมาส์/trackpad ไม่มีจังหวะ "ยกนิ้ว" ให้จับ ใช้การหยุดหมุนสั้น ๆ แทนเป็นตัวแบ่งว่าเป็นคนละครั้ง
@@ -976,8 +1051,12 @@ function initReaderAutoHide() {
           bottombar.classList.remove("nav-hidden");
         }
         lastScrollTop = scrollTop;
-        const max = body.scrollHeight - body.clientHeight;
-        currentScrollFraction = max > 0 ? Math.max(0, Math.min(1, scrollTop / max)) : 0;
+        // ระหว่างกำลังเลื่อนกลับไปตำแหน่งเดิม (รูปยังโหลดไม่ครบ) ค่าที่อ่านได้ตอนนี้เพี้ยน ห้ามเอาไปทับ
+        if (restoreTarget === null && !pinnedToTop) {
+          const max = body.scrollHeight - body.clientHeight;
+          currentScrollFraction = max > 0 ? Math.max(0, Math.min(1, scrollTop / max)) : 0;
+          scheduleScrollSave();
+        }
         checkAutoAdvance();
         ticking = false;
       });
@@ -985,14 +1064,23 @@ function initReaderAutoHide() {
     { passive: true }
   );
 
-  // เผื่อกดออกแอป/สลับแท็บโดยไม่ได้กดปุ่มกลับ (เช่นมีธุระเข้ากะทันหัน) ยังเซฟตำแหน่งให้
+  // เผื่อกดออกแอป/สลับแท็บโดยไม่ได้กดปุ่มกลับ (เช่นมีธุระเข้ากะทันหัน) ยังเซฟตำแหน่งให้ — pagehide
+  // ด้วยเพราะ iOS Safari บางครั้งปิดหน้าโดยไม่ยิง visibilitychange
+  const saveIfReading = () => {
+    if (!el("#reader").hidden) saveScrollPosition();
+  };
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden && !el("#reader").hidden) saveScrollPosition();
+    if (document.hidden) saveIfReading();
   });
+  window.addEventListener("pagehide", saveIfReading);
 }
 
 async function closeReader() {
-  saveScrollPosition();
+  // saveScrollPosition จำตำแหน่งไว้ในหน้าเว็บทันที (ก่อนส่งเซิร์ฟเวอร์) หน้าเลือกตอนด้านล่างจึงวาดจากค่าที่
+  // ถูกต้องได้เลย ไม่ต้องรอ — ส่วนการโหลดรายชื่อตอนใหม่จากเซิร์ฟเวอร์ต้องรอให้บันทึกเสร็จก่อนเสมอ ไม่งั้น
+  // สองคำขอวิ่งชนกันและได้ค่าเก่ากลับมา
+  const saved = saveScrollPosition();
+  cancelRestore();
   el("#reader").hidden = true;
   prefetchedChapters.clear();
   document.body.style.overflow = "";
@@ -1001,6 +1089,8 @@ async function closeReader() {
     el("#chapterListView").hidden = false;
     document.body.style.overflow = "hidden";
     renderChapterRows(currentChapters);
+    scrollToLastRead();
+    await saved;
     renderChapterList({ keepScroll: true });
   }
 }

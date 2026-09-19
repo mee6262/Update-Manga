@@ -32,6 +32,11 @@ def make_id(url: str) -> str:
 _cache: dict[Path, tuple[tuple[int, int], object]] = {}
 _cache_lock = threading.Lock()
 
+# ครอบทุกช่วง "อ่านไฟล์ -> แก้ -> เขียนกลับ" ของข้อมูลรายคน (read_state/subscriptions/prefs) —
+# ตอนนี้รับหลาย thread พร้อมกัน ถ้าบันทึกตำแหน่งที่อ่านค้างกับมาร์คว่าอ่านแล้ววิ่งชนกัน ตัวที่เขียนทีหลัง
+# จะทับของตัวแรกทิ้ง (เช่น ตำแหน่งที่อ่านค้างหาย) ใช้ได้เฉพาะภายใน process เดียว ซึ่งตรงกับ waitress บน Windows
+state_lock = threading.RLock()
+
 
 def _stat_sig(path: Path):
     try:
