@@ -700,12 +700,46 @@ function saveScrollPosition() {
   }).catch(() => {});
 }
 
-// เปลี่ยนตอนแล้วต้องเริ่มอ่านจากบนสุดเสมอ — ต้องสั่งซ้ำอีกเฟรมด้วย เพราะตอนเปลี่ยนตอนด้วยการสไลด์
-// นิ้วยังลากค้างอยู่ (หรือยังมีแรงเฉื่อยเหลือ) เบราว์เซอร์จะเลื่อนเนื้อหาชุดใหม่ต่อให้อีกนิดหลังเฟรมนี้
+// เปลี่ยนตอนแล้วต้องเริ่มอ่านจากบนสุดเสมอ — ตั้ง scrollTop=0 ครั้งเดียว (หรือสองครั้ง) ไม่พอ เพราะ
+// ตอนเปลี่ยนด้วยการสไลด์ นิ้วยังลากค้างอยู่ (และหลังยกนิ้วยังมีแรงเฉื่อยอีกพัก) เบราว์เซอร์จะเลื่อน
+// เนื้อหาชุดใหม่ต่อให้ตามระยะที่ลากค้าง จึงไม่ถึงบนสุดเป็นบางครั้ง ไม่แน่นอน วิธีที่ได้ผลคือ "ตรึง"
+// ไว้ที่บนสุด (ทุก scroll event ดึงกลับเป็น 0) จนกว่าผู้ใช้จะเริ่มสไลด์รอบใหม่จริง ๆ (แตะใหม่ / หมุนล้อ
+// หลังหยุดนิ่ง / กดคีย์ / จับ scrollbar) แล้วค่อยปล่อย
+let pinnedToTop = false;
+let pinReleaseTimer = null;
+
+function releaseTopPin() {
+  pinnedToTop = false;
+  clearTimeout(pinReleaseTimer);
+}
+
 function scrollReaderToTop() {
   const body = el("#readerBody");
+  pinnedToTop = true;
+  // กันค้างถาวรเผื่อไม่มี event ไหนมาปล่อย (ปกติมีตลอด) — 2.5 วิพอเผื่อแรงเฉื่อยที่ยาวที่สุดของมือถือ
+  clearTimeout(pinReleaseTimer);
+  pinReleaseTimer = setTimeout(releaseTopPin, 2500);
+  // ปิด/เปิด overflow ชั่วขณะ เป็นวิธีที่ iOS ยอมหยุดแรงเฉื่อยที่กำลังเลื่อนอยู่ (ตั้ง scrollTop เฉย ๆ
+  // ระหว่างที่แรงเฉื่อยยังวิ่งอยู่ iOS ไม่สนใจ)
+  body.style.overflowY = "hidden";
   body.scrollTop = 0;
+  body.style.overflowY = "";
   requestAnimationFrame(() => { body.scrollTop = 0; });
+}
+
+function initTopPin() {
+  const body = el("#readerBody");
+  body.addEventListener(
+    "scroll",
+    () => {
+      if (pinnedToTop && body.scrollTop !== 0) body.scrollTop = 0;
+    },
+    { passive: true }
+  );
+  // ผู้ใช้เริ่มขยับเองจริง ๆ แล้ว ปล่อยให้เลื่อนได้ตามปกติ
+  body.addEventListener("touchstart", releaseTopPin, { passive: true });
+  body.addEventListener("mousedown", releaseTopPin, { passive: true });
+  document.addEventListener("keydown", releaseTopPin);
 }
 
 // เลื่อนไปตำแหน่งที่ค้างไว้ ทำซ้ำหลายจังหวะเพราะรูปโหลดแบบทยอย ๆ scrollHeight รวมจะค่อย ๆ นิ่งขึ้นเรื่อย ๆ
@@ -755,8 +789,12 @@ function renderChapter(data, chapterUrl, restoreFraction) {
   } else {
     body.innerHTML = "";
     appendChapterImages(data.images);
-    if (restoreFraction) restoreScrollPosition(restoreFraction);
-    else scrollReaderToTop();
+    if (restoreFraction) {
+      releaseTopPin();
+      restoreScrollPosition(restoreFraction);
+    } else {
+      scrollReaderToTop();
+    }
   }
 
   currentChapterData = { url: data.chapter_url || chapterUrl, prevUrl: data.prev_url, nextUrl: data.next_url };
@@ -862,17 +900,27 @@ let nextChapterConfirmInit = false;
 function initNextChapterConfirm() {
   if (nextChapterConfirmInit) return;
   nextChapterConfirmInit = true;
+  initTopPin();
 
   const body = el("#readerBody");
   // เมาส์/trackpad ไม่มีจังหวะ "ยกนิ้ว" ให้จับ ใช้การหยุดหมุนสั้น ๆ แทนเป็นตัวแบ่งว่าเป็นคนละครั้ง
   // (trackpad ส่ง event ต่อเนื่องจากแรงเฉื่อยอีกพักหลังยกนิ้ว ถ้าไม่รอให้นิ่งก่อนจะข้ามตอนรวด)
   let wheelIdleTimer = null;
+  let lastWheelAt = 0;
   body.addEventListener(
     "wheel",
     (e) => {
+      // ล้อหมุนครั้งแรกหลังเงียบไปนาน = เริ่มสไลด์รอบใหม่ (กรณีเพิ่งเปลี่ยนตอนด้วยนิ้วบนจอทัชมา
+      // gestureArmed จะยังเป็น false อยู่ ถ้าไม่เช็คตรงนี้ ล้อรอบแรกจะถูกกลืนไปเปล่า ๆ)
+      const now = performance.now();
+      if (now - lastWheelAt > 400) gestureArmed = true;
+      lastWheelAt = now;
       if (awaitingConfirmScroll && e.deltaY > 0) confirmAdvanceToNext();
       clearTimeout(wheelIdleTimer);
-      wheelIdleTimer = setTimeout(() => { gestureArmed = true; }, 400);
+      wheelIdleTimer = setTimeout(() => {
+        gestureArmed = true;
+        releaseTopPin(); // หยุดหมุนไปแล้ว รอบต่อไปคือการเลื่อนอ่านจริง
+      }, 400);
     },
     { passive: true }
   );
