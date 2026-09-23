@@ -138,7 +138,11 @@ def parse_release_date(text: str | None) -> str | None:
     if not match:
         return None
     month_name, day, year = match.groups()
-    month = _TH_MONTHS.get(month_name) or _EN_MONTHS.get(month_name.lower())
+    # รองรับชื่อเดือนภาษาอังกฤษแบบย่อด้วย (เช่น niceoppai.net ใช้ "Sep 09, 2026")
+    en = month_name.lower().rstrip(".")
+    month = _TH_MONTHS.get(month_name) or _EN_MONTHS.get(en) or next(
+        (n for full, n in _EN_MONTHS.items() if len(en) >= 3 and full.startswith(en)), None
+    )
     if not month:
         return None
     return f"{int(year):04d}-{month:02d}-{int(day):02d}"
@@ -173,6 +177,47 @@ def parse_chapter_list(soup: BeautifulSoup) -> list[dict]:
         chapters.reverse()
 
     return chapters
+
+
+MAX_CHAPTER_LIST_PAGES = 50  # กันวนดึงไม่จบถ้าเว็บทำลิงก์หน้าเพี้ยน (เรื่องยาวสุดที่เจอ ~70 ตอน/หน้า)
+
+
+def _parse_chrow_rows(soup: BeautifulSoup) -> list[dict]:
+    """แถวรายชื่อตอนแบบธีมของ niceoppai.net (<a class="chrow" data-ch="287">) — ใช้เลขตอนจาก
+    data-ch เป็นหลัก ข้อความในแถวบางทีเป็นแค่เลขเปล่า ๆ เลยเติม "ตอนที่" ให้ตรงกับเว็บอื่นในแอป"""
+    chapters = []
+    for a in soup.select("a.chrow[href]"):
+        title_el = a.select_one(".chrow__t")
+        raw = (title_el.get_text(strip=True) if title_el else "") or (a.get("data-ch") or "")
+        text = f"ตอนที่ {raw}" if re.fullmatch(r"\d+(?:\.\d+)?", raw) else raw
+        date_el = a.select_one(".chrow__d")
+        chapters.append({"text": text, "url": a["href"], "date": date_el.get_text(strip=True) if date_el else None})
+    return chapters
+
+
+def fetch_chrow_chapters(soup: BeautifulSoup, min_interval: float = 0.0) -> list[dict]:
+    """niceoppai.net แบ่งรายชื่อตอนเป็นหลายหน้า (.../chapter-list/2/, /3/, ...) หน้าเรื่องมีแค่หน้าแรก
+    ต้องไล่ดึงหน้าที่เหลือต่อเองถึงจะได้ครบทุกตอน หน้าไหนดึงพลาดก็ข้ามไป ได้เท่าที่ได้"""
+    chapters = _parse_chrow_rows(soup)
+    if not chapters:
+        return []
+
+    pages = {}
+    for a in soup.find_all("a", href=True):
+        match = re.search(r"/chapter-list/(\d+)/?$", a["href"])
+        if match:
+            pages[int(match.group(1))] = a["href"]
+    for n in sorted(p for p in pages if 1 < p <= MAX_CHAPTER_LIST_PAGES):
+        try:
+            page_html = fetch(pages[n], min_interval=min_interval)
+        except requests.RequestException:
+            continue
+        chapters.extend(_parse_chrow_rows(BeautifulSoup(page_html, "html.parser")))
+
+    seen = set()
+    unique = [c for c in chapters if not (c["url"] in seen or seen.add(c["url"]))]
+    unique.sort(key=lambda c: chapter_number(c["text"]) or -1, reverse=True)
+    return unique
 
 
 def fetch_madara_chapters(manga_url: str, min_interval: float = 0.0) -> list[dict]:
@@ -255,8 +300,11 @@ def parse_index_page(html: str, url: str | None = None, min_interval: float = 0.
 
     result["chapters"] = parse_chapter_list(soup)
 
-    # ไม่เจอ #chapterlist แบบ mangareader-family เลย ลองแบบ Madara แทน (ต้องยิงขอรายชื่อตอน
-    # เพิ่มอีก request เพราะหน้าเรื่องไม่ได้ฝังลิสต์มาให้)
+    # ไม่เจอ #chapterlist แบบ mangareader-family ลองแบบ niceoppai.net (a.chrow แบ่งหลายหน้า)
+    if not result["chapters"]:
+        result["chapters"] = fetch_chrow_chapters(soup, min_interval)
+
+    # ยังไม่เจออีก ลองแบบ Madara แทน (ต้องยิงขอรายชื่อตอนเพิ่มอีก request เพราะหน้าเรื่องไม่ได้ฝังลิสต์มาให้)
     if not result["chapters"] and url:
         result["chapters"] = fetch_madara_chapters(url, min_interval)
 
@@ -296,7 +344,13 @@ def parse_chapter_page(html: str) -> dict:
         # สดใสเมะ.com บางเรื่อง — เว็บเดียวกันแต่บางเรื่องยังใช้เทมเพลตเก่าที่ไม่มี ts_reader)
         # ทั้งสองแบบไม่มี prev/next link ที่ใช้ได้จริงในหน้านี้ (เป็น # เปล่า ๆ รอ JS เติมทีหลัง)
         # เลยปล่อยเป็น None — ฝั่ง app.py จะ derive จากลำดับในรายชื่อตอนแทนอยู่แล้ว
-        reading = soup.select_one(".reading-content") or soup.select_one("#readerarea")
+        # #image-container = niceoppai.net (หน้านี้มีแบนเนอร์โฆษณาเป็น <img> ปนอยู่เยอะ ต้องเจาะจงเฉพาะ
+        # กล่องนี้ ซึ่งมีแต่รูปหน้ามังงะล้วน ๆ ห้ามกวาดรูปทั้งหน้า)
+        reading = (
+            soup.select_one(".reading-content")
+            or soup.select_one("#readerarea")
+            or soup.select_one("#image-container")
+        )
         if reading:
             for img in reading.select("img.wp-manga-chapter-img, img"):
                 src = (img.get("src") or img.get("data-src") or "").strip()
