@@ -68,14 +68,54 @@ def domain_of(url: str) -> str:
     return urlparse(url).netloc
 
 
-def fetch(url: str, referer: str | None = None, min_interval: float = 0.0) -> str:
+# จำว่าเว็บไหนเพิ่งล่ม (เชื่อมต่อไม่ได้ / timeout / 5xx เช่น Cloudflare 522, 523) ไว้ช่วงหนึ่ง —
+# เว็บที่ล่มแบบนี้มักค้างรอเกือบ 20 วิก่อนจะตอบ error ถ้าไม่จำไว้ ทุกคำขอที่ไปเว็บนั้นจะต้องรอเก้อซ้ำ ๆ
+# ทั้งตอนผู้ใช้เปิดอ่านและตอนรีเฟรช พอพ้นเวลาจะกลับไปลองใหม่เองเผื่อเว็บฟื้นแล้ว
+HOST_DOWN_SECONDS = 10 * 60
+_host_down_until: dict[str, float] = {}
+
+
+def _host_key(url: str) -> str:
+    return urlparse(url).netloc.lower()
+
+
+def host_is_down(url: str) -> bool:
+    return _host_down_until.get(_host_key(url), 0.0) > time.monotonic()
+
+
+def _mark_host(url: str, down: bool):
+    if down:
+        _host_down_until[_host_key(url)] = time.monotonic() + HOST_DOWN_SECONDS
+    else:
+        _host_down_until.pop(_host_key(url), None)
+
+
+def mark_host_down(url: str):
+    _mark_host(url, down=True)
+
+
+def is_outage(exc: Exception) -> bool:
+    """error ที่แปลว่า "เว็บล่ม" จริง ๆ (ไม่ใช่แค่หน้านี้ไม่มี เช่น 404)"""
+    if isinstance(exc, (requests.ConnectionError, requests.Timeout)):
+        return True
+    resp = getattr(exc, "response", None)
+    return resp is not None and resp.status_code >= 500
+
+
+def fetch(url: str, referer: str | None = None, min_interval: float = 0.0, timeout: float = TIMEOUT) -> str:
     headers = dict(HEADERS)
     if referer:
         headers["Referer"] = referer
     if min_interval:
         throttle(url, min_interval)
-    resp = session().get(url, headers=headers, timeout=TIMEOUT)
-    resp.raise_for_status()
+    try:
+        resp = session().get(url, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        if is_outage(e):
+            _mark_host(url, down=True)
+        raise
+    _mark_host(url, down=False)
     # เว็บกลุ่มนี้ไม่ระบุ charset ใน Content-Type ทำให้ requests เดาเป็น ISO-8859-1
     # (ค่า default ตาม RFC 2616) แล้วข้อความไทยจะเพี้ยน ต้องบังคับเป็น utf-8 เสมอ
     resp.encoding = "utf-8"
@@ -188,6 +228,10 @@ def _parse_chrow_rows(soup: BeautifulSoup) -> list[dict]:
     chapters = []
     for a in soup.select("a.chrow[href]"):
         title_el = a.select_one(".chrow__t")
+        if title_el:
+            # ตอนที่เพิ่งลงมีป้าย <span class="chip">ใหม่</span> ต่อท้าย ถ้าไม่ตัดทิ้งชื่อตอนจะกลายเป็น "289ใหม่"
+            for chip in title_el.select(".chip"):
+                chip.decompose()
         raw = (title_el.get_text(strip=True) if title_el else "") or (a.get("data-ch") or "")
         text = f"ตอนที่ {raw}" if re.fullmatch(r"\d+(?:\.\d+)?", raw) else raw
         date_el = a.select_one(".chrow__d")

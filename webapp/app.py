@@ -403,23 +403,37 @@ def refresh_from_sources(sources: list[dict], min_interval: float = 0.0) -> dict
     ด้วยกัน (ตัวซ้ำตามเลขตอน แหล่งที่มาก่อนในลิสต์ชนะถ้าเลขตอนซ้ำ) เพื่อให้อ่านตอนเก่าจากแหล่งที่
     ยังมีอยู่ได้ปกติ ถึงแหล่งอื่นจะตายไปแล้วก็ตาม แหล่งไหนดึงพลาดก็ข้ามไป ไม่ล้มทั้งเรื่อง"""
     per_source = []
+    failed = 0
     for src in sources:
         url = src.get("url")
         if not url:
+            continue
+        # เว็บที่เพิ่งล่มไป (จำไว้ใน scraper) ข้ามไปก่อน ไม่ต้องรอ timeout ซ้ำทุกเรื่องที่อยู่เว็บเดียวกัน
+        if scraper.host_is_down(url):
+            failed += 1
+            print(f"⚠️ ข้าม {url} (เว็บนี้เพิ่งล่ม)")
             continue
         try:
             html = scraper.fetch(url, min_interval=min_interval)
             per_source.append(scraper.parse_index_page(html, url, min_interval))
         except Exception as e:
+            failed += 1
             print(f"⚠️ ดึงข้อมูลจาก {url} ไม่สำเร็จ: {e}")
 
     if not per_source:
         return {}
 
+    # ตอนเดียวกันจากหลายแหล่ง: แหล่งแรกในลิสต์เป็นลิงก์หลัก ส่วนของแหล่งอื่นเก็บไว้ใน "alts" เป็นทางสำรอง
+    # เวลาแหล่งหลักล่มตอนผู้ใช้กดอ่าน จะได้สลับไปอ่านจากแหล่งอื่นให้อัตโนมัติ (ดู get_chapter)
     by_num = {}
     for parsed in per_source:
         for c in parsed["chapters"]:
-            by_num.setdefault(_chapter_key(c["text"]), c)
+            key = _chapter_key(c["text"])
+            primary = by_num.get(key)
+            if primary is None:
+                by_num[key] = {**c}
+            elif c["url"] != primary["url"] and c["url"] not in primary.get("alts", []):
+                primary.setdefault("alts", []).append(c["url"])
     merged_chapters = sorted(by_num.values(), key=_num_or_neg, reverse=True)
 
     # เผื่อทุกแหล่งไม่มี #chapterlist/AJAX เลย (เช่น Madara ที่ดึงลิสต์ไม่ได้) แต่ยังรู้ตอนล่าสุด
@@ -434,6 +448,8 @@ def refresh_from_sources(sources: list[dict], min_interval: float = 0.0) -> dict
     best = max(candidates, key=_num_or_neg, default=None)
 
     return {
+        # มีบางแหล่งดึงไม่สำเร็จรอบนี้ (_apply_refresh จะเก็บตอนเก่าของแหล่งนั้นไว้ ไม่ให้หายจากลิสต์)
+        "_partial": failed > 0,
         "chapters": merged_chapters,
         "cover_url": next((p["cover_url"] for p in per_source if p.get("cover_url")), None),
         "latest_chapter": best["text"] if best else None,
@@ -448,6 +464,12 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _is_new_chapter(prev: str | None, new: str | None) -> bool:
+    """ตอนล่าสุดเปลี่ยนจริงไหม — เทียบด้วยคีย์ตอน (เลขตอน) ไม่ใช่ข้อความตรง ๆ เพราะบางเว็บเปลี่ยนรูปแบบ
+    ข้อความของตอนเดิมได้ (เช่นมีป้าย "ใหม่" ต่อท้ายช่วงแรก แล้วหายไปทีหลัง) ถ้าเทียบข้อความจะแจ้งเตือนซ้ำ"""
+    return bool(new) and _chapter_key(new) != _chapter_key(prev)
+
+
 def _apply_refresh(manga: dict, parsed: dict) -> str | None:
     """เอาผลจาก refresh_from_sources มาอัพเดตลง manga record คืนค่าตอนล่าสุดก่อนหน้า (ให้ caller
     เอาไปเทียบว่าเปลี่ยนไหมสำหรับแจ้งเตือน) — ถ้ารอบนี้ดึงรายชื่อตอนมาได้ว่างเปล่า (เช่นโดน
@@ -455,13 +477,29 @@ def _apply_refresh(manga: dict, parsed: dict) -> str | None:
     ว่าง เพราะเรื่องที่ตอนล่าสุดหายไปจากลิสต์ (ถึง latest_chapter_url จะยังถูกต้อง) ทำให้ประวัติการ
     อ่าน/bookmark ของตอนอื่น ๆ ในเรื่องนั้นหาตัวเองในลิสต์ไม่เจอ แล้วมองว่ายังไม่เคยอ่านทั้งหมด"""
     prev_chapter = manga.get("latest_chapter")
+    parsed = dict(parsed)
+    partial = parsed.pop("_partial", False)
     if not parsed.get("chapters") and manga.get("chapters"):
-        parsed = {**parsed, "chapters": manga["chapters"]}
+        parsed["chapters"] = manga["chapters"]
+    elif partial and manga.get("chapters"):
+        # บางแหล่งล่มรอบนี้ ข้อมูลของแหล่งนั้นจะหายไปจากผลรอบนี้ทั้งที่เว็บแค่ล่มชั่วคราว:
+        # - ตอนที่มีแค่ในแหล่งนั้น (เช่นตอนเก่า ๆ ที่แหล่งอื่นไม่มี) เก็บตอนเดิมไว้ในลิสต์ก่อน
+        # - ตอนที่มีหลายแหล่ง ลิงก์เดิมของแหล่งที่ล่มเก็บไว้เป็นลิงก์สำรอง ไม่งั้นหน้าเว็บที่ยังถือลิงก์เดิมอยู่
+        #   (เปิดค้างไว้ก่อนรีเฟรช) กดอ่านแล้วจะหาทางสลับไปแหล่งอื่นไม่เจอ
+        # รอแหล่งนั้นกลับมาแล้วรีเฟรชรอบถัดไปจะได้ของสดครบเหมือนเดิม
+        old_by_key = {_chapter_key(c["text"]): c for c in manga["chapters"]}
+        for c in parsed["chapters"]:
+            old = old_by_key.pop(_chapter_key(c["text"]), None)
+            for url in [old["url"], *(old.get("alts") or [])] if old else []:
+                if url != c["url"] and url not in c.get("alts", []):
+                    c.setdefault("alts", []).append(url)
+        if old_by_key:
+            parsed["chapters"] = sorted(parsed["chapters"] + list(old_by_key.values()), key=_num_or_neg, reverse=True)
     manga.update(parsed)
     manga["last_checked_at"] = now_iso()
     if parsed.get("latest_chapter_url"):
         manga["source"] = urlparse(parsed["latest_chapter_url"]).netloc
-    if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
+    if _is_new_chapter(prev_chapter, parsed.get("latest_chapter")):
         manga["last_updated_at"] = manga["last_checked_at"]
     return prev_chapter
 
@@ -661,6 +699,7 @@ def add_manga():
     # ลองดึงข้อมูลทันทีตอนเพิ่ม เพื่อให้เห็นตอนล่าสุด/ปก ทันที
     parsed = refresh_from_sources(new_item["sources"])
     if parsed:
+        parsed.pop("_partial", None)
         new_item.update(parsed)
         new_item["last_checked_at"] = now_iso()
         if parsed.get("latest_chapter_url"):
@@ -762,7 +801,7 @@ def _commit_refreshes(results: dict[str, dict]) -> list[str]:
         if not parsed:
             continue
         prev_chapter = _apply_refresh(manga, parsed)
-        if parsed.get("latest_chapter") and parsed["latest_chapter"] != prev_chapter:
+        if _is_new_chapter(prev_chapter, parsed.get("latest_chapter")):
             changed.append((manga, prev_chapter))
     storage.save_manga(manga_items)
 
@@ -823,6 +862,66 @@ def refresh_all():
     return jsonify({"items": items, "updated_ids": updated_ids, "failed": failed})
 
 
+FAST_FAIL_TIMEOUT = 8  # ยังมีแหล่งสำรองให้ลองต่อ ไม่ต้องรอเว็บที่ล่มจนครบ 20 วิ
+
+
+def _load_chapter_from_any(manga_id: str, candidates: list[str]) -> tuple[dict | None, str | None, list[str]]:
+    """ลองดึงหน้าตอนจากลิงก์ทีละแหล่งจนกว่าจะได้ คืน (data, ลิงก์ที่ใช้ได้, error ของแหล่งที่พลาด)
+
+    รอบแรกใช้เฉพาะแหล่งที่ยังดีอยู่ (ทั้งตัวเว็บและเซิร์ฟเวอร์รูปของมัน) — เช็คแคชก่อนแล้วค่อยออกเน็ต
+    รอบสองค่อยยอมใช้ของเว็บที่เพิ่งล่มเผื่อไม่มีทางเลือกอื่นแล้ว: แคชเก่าของเว็บที่ล่มมักชี้ไปที่รูปบน
+    เซิร์ฟเวอร์ที่ล่มตามไปด้วย ถ้าหยิบมาใช้ก่อนจะได้หน้าที่รูปขึ้นไม่ครบ ทั้งที่แหล่งอื่นอ่านได้ปกติ"""
+    healthy = [u for u in candidates if not scraper.host_is_down(u)]
+    down = [u for u in candidates if scraper.host_is_down(u)]
+    network_order = healthy + down
+    errors = []
+
+    for url in healthy:
+        cached = storage.load_chapter_cache(manga_id, url)
+        if cached and _images_healthy(cached):
+            return cached, url, errors
+    for url in healthy:
+        data, error = _fetch_chapter(manga_id, url, is_last=url == network_order[-1])
+        if data and _images_healthy(data):
+            return data, url, errors
+        if error:
+            errors.append(error)
+
+    for url in candidates:
+        cached = storage.load_chapter_cache(manga_id, url)
+        if cached:
+            return cached, url, errors
+    for url in down:
+        data, error = _fetch_chapter(manga_id, url, is_last=url == network_order[-1])
+        if data:
+            return data, url, errors
+        errors.append(error)
+    return None, None, errors
+
+
+def _images_healthy(data: dict) -> bool:
+    images = data.get("images") or []
+    return not (images and scraper.host_is_down(images[0]))
+
+
+def _fetch_chapter(manga_id: str, url: str, is_last: bool) -> tuple[dict | None, str | None]:
+    """ดึงหน้าตอนจากลิงก์เดียว คืน (data, error) และเก็บแคชไว้ถ้าได้รูปมา"""
+    try:
+        # ใช้โดเมนจากลิงก์ตอนเอง แทน manga["url"] ตรง ๆ เพราะบางเว็บผู้ใช้กรอกโดเมนภาษาไทย/
+        # unicode ไว้ — แต่ต้อง normalize เป็น punycode ก่อนเสมอ เพราะใส่เป็นค่า header (Referer)
+        # แบบ unicode ตรง ๆ ไม่ได้ — HTTP header ต้อง encode เป็น latin-1 ได้เท่านั้น
+        referer = f"{urlparse(url).scheme}://{_normalize_host(urlparse(url).netloc)}/"
+        timeout = scraper.TIMEOUT if is_last else FAST_FAIL_TIMEOUT
+        data = scraper.parse_chapter_page(scraper.fetch(url, referer=referer, timeout=timeout))
+    except Exception as e:
+        return None, f"{urlparse(url).netloc}: {e}"
+    if not data.get("images"):
+        return None, f"{urlparse(url).netloc}: ไม่พบรูปภาพในหน้าตอน"
+    storage.save_chapter_cache(manga_id, url, data)
+    storage.add_image_domains({urlparse(src).netloc for src in data["images"]})
+    return data, None
+
+
 @app.route("/api/manga/<manga_id>/chapter", methods=["GET"])
 def get_chapter(manga_id):
     manga = storage.get_manga(manga_id)
@@ -839,31 +938,32 @@ def get_chapter(manga_id):
     if _normalize_host(urlparse(chapter_url).netloc) not in _source_domains(manga):
         return jsonify({"error": "URL ตอนไม่ถูกต้อง"}), 400
 
-    cached = storage.load_chapter_cache(manga_id, chapter_url)
-    if cached:
-        data = cached
-    else:
-        try:
-            # ใช้โดเมนจาก chapter_url เอง แทน manga["url"] ตรง ๆ เพราะบางเว็บผู้ใช้กรอกโดเมนภาษาไทย/
-            # unicode ไว้ — แต่ต้อง normalize เป็น punycode ก่อนเสมอ (เผื่อ chapter_url ที่ส่งมาดัน
-            # เป็นโดเมนภาษาไทยตรง ๆ ด้วย ไม่ใช่แค่ที่ scrape มาซึ่งมักเป็น punycode อยู่แล้ว) เพราะ
-            # ใส่เป็นค่า header (Referer) แบบ unicode ตรง ๆ ไม่ได้ — HTTP header ต้อง encode เป็น
-            # latin-1 ได้เท่านั้น
-            referer = f"{urlparse(chapter_url).scheme}://{_normalize_host(urlparse(chapter_url).netloc)}/"
-            html = scraper.fetch(chapter_url, referer=referer)
-            data = scraper.parse_chapter_page(html)
-        except Exception as e:
-            return jsonify({"error": f"ดึงหน้าตอนไม่สำเร็จ: {e}"}), 502
-        if data.get("images"):
-            storage.save_chapter_cache(manga_id, chapter_url, data)
-            storage.add_image_domains({urlparse(src).netloc for src in data["images"]})
-
     chapters = manga.get("chapters") or []
-    idx = next((i for i, c in enumerate(chapters) if c["url"] == chapter_url), None)
+    # หาตอนนี้ในรายชื่อตอน ทั้งจากลิงก์หลักและลิงก์สำรอง (ผู้ใช้อาจมาจากลิงก์ของแหล่งสำรองก็ได้)
+    idx = next(
+        (i for i, c in enumerate(chapters) if c["url"] == chapter_url or chapter_url in (c.get("alts") or [])),
+        None,
+    )
+    entry = chapters[idx] if idx is not None else {}
+
+    # ตอนเดียวกันจากทุกแหล่งที่รู้จัก เรียงลิงก์ที่ขอมาก่อน แต่เว็บที่เพิ่งล่มไปไว้ท้ายสุด
+    candidates = []
+    for url in [chapter_url, entry.get("url"), *(entry.get("alts") or [])]:
+        if url and url not in candidates:
+            candidates.append(url)
+    candidates.sort(key=scraper.host_is_down)
+
+    data, served_from, errors = _load_chapter_from_any(manga_id, candidates)
+    if data is None:
+        return jsonify({"error": "ดึงหน้าตอนไม่สำเร็จจากทุกแหล่งที่มา: " + " | ".join(errors)}), 502
+    if served_from != chapter_url:
+        # ได้มาจากแหล่งสำรอง เก็บแคชไว้ใต้ลิงก์ที่ขอด้วย รอบหน้าเปิดตอนนี้จะได้ขึ้นทันทีไม่ต้องลองเว็บที่ล่มซ้ำ
+        storage.save_chapter_cache(manga_id, chapter_url, data)
 
     # เว็บกลุ่ม Madara ไม่มีลิงก์ตอนก่อนหน้า/ถัดไปในหน้าอ่าน หาเอาจากลำดับในรายชื่อตอนแทน
-    # (ลิสต์เรียงใหม่->เก่า ตอนถัดไปจึงอยู่ก่อนหน้าในลิสต์)
-    if not data.get("prev_url") and not data.get("next_url") and idx is not None:
+    # (ลิสต์เรียงใหม่->เก่า ตอนถัดไปจึงอยู่ก่อนหน้าในลิสต์) — ถ้าได้มาจากแหล่งสำรองก็ใช้ลำดับในลิสต์
+    # เหมือนกัน เพราะลิงก์ก่อนหน้า/ถัดไปในหน้านั้นเป็นของเว็บสำรอง ไม่ตรงกับลิงก์ในรายชื่อตอนของเรา
+    if idx is not None and (served_from != chapter_url or (not data.get("prev_url") and not data.get("next_url"))):
         data["next_url"] = chapters[idx - 1]["url"] if idx > 0 else None
         data["prev_url"] = chapters[idx + 1]["url"] if idx + 1 < len(chapters) else None
 
@@ -1075,6 +1175,9 @@ def proxy_image():
         )
         resp.raise_for_status()
     except Exception as e:
+        # จำไว้ว่าเซิร์ฟเวอร์รูปนี้ล่ม หน้าอ่านจะได้ขอรายการรูปใหม่จากแหล่งสำรองแทน (ดู get_chapter)
+        if scraper.is_outage(e):
+            scraper.mark_host_down(src)
         return f"fetch failed: {e}", 502
 
     # เฉพาะ path นี้ที่โหลดทั้งรูปเข้าหน่วยความจำ (stream=False ด้านบน) เพราะต้องมีไฟล์ครบก่อนถึงย่อได้

@@ -681,12 +681,39 @@ function appendChapterImages(images) {
   images.forEach((src, i) => {
     const img = document.createElement("img");
     img.src = proxied(src);
+    img.dataset.src = src;
     img.decoding = "async";
     // 2 รูปแรกคือสิ่งที่ผู้ใช้เห็นทันทีที่เปิดตอน ให้ browser จัดคิวโหลดก่อนรูปที่เหลือ
     if (i < 2) img.fetchPriority = "high";
+    img.addEventListener("error", retryChapterFromOtherSource, { once: true });
     frag.appendChild(img);
   });
-  body.appendChild(frag);
+  // แทรกก่อนข้อความ "เลื่อนต่อเพื่อไปตอนถัดไป" (ถ้ามี) ให้อยู่ท้ายสุดเสมอ
+  body.insertBefore(frag, el("#nextHint"));
+}
+
+// รูปของตอนนี้โหลดไม่ขึ้น = เซิร์ฟเวอร์รูปของแหล่งนี้อาจล่มอยู่ ขอรายการรูปใหม่ 1 ครั้ง ตอนนี้เซิร์ฟเวอร์เรา
+// รู้แล้วว่าเจ้านั้นล่ม (จำไว้ตอนพร็อกซีรูปพลาด) จะส่งรูปจากแหล่งสำรองที่ยังดีมาให้แทน ถ้าได้ชุดเดิมกลับมา
+// แปลว่าไม่มีแหล่งอื่นให้สลับ ก็ปล่อยไว้แบบนั้น (ลองครั้งเดียวต่อตอน กันวนขอซ้ำไม่จบ)
+let sourceRetryDone = false;
+
+async function retryChapterFromOtherSource() {
+  if (sourceRetryDone || !readerMangaId || !currentChapterData.url) return;
+  sourceRetryDone = true;
+  const mangaId = readerMangaId;
+  const url = currentChapterData.url;
+  try {
+    const data = await getJSON(`/api/manga/${mangaId}/chapter?url=${encodeURIComponent(url)}&peek=1`);
+    if (currentChapterData.url !== url || !(data.images || []).length) return; // ผู้ใช้เปลี่ยนตอนไปแล้ว
+    const body = el("#readerBody");
+    const oldImgs = [...body.querySelectorAll("img")];
+    if (oldImgs[0] && oldImgs[0].dataset.src === data.images[0]) return;
+    oldImgs.forEach((img) => img.remove());
+    appendChapterImages(data.images);
+    if (restoreTarget !== null) restoreScrollPosition(restoreTarget);
+  } catch (e) {
+    // ไม่มีทางเลือกอื่น ปล่อยตามเดิม
+  }
 }
 
 // จำตำแหน่งที่อ่านค้างไว้ในหน้าเว็บเองทันที (ไม่รอเซิร์ฟเวอร์) — เดิมพึ่งการโหลดรายชื่อตอนใหม่จาก
@@ -875,6 +902,7 @@ function renderChapter(data, chapterUrl, restoreFraction) {
   el("#readerNext").disabled = !data.next_url;
 
   awaitingConfirmScroll = false;
+  sourceRetryDone = false;
   if (data.next_url) {
     const hint = document.createElement("div");
     hint.className = "next-hint";
