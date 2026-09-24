@@ -397,7 +397,7 @@ def _num_or_neg(c: dict) -> float:
     return n if n is not None else -1
 
 
-def refresh_from_sources(sources: list[dict], min_interval: float = 0.0) -> dict:
+def refresh_from_sources(sources: list[dict], min_interval: float = 0.0, manga_id: str | None = None) -> dict:
     """ดึงข้อมูลจากทุกแหล่งที่มาของเรื่องเดียวกันแล้วรวมเป็นชุดเดียว กันเรื่องที่แหล่งใดแหล่งหนึ่ง
     เงียบหายไม่อัพเดต — ตอนล่าสุดเอาจากแหล่งที่มีเลขตอนสูงสุด ส่วนรายชื่อตอนรวมจากทุกแหล่งเข้า
     ด้วยกัน (ตัวซ้ำตามเลขตอน แหล่งที่มาก่อนในลิสต์ชนะถ้าเลขตอนซ้ำ) เพื่อให้อ่านตอนเก่าจากแหล่งที่
@@ -435,11 +435,13 @@ def refresh_from_sources(sources: list[dict], min_interval: float = 0.0) -> dict
             elif c["url"] != primary["url"] and c["url"] not in primary.get("alts", []):
                 primary.setdefault("alts", []).append(c["url"])
     merged_chapters = sorted(by_num.values(), key=_num_or_neg, reverse=True)
+    dropped = _drop_placeholder_chapters(manga_id, merged_chapters, min_interval)
+    dropped_urls = {u for c in dropped for u in [c["url"], *(c.get("alts") or [])]}
 
     # เผื่อทุกแหล่งไม่มี #chapterlist/AJAX เลย (เช่น Madara ที่ดึงลิสต์ไม่ได้) แต่ยังรู้ตอนล่าสุด
     # จากปุ่ม "Read Last" อยู่ — เทียบตอนล่าสุดของแต่ละแหล่งเข้าไปในกองเดียวกันด้วย
     candidates = list(merged_chapters)
-    known_urls = {c["url"] for c in candidates}
+    known_urls = {c["url"] for c in candidates} | dropped_urls
     for parsed in per_source:
         if parsed.get("latest_chapter_url") and parsed["latest_chapter_url"] not in known_urls:
             candidates.append({"text": parsed.get("latest_chapter"), "url": parsed["latest_chapter_url"], "date": None})
@@ -450,6 +452,8 @@ def refresh_from_sources(sources: list[dict], min_interval: float = 0.0) -> dict
     return {
         # มีบางแหล่งดึงไม่สำเร็จรอบนี้ (_apply_refresh จะเก็บตอนเก่าของแหล่งนั้นไว้ ไม่ให้หายจากลิสต์)
         "_partial": failed > 0,
+        # ตอนหลอกที่ถูกตัดทิ้งรอบนี้ (_apply_refresh ต้องไม่เอาตอนเดิมที่เคยเก็บไว้กลับมาใส่คืน)
+        "_dropped_keys": [_chapter_key(c["text"]) for c in dropped],
         "chapters": merged_chapters,
         "cover_url": next((p["cover_url"] for p in per_source if p.get("cover_url")), None),
         "latest_chapter": best["text"] if best else None,
@@ -467,7 +471,13 @@ def now_iso() -> str:
 def _is_new_chapter(prev: str | None, new: str | None) -> bool:
     """ตอนล่าสุดเปลี่ยนจริงไหม — เทียบด้วยคีย์ตอน (เลขตอน) ไม่ใช่ข้อความตรง ๆ เพราะบางเว็บเปลี่ยนรูปแบบ
     ข้อความของตอนเดิมได้ (เช่นมีป้าย "ใหม่" ต่อท้ายช่วงแรก แล้วหายไปทีหลัง) ถ้าเทียบข้อความจะแจ้งเตือนซ้ำ"""
-    return bool(new) and _chapter_key(new) != _chapter_key(prev)
+    if not new:
+        return False
+    new_key, prev_key = _chapter_key(new), _chapter_key(prev)
+    # เลขตอนถอยหลัง (เช่นตอนหลอกที่เคยขึ้นเป็นตอนล่าสุดถูกตัดทิ้ง กลับมาเป็นตอนเดิม) ไม่ใช่ตอนใหม่
+    if isinstance(new_key, float) and isinstance(prev_key, float):
+        return new_key > prev_key
+    return new_key != prev_key
 
 
 def _apply_refresh(manga: dict, parsed: dict) -> str | None:
@@ -479,6 +489,7 @@ def _apply_refresh(manga: dict, parsed: dict) -> str | None:
     prev_chapter = manga.get("latest_chapter")
     parsed = dict(parsed)
     partial = parsed.pop("_partial", False)
+    dropped_keys = set(parsed.pop("_dropped_keys", []))
     if not parsed.get("chapters") and manga.get("chapters"):
         parsed["chapters"] = manga["chapters"]
     elif partial and manga.get("chapters"):
@@ -487,7 +498,9 @@ def _apply_refresh(manga: dict, parsed: dict) -> str | None:
         # - ตอนที่มีหลายแหล่ง ลิงก์เดิมของแหล่งที่ล่มเก็บไว้เป็นลิงก์สำรอง ไม่งั้นหน้าเว็บที่ยังถือลิงก์เดิมอยู่
         #   (เปิดค้างไว้ก่อนรีเฟรช) กดอ่านแล้วจะหาทางสลับไปแหล่งอื่นไม่เจอ
         # รอแหล่งนั้นกลับมาแล้วรีเฟรชรอบถัดไปจะได้ของสดครบเหมือนเดิม
-        old_by_key = {_chapter_key(c["text"]): c for c in manga["chapters"]}
+        old_by_key = {
+            k: c for c in manga["chapters"] if (k := _chapter_key(c["text"])) not in dropped_keys
+        }
         for c in parsed["chapters"]:
             old = old_by_key.pop(_chapter_key(c["text"]), None)
             for url in [old["url"], *(old.get("alts") or [])] if old else []:
@@ -697,9 +710,10 @@ def add_manga():
     }
 
     # ลองดึงข้อมูลทันทีตอนเพิ่ม เพื่อให้เห็นตอนล่าสุด/ปก ทันที
-    parsed = refresh_from_sources(new_item["sources"])
+    parsed = refresh_from_sources(new_item["sources"], manga_id=mid)
     if parsed:
         parsed.pop("_partial", None)
+        parsed.pop("_dropped_keys", None)
         new_item.update(parsed)
         new_item["last_checked_at"] = now_iso()
         if parsed.get("latest_chapter_url"):
@@ -744,7 +758,7 @@ def edit_manga(manga_id):
     sources = [{"url": u} for u in urls]
     # ดึงข้อมูลใหม่ทันทีตามแหล่งที่มาชุดล่าสุด เพื่อให้เห็นผลทันทีไม่ต้องรอรีเฟรชรอบถัดไป
     # (ดึงก่อนโหลดไฟล์มาแก้ ช่วงรอเว็บต้นทางหลายวินาทีจะได้ไม่ทับของที่คนอื่นบันทึกไประหว่างนั้น)
-    parsed = refresh_from_sources(sources)
+    parsed = refresh_from_sources(sources, manga_id=manga_id)
 
     manga_items = storage.load_manga(fresh=True)
     manga = next((m for m in manga_items if m["id"] == manga_id), None)
@@ -819,7 +833,7 @@ def refresh_manga(manga_id):
     if not manga:
         return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
 
-    parsed = refresh_from_sources(_sources_of(manga))
+    parsed = refresh_from_sources(_sources_of(manga), manga_id=manga_id)
     if not parsed:
         return jsonify({"error": "ดึงข้อมูลไม่สำเร็จ (ทุกแหล่งที่มา)"}), 502
 
@@ -844,7 +858,7 @@ def refresh_all():
 
     def work(manga):
         try:
-            return manga, refresh_from_sources(_sources_of(manga), min_interval=REQUEST_DELAY)
+            return manga, refresh_from_sources(_sources_of(manga), min_interval=REQUEST_DELAY, manga_id=manga["id"])
         except Exception as e:
             # เรื่องเดียวพังต้องไม่ทำให้ทั้งรอบล้ม (ไม่งั้นผลของเรื่องที่ดึงสำเร็จแล้วหายไปทั้งหมด)
             print(f"⚠️ รีเฟรช {manga['name']} ไม่สำเร็จ: {e}")
@@ -864,6 +878,72 @@ def refresh_all():
 
 FAST_FAIL_TIMEOUT = 8  # ยังมีแหล่งสำรองให้ลองต่อ ไม่ต้องรอเว็บที่ล่มจนครบ 20 วิ
 
+# บางเว็บลง "ตอนใหม่" ไว้เรียกยอดเข้าชมทั้งที่ยังไม่มีตอนจริง (หน้าตอนมีแค่แบนเนอร์ของเว็บ 1-2 รูป) —
+# หน้าตอนที่มีรูปน้อยกว่านี้ถือเป็นตอนหลอก ตอนจริงของเว็บกลุ่มนี้มีตั้งแต่ราว 10 รูปขึ้นไป
+MIN_REAL_IMAGES = 3
+MAX_PLACEHOLDER_CHECKS = 5  # ตรวจจากตอนล่าสุดลงมาไม่เกินกี่ตอนต่อรอบ (กันยิงหน้าตอนเยอะเกิน)
+
+
+def _has_real_images(data: dict) -> bool:
+    return sum(1 for src in data.get("images") or [] if not src.startswith("data:")) >= MIN_REAL_IMAGES
+
+
+def _referer_for(url: str) -> str:
+    # ใช้โดเมนจากลิงก์ตอนเอง แทน manga["url"] ตรง ๆ เพราะบางเว็บผู้ใช้กรอกโดเมนภาษาไทย/unicode ไว้ —
+    # แต่ต้อง normalize เป็น punycode ก่อนเสมอ เพราะใส่เป็นค่า header (Referer) แบบ unicode ตรง ๆ
+    # ไม่ได้ — HTTP header ต้อง encode เป็น latin-1 ได้เท่านั้น
+    return f"{urlparse(url).scheme}://{_normalize_host(urlparse(url).netloc)}/"
+
+
+def _drop_placeholder_chapters(manga_id: str | None, chapters: list[dict], min_interval: float) -> list[dict]:
+    """ตรวจตอนบนสุดของรายชื่อ (เรียงใหม่ -> เก่า) ทีละตอนจนเจอตอนจริงตอนแรก ตอนหลอกที่เจอระหว่างทาง
+    ตัดออกจากลิสต์ (แก้ list ที่ส่งมาเลย) คืนรายการตอนที่ตัดทิ้ง — ตอนที่ถูกตัดไม่ขึ้นเป็นตอนใหม่ ไม่แจ้ง
+    เตือน และจะถูกตรวจซ้ำทุกรอบรีเฟรช พอเว็บอัปโหลดรูปจริงเมื่อไหร่ก็ผ่านและขึ้นเป็นตอนใหม่ตามปกติ
+
+    ตอนที่ผ่านแล้วถูกเก็บลงแคช รอบถัดไปไม่ต้องยิงเน็ตซ้ำ (และผู้ใช้กดอ่านได้ทันทีด้วย) ส่วนตอนที่ตรวจ
+    ไม่ได้ (เว็บล่ม/timeout) ปล่อยไว้ตามเดิม ไม่ตัดทิ้งเพราะแค่สงสัย"""
+    dropped = []
+    for chapter in list(chapters[:MAX_PLACEHOLDER_CHECKS]):
+        verdict, real_url = _verify_chapter(manga_id, chapter, min_interval)
+        if verdict == "placeholder":
+            print(f"⚠️ ข้าม {chapter['text']} — หน้าตอนยังไม่มีภาพมังงะจริง (น่าจะเป็นตอนที่ลงไว้เรียกยอด)")
+            chapters.remove(chapter)
+            dropped.append(chapter)
+            continue
+        if verdict == "real" and real_url != chapter["url"]:
+            # แหล่งหลักเป็นตอนหลอก แต่แหล่งสำรองมีตอนจริง ใช้แหล่งสำรองเป็นลิงก์หลักแทน
+            others = [u for u in [chapter["url"], *(chapter.get("alts") or [])] if u != real_url]
+            chapter["url"], chapter["alts"] = real_url, others
+        break
+    return dropped
+
+
+def _verify_chapter(manga_id: str | None, chapter: dict, min_interval: float) -> tuple[str, str | None]:
+    """คืน ("real", ลิงก์ที่มีภาพจริง) / ("placeholder", None) / ("unknown", None) เมื่อตรวจไม่ได้"""
+    urls = [chapter["url"], *(chapter.get("alts") or [])]
+    if manga_id:
+        for url in urls:
+            cached = storage.load_chapter_cache(manga_id, url)
+            if cached and _has_real_images(cached):
+                return "real", url
+
+    saw_placeholder = False
+    for url in urls:
+        if scraper.host_is_down(url):
+            continue
+        try:
+            html = scraper.fetch(url, referer=_referer_for(url), min_interval=min_interval, timeout=FAST_FAIL_TIMEOUT)
+            data = scraper.parse_chapter_page(html)
+        except Exception:
+            continue
+        if _has_real_images(data):
+            if manga_id:
+                storage.save_chapter_cache(manga_id, url, data)
+                storage.add_image_domains({urlparse(src).netloc for src in data["images"]})
+            return "real", url
+        saw_placeholder = True
+    return ("placeholder" if saw_placeholder else "unknown"), None
+
 
 def _load_chapter_from_any(manga_id: str, candidates: list[str]) -> tuple[dict | None, str | None, list[str]]:
     """ลองดึงหน้าตอนจากลิงก์ทีละแหล่งจนกว่าจะได้ คืน (data, ลิงก์ที่ใช้ได้, error ของแหล่งที่พลาด)
@@ -878,7 +958,7 @@ def _load_chapter_from_any(manga_id: str, candidates: list[str]) -> tuple[dict |
 
     for url in healthy:
         cached = storage.load_chapter_cache(manga_id, url)
-        if cached and _images_healthy(cached):
+        if cached and _has_real_images(cached) and _images_healthy(cached):
             return cached, url, errors
     for url in healthy:
         data, error = _fetch_chapter(manga_id, url, is_last=url == network_order[-1])
@@ -889,7 +969,7 @@ def _load_chapter_from_any(manga_id: str, candidates: list[str]) -> tuple[dict |
 
     for url in candidates:
         cached = storage.load_chapter_cache(manga_id, url)
-        if cached:
+        if cached and _has_real_images(cached):
             return cached, url, errors
     for url in down:
         data, error = _fetch_chapter(manga_id, url, is_last=url == network_order[-1])
@@ -907,16 +987,15 @@ def _images_healthy(data: dict) -> bool:
 def _fetch_chapter(manga_id: str, url: str, is_last: bool) -> tuple[dict | None, str | None]:
     """ดึงหน้าตอนจากลิงก์เดียว คืน (data, error) และเก็บแคชไว้ถ้าได้รูปมา"""
     try:
-        # ใช้โดเมนจากลิงก์ตอนเอง แทน manga["url"] ตรง ๆ เพราะบางเว็บผู้ใช้กรอกโดเมนภาษาไทย/
-        # unicode ไว้ — แต่ต้อง normalize เป็น punycode ก่อนเสมอ เพราะใส่เป็นค่า header (Referer)
-        # แบบ unicode ตรง ๆ ไม่ได้ — HTTP header ต้อง encode เป็น latin-1 ได้เท่านั้น
-        referer = f"{urlparse(url).scheme}://{_normalize_host(urlparse(url).netloc)}/"
         timeout = scraper.TIMEOUT if is_last else FAST_FAIL_TIMEOUT
-        data = scraper.parse_chapter_page(scraper.fetch(url, referer=referer, timeout=timeout))
+        data = scraper.parse_chapter_page(scraper.fetch(url, referer=_referer_for(url), timeout=timeout))
     except Exception as e:
         return None, f"{urlparse(url).netloc}: {e}"
-    if not data.get("images"):
-        return None, f"{urlparse(url).netloc}: ไม่พบรูปภาพในหน้าตอน"
+    if not _has_real_images(data):
+        # ห้ามเก็บลงแคช: พอเว็บอัปโหลดรูปจริงทีหลัง จะได้ดึงของใหม่ ไม่ค้างหน้าว่างไว้ตลอด
+        return None, (
+            f"{urlparse(url).netloc}: ตอนนี้ยังไม่มีภาพมังงะ (เว็บต้นทางลงตอนไว้ก่อนแต่ยังไม่อัปโหลดรูปจริง)"
+        )
     storage.save_chapter_cache(manga_id, url, data)
     storage.add_image_domains({urlparse(src).netloc for src in data["images"]})
     return data, None

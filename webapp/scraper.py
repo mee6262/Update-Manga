@@ -304,6 +304,9 @@ def _parse_madara_latest(soup: BeautifulSoup) -> tuple[str | None, str | None]:
     for a in soup.find_all("a", href=True):
         if "read last" in a.get_text(strip=True).lower():
             href = a["href"]
+            # บางเว็บ (เช่น manga-lc.net) ปุ่มนี้เป็นแค่ "#" รอ JS เติมทีหลัง ไม่ใช่ลิงก์ตอนจริง
+            if not href.startswith("http"):
+                continue
             num_match = re.search(r"(\d+)/?$", href.rstrip("/"))
             text = f"ตอนที่ {num_match.group(1)}" if num_match else a.get_text(strip=True)
             return text, href
@@ -370,6 +373,19 @@ def parse_index_page(html: str, url: str | None = None, min_interval: float = 0.
     return result
 
 
+_LAZY_SRC_ATTRS = ("data-src", "data-lazy-src", "data-original", "src")
+
+
+def _real_img_src(img) -> str | None:
+    """ลิงก์รูปจริงของ <img> — เว็บที่ใช้ lazy-load (เช่น manga-lc.net) ใส่ src เป็นภาพหลอก 1x1 แบบ
+    data:image/gif แล้วเก็บรูปจริงไว้ใน data-src รอ JS สลับให้ทีหลัง ถ้าอ่านแค่ src จะได้ภาพว่างทุกหน้า"""
+    for attr in _LAZY_SRC_ATTRS:
+        value = (img.get(attr) or "").strip()
+        if value and not value.startswith("data:"):
+            return value
+    return None
+
+
 def parse_chapter_page(html: str) -> dict:
     """ดึงรายการรูปหน้ามังงะ + ลิงก์ตอนก่อนหน้า/ถัดไป จากหน้าอ่านตอน"""
     data = _extract_balanced_json(html, "ts_reader.run(")
@@ -397,7 +413,7 @@ def parse_chapter_page(html: str) -> dict:
         )
         if reading:
             for img in reading.select("img.wp-manga-chapter-img, img"):
-                src = (img.get("src") or img.get("data-src") or "").strip()
+                src = _real_img_src(img)
                 if src:
                     result["images"].append(src)
 
