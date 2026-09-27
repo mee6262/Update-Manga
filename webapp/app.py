@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import shutil
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -77,6 +78,13 @@ def build_id() -> str:
         except OSError:
             pass
     return str(stamp)
+
+
+@app.route("/healthz")
+def healthz():
+    # ให้ตัวคุมเซิร์ฟเวอร์ (run_windows.py) เช็คว่ายังรับคำขอได้อยู่ไหม — ไม่ต้อง login ไม่แตะไฟล์ข้อมูล
+    # ถ้าเซิร์ฟเวอร์ค้าง (thread ถูกใช้หมด) คำขอนี้ก็จะค้างตาม ตัวคุมจะรู้และรีสตาร์ทให้เอง
+    return "ok"
 
 
 @app.route("/api/version")
@@ -218,7 +226,7 @@ def require_admin(view):
 
 @app.before_request
 def require_login():
-    if request.endpoint in ("login", "static"):
+    if request.endpoint in ("login", "static", "healthz"):
         return None
     # ถ้ายังไม่มีผู้ใช้ในระบบเลย (เช่น dev บนเครื่องตัวเอง ไม่เคยตั้ง WEB_USERNAME/WEB_PASSWORD)
     # ปล่อยผ่านไม่บังคับ login
@@ -1178,6 +1186,10 @@ def mark_unread(manga_id):
 # ความกว้างที่ยอมให้ย่อได้ (เท่าที่หน้าเว็บใช้จริง: การ์ดในกริด และรูปเล็กในหน้าตั้งค่า) — จำกัดไว้
 # เป็นชุด ไม่รับเลขอะไรก็ได้ กันคนยิงสุ่มความกว้างจนเครื่องไล่ย่อรูป/สร้างไฟล์แคชไม่จำกัด
 COVER_WIDTHS = {120, 400}
+# (เชื่อมต่อ, รอข้อมูล) วินาที — เชื่อมต่อไม่ได้ใน 5 วิแปลว่าเว็บล่ม ไม่ต้องรอนาน ส่วนรอข้อมูล 10 วิเผื่อ
+# CDN ที่ช้าจริง ๆ แต่ไม่รอครบ 20 วิแบบ Cloudflare 522 (ซึ่งจะถูกจำว่าล่มหลังครั้งแรกอยู่แล้ว)
+IMAGE_TIMEOUT = (5, 10)
+IMAGE_STREAM_MAX_SECONDS = 60
 MAX_RESIZE_BYTES = 25 * 1024 * 1024  # รูปใหญ่เกินนี้ไม่ย่อ (กันโหลดทั้งก้อนเข้าหน่วยความจำ)
 
 IMAGE_HEADERS = {
@@ -1242,16 +1254,23 @@ def proxy_image():
         if cached:
             return Response(cached, content_type="image/webp", headers=IMAGE_HEADERS)
 
+    # เซิร์ฟเวอร์รูปที่เพิ่งล่มไป ตอบกลับทันที ไม่ยิงไปรอซ้ำ — ต้นเหตุหลักของอาการเว็บค้างจอขาว:
+    # เว็บที่ล่มแบบ Cloudflare 522 ค้างรอเกือบ 20 วิก่อนตอบ ทุกรูป/ปกที่ชี้ไปเว็บนั้นจะยึด thread ของ
+    # เซิร์ฟเวอร์ไว้ทีละตัวจนครบทุกตัว แล้วคำขออื่นทั้งหมด (รวมถึงหน้าเว็บเอง) ต้องต่อคิวรอ
+    if scraper.host_is_down(src) or scraper.host_is_stalled(src):
+        return "source host is down", 502
+
     try:
-        resp = scraper.session().get(
-            src,
-            headers={
-                "User-Agent": scraper.HEADERS["User-Agent"],
-                "Referer": f"https://{netloc}/",
-            },
-            timeout=20,
-            stream=not width,
-        )
+        with scraper.awaiting_response(src):
+            resp = scraper.session().get(
+                src,
+                headers={
+                    "User-Agent": scraper.HEADERS["User-Agent"],
+                    "Referer": f"https://{netloc}/",
+                },
+                timeout=IMAGE_TIMEOUT,
+                stream=not width,
+            )
         resp.raise_for_status()
     except Exception as e:
         # จำไว้ว่าเซิร์ฟเวอร์รูปนี้ล่ม หน้าอ่านจะได้ขอรายการรูปใหม่จากแหล่งสำรองแทน (ดู get_chapter)
@@ -1277,9 +1296,15 @@ def proxy_image():
         headers["Content-Length"] = resp.headers["Content-Length"]
 
     def stream():
-        # ส่งต่อทีละก้อน ไม่อ่านทั้งรูปเข้าหน่วยความจำก่อน
+        # ส่งต่อทีละก้อน ไม่อ่านทั้งรูปเข้าหน่วยความจำก่อน — มีเพดานเวลารวมด้วย เพราะ timeout ของ
+        # requests นับแค่ช่วงรอระหว่างก้อน เว็บที่ส่งมาช้า ๆ ทีละนิดจะยึด thread ไว้ได้ไม่จำกัด
+        deadline = time.monotonic() + IMAGE_STREAM_MAX_SECONDS
         try:
-            yield from resp.iter_content(chunk_size=64 * 1024)
+            for chunk in resp.iter_content(chunk_size=64 * 1024):
+                yield chunk
+                if time.monotonic() > deadline:
+                    print(f"⚠️ ตัดการส่งรูปที่ช้าเกิน {IMAGE_STREAM_MAX_SECONDS} วิ: {src}")
+                    break
         finally:
             resp.close()
 

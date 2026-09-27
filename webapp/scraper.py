@@ -94,6 +94,39 @@ def mark_host_down(url: str):
     _mark_host(url, down=True)
 
 
+# คำขอที่ยังรอคำตอบแรก (header) อยู่ แยกตามเว็บ — ช่วงก่อนที่จะรู้ว่าเว็บล่ม (ยังไม่มีคำขอไหน timeout)
+# ทุกคำขอไปเว็บนั้นจะค้างรอพร้อมกันหมด เช่นหน้าแรกมีปก 10 เรื่องจากเว็บที่ล่ม = ยึด thread 10 ตัว
+# ถ้ามีคำขอก่อนหน้ารอมานานเกินกำหนดแล้วยังไม่ได้คำตอบ คำขอใหม่ไปเว็บเดียวกันให้ยอมแพ้ทันที
+STALL_SECONDS = 4
+_awaiting: dict[str, list[float]] = {}
+_awaiting_lock = threading.Lock()
+
+
+def host_is_stalled(url: str) -> bool:
+    now = time.monotonic()
+    with _awaiting_lock:
+        return any(now - t > STALL_SECONDS for t in _awaiting.get(_host_key(url), ()))
+
+
+class awaiting_response:
+    """ครอบช่วงที่รอ header จากเว็บ (with scraper.awaiting_response(url): resp = session().get(...))"""
+
+    def __init__(self, url: str):
+        self.key, self.started = _host_key(url), time.monotonic()
+
+    def __enter__(self):
+        with _awaiting_lock:
+            _awaiting.setdefault(self.key, []).append(self.started)
+
+    def __exit__(self, *exc):
+        with _awaiting_lock:
+            waiting = _awaiting.get(self.key, [])
+            if self.started in waiting:
+                waiting.remove(self.started)
+            if not waiting:
+                _awaiting.pop(self.key, None)
+
+
 def is_outage(exc: Exception) -> bool:
     """error ที่แปลว่า "เว็บล่ม" จริง ๆ (ไม่ใช่แค่หน้านี้ไม่มี เช่น 404)"""
     if isinstance(exc, (requests.ConnectionError, requests.Timeout)):
@@ -109,7 +142,8 @@ def fetch(url: str, referer: str | None = None, min_interval: float = 0.0, timeo
     if min_interval:
         throttle(url, min_interval)
     try:
-        resp = session().get(url, headers=headers, timeout=timeout)
+        # เชื่อมต่อไม่ได้ใน 5 วิ = เว็บล่ม ไม่ต้องรอครบ timeout เต็ม (ค่านั้นเผื่อไว้สำหรับรอข้อมูล)
+        resp = session().get(url, headers=headers, timeout=(min(5, timeout), timeout))
         resp.raise_for_status()
     except requests.RequestException as e:
         if is_outage(e):
