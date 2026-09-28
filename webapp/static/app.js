@@ -188,6 +188,7 @@ async function refreshAll() {
     const data = await res.json();
     state.manga = data.items;
     renderGrid();
+    loadCatalog().then(renderSettings); // ตอนล่าสุดในรายการจัดการเรื่องเปลี่ยนตาม
     let msg = `ตรวจสอบเสร็จแล้ว: อัปเดตใหม่ ${data.updated_ids.length} เรื่อง`;
     if (data.failed.length > 0) msg += `, ผิดพลาด ${data.failed.length} เรื่อง`;
     status.textContent = msg;

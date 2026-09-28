@@ -329,6 +329,12 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
 .form-msg.error { color: var(--danger); }
 .form-msg.success { color: var(--accent); }
 
+/* แถวปุ่มในหน้าจัดการเรื่อง: เพิ่มเรื่องใหม่ (ซ้าย) / รีเฟรชทั้งหมด (ขวา) */
+.manage-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; }
+.btn.with-icon { display: inline-flex; align-items: center; gap: 6px; }
+.btn.with-icon svg { width: 16px; height: 16px; flex: none; }
+.btn.spinning svg { animation: spin 0.9s linear infinite; }
+
 .settings-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 
 .settings-row {
