@@ -139,6 +139,9 @@ sudo systemctl restart manga-webapp
 
 ## Deploy บน Windows VPS
 
+> **ติดตั้งบนเครื่องใหม่ / ย้ายเครื่อง: ดูคู่มือทีละขั้นที่ [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md)**
+> (ติดตั้ง Python/Git, `.env`, ย้ายข้อมูลจากเครื่องเก่า, Task Scheduler, Caddy + HTTPS, เช็คว่าทำงาน)
+
 ต่างจาก Linux ตรงที่: ใช้ `webapp/requirements.txt` เหมือนกัน (ข้าม playwright โดยอัตโนมัติ ไม่ต้องมี
 Visual C++ Build Tools), ใช้ `waitress` แทน `gunicorn` (gunicorn รันบน Windows ไม่ได้), และใช้
 **Task Scheduler** แทน systemd/cron
