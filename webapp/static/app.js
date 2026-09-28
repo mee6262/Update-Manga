@@ -1123,9 +1123,121 @@ async function closeReader() {
   }
 }
 
+// ---------- แจ้งเตือนตอนใหม่ (Web Push) ----------
+// iPhone/iPad รับแจ้งเตือนเว็บได้เฉพาะตอนเปิดจากไอคอนบนหน้าจอโฮม (iOS 16.4+) เปิดใน Safari ปกติจะไม่มี
+// PushManager ให้ใช้เลย — ต้องบอกวิธีแทนการเงียบไป
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const isStandalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const pushSupported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+
+function urlBase64ToUint8Array(base64) {
+  const padded = (base64 + "=".repeat((4 - (base64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
+}
+
+function setPushButton(on) {
+  const btn = el("#pushBtn");
+  btn.classList.toggle("push-on", on);
+  btn.title = on ? "แจ้งเตือนเปิดอยู่ (แตะเพื่อปิด)" : "เปิดแจ้งเตือนตอนใหม่";
+}
+
+async function pushRegistration() {
+  return navigator.serviceWorker.register("/sw.js", { scope: "/" });
+}
+
+async function initPush() {
+  const btn = el("#pushBtn");
+  if (!BOOT.push_key || !state.currentUser.username) return; // เซิร์ฟเวอร์ไม่ได้เปิดระบบนี้ / ไม่ได้ login
+  if (!pushSupported && !isIOS) return; // เบราว์เซอร์ไม่รองรับเลย ซ่อนปุ่มไป
+  btn.hidden = false;
+  btn.addEventListener("click", togglePush);
+
+  // เปิดจากการแตะแจ้งเตือนขณะหน้าเว็บเปิดค้างอยู่
+  if (pushSupported) {
+    navigator.serviceWorker.addEventListener("message", (e) => {
+      if (e.data && e.data.type === "open") openFromUrl(new URL(e.data.url));
+    });
+  }
+  if (!pushSupported) return setPushButton(false);
+
+  try {
+    const reg = await pushRegistration();
+    const sub = await reg.pushManager.getSubscription();
+    setPushButton(Boolean(sub) && Notification.permission === "granted");
+    // ส่งให้เซิร์ฟเวอร์ซ้ำทุกครั้งที่เปิดเว็บ เผื่อฝั่งเซิร์ฟเวอร์ลบไปแล้ว (ย้ายเครื่อง/เปลี่ยนบัญชี) — ปลอดภัยเพราะซ้ำก็แค่ทับของเดิม
+    if (sub && Notification.permission === "granted") postJSON("/api/push/subscribe", sub.toJSON()).catch(() => {});
+  } catch (e) {
+    setPushButton(false);
+  }
+}
+
+function postJSON(url, body) {
+  return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+
+async function togglePush() {
+  if (!pushSupported) {
+    alert(
+      isIOS && !isStandalone
+        ? "iPhone/iPad รับแจ้งเตือนได้เฉพาะตอนเปิดจากไอคอนบนหน้าจอโฮม\n\n1. กดปุ่มแชร์ (สี่เหลี่ยมมีลูกศรขึ้น)\n2. เลือก \"เพิ่มไปยังหน้าจอโฮม\"\n3. เปิดเว็บจากไอคอนนั้น แล้วกดกระดิ่งอีกครั้ง\n\n(ต้องเป็น iOS 16.4 ขึ้นไป)"
+        : "เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน ลองเปิดด้วย Chrome หรือ Safari เวอร์ชันล่าสุด"
+    );
+    return;
+  }
+  const btn = el("#pushBtn");
+  btn.disabled = true;
+  try {
+    const reg = await pushRegistration();
+    const existing = await reg.pushManager.getSubscription();
+    if (existing && Notification.permission === "granted") {
+      if (!confirm("ปิดแจ้งเตือนตอนใหม่บนเครื่องนี้?")) return;
+      await postJSON("/api/push/unsubscribe", { endpoint: existing.endpoint }).catch(() => {});
+      await existing.unsubscribe();
+      setPushButton(false);
+      return;
+    }
+    // ต้องขออนุญาตจากการกดของผู้ใช้โดยตรงเท่านั้น (iOS/Chrome บล็อกถ้าขอเองตอนโหลดหน้า)
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      alert(
+        permission === "denied"
+          ? "เครื่องนี้ถูกตั้งไม่ให้เว็บนี้แจ้งเตือน ต้องไปเปิดในตั้งค่าของเบราว์เซอร์/ตั้งค่าแจ้งเตือนของเครื่องก่อน"
+          : "ยังไม่ได้อนุญาตการแจ้งเตือน"
+      );
+      return;
+    }
+    const sub =
+      existing ||
+      (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(BOOT.push_key) }));
+    const res = await postJSON("/api/push/subscribe", sub.toJSON());
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "บันทึกไม่สำเร็จ");
+    setPushButton(true);
+    // ส่งแจ้งเตือนทดสอบทันที ผู้ใช้จะได้เห็นว่าใช้ได้จริง
+    const test = await postJSON("/api/push/test", {}).then((r) => r.json()).catch(() => ({}));
+    if (!test.sent) alert("เปิดแจ้งเตือนแล้ว แต่ส่งแจ้งเตือนทดสอบไม่สำเร็จ ลองใหม่อีกครั้งภายหลัง");
+  } catch (e) {
+    alert("เปิดแจ้งเตือนไม่สำเร็จ: " + (e.message || e));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// เปิดเรื่องจากลิงก์ในแจ้งเตือน (/?manga=<id>) ตรงไปหน้าเลือกตอนของเรื่องนั้นเลย
+function openFromUrl(url) {
+  const id = url.searchParams.get("manga");
+  if (!id) return;
+  history.replaceState(null, "", "/");
+  el("#reader").hidden = true;
+  const manga = mangaById(id);
+  if (manga) openChapterList(manga);
+  else loadManga().then(() => mangaById(id) && openChapterList(mangaById(id)));
+}
+
 function init() {
   applyAdminGating();
   renderGrid();
+  initPush();
+  openFromUrl(new URL(location.href));
 
   initTabs();
   initSubTabs();

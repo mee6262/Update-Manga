@@ -18,6 +18,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 import scraper
 import storage
+import webpush
 from telegram_notify import send_telegram
 
 try:
@@ -85,6 +86,51 @@ def healthz():
     # ให้ตัวคุมเซิร์ฟเวอร์ (run_windows.py) เช็คว่ายังรับคำขอได้อยู่ไหม — ไม่ต้อง login ไม่แตะไฟล์ข้อมูล
     # ถ้าเซิร์ฟเวอร์ค้าง (thread ถูกใช้หมด) คำขอนี้ก็จะค้างตาม ตัวคุมจะรู้และรีสตาร์ทให้เอง
     return "ok"
+
+
+@app.route("/sw.js")
+def service_worker():
+    # ต้องเสิร์ฟจาก root (ไม่ใช่ /static/) ถึงจะดูแลได้ทั้งเว็บ ไม่ต้อง login เพราะเบราว์เซอร์ดึงไฟล์นี้เอง
+    # เบื้องหลัง — ห้ามแคชนาน ไม่งั้นแก้ไฟล์แล้วเครื่องผู้ใช้ไม่ได้ตัวใหม่
+    resp = app.send_static_file("sw.js")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Service-Worker-Allowed"] = "/"
+    return resp
+
+
+@app.route("/api/push/subscribe", methods=["POST"])
+def push_subscribe():
+    if not current_username():
+        return jsonify({"error": "unauthorized"}), 401
+    if not webpush.available():
+        return jsonify({"error": "เซิร์ฟเวอร์ยังไม่ได้ติดตั้งระบบแจ้งเตือน (pip install -r requirements.txt)"}), 503
+    sub = request.get_json(force=True, silent=True)
+    if not webpush.valid_subscription(sub):
+        return jsonify({"error": "ข้อมูลการสมัครรับแจ้งเตือนไม่ถูกต้อง"}), 400
+    webpush.subscribe(current_username(), sub, request.headers.get("User-Agent", ""))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/push/unsubscribe", methods=["POST"])
+def push_unsubscribe():
+    if not current_username():
+        return jsonify({"error": "unauthorized"}), 401
+    endpoint = (request.get_json(force=True, silent=True) or {}).get("endpoint")
+    if isinstance(endpoint, str):
+        webpush.unsubscribe(current_username(), endpoint)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/push/test", methods=["POST"])
+def push_test():
+    if not current_username():
+        return jsonify({"error": "unauthorized"}), 401
+    sent = webpush.send_to_user(
+        current_username(),
+        {"title": "Update Manga", "body": "เปิดแจ้งเตือนเรียบร้อย จะแจ้งเมื่อเรื่องที่ติดตามมีตอนใหม่", "tag": "test", "url": "/"},
+        wait=True,
+    )
+    return jsonify({"sent": sent})
 
 
 @app.route("/api/version")
@@ -226,7 +272,7 @@ def require_admin(view):
 
 @app.before_request
 def require_login():
-    if request.endpoint in ("login", "static", "healthz"):
+    if request.endpoint in ("login", "static", "healthz", "service_worker"):
         return None
     # ถ้ายังไม่มีผู้ใช้ในระบบเลย (เช่น dev บนเครื่องตัวเอง ไม่เคยตั้ง WEB_USERNAME/WEB_PASSWORD)
     # ปล่อยผ่านไม่บังคับ login
@@ -610,6 +656,7 @@ def index():
     # ฝังข้อมูลเริ่มต้นมาในหน้าเลย หน้าแรกขึ้นทันทีไม่ต้องรอยิง API ต่อกันหลายรอบ
     boot = {
         "build": build_id(),
+        "push_key": webpush.public_key() if username else None,
         "me": {"username": username, "is_admin": is_admin()},
         "prefs": storage.load_prefs(username) if username else {},
         "manga": manga_list_payload(username),
@@ -831,6 +878,7 @@ def _commit_refreshes(results: dict[str, dict]) -> list[str]:
         # แจ้งเตือนเฉพาะตอนที่เคยรู้ตอนล่าสุดมาก่อนแล้วเปลี่ยน (ไม่แจ้งตอนเพิ่งเพิ่มเรื่องใหม่)
         if prev_chapter:
             notify_subscribed_admins(manga["id"], manga["name"], manga["latest_chapter"], manga.get("cover_url"))
+            webpush.notify_new_chapter(manga["id"], manga["name"], manga["latest_chapter"])
     return [manga["id"] for manga, _ in changed]
 
 

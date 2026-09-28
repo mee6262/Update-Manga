@@ -149,6 +149,10 @@ body {
 .tab-btn.icon-btn.active { background: var(--accent); color: #0a0f0c; border-color: var(--accent); }
 
 .icon-btn.spinning svg { animation: spin 0.9s linear infinite; }
+
+/* กระดิ่งแจ้งเตือน: ปิดอยู่ = มีขีดทับ, เปิดอยู่ = สีหลัก ไม่มีขีด */
+#pushBtn.push-on { color: var(--accent); border-color: var(--accent); }
+#pushBtn.push-on .bell-off { display: none; }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
 main { padding: 20px; max-width: 1200px; margin: 0 auto; }

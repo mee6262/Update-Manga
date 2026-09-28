@@ -11,3 +11,4 @@ webapp/data/covers/
 webapp/data/users.json
 webapp/data/users/
 webapp/data/logs/
+webapp/data/vapid_private.pem

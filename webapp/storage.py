@@ -167,6 +167,15 @@ def save_subscriptions(username: str, manga_ids: list[str]):
     _save_user_file(username, "subscriptions.json", manga_ids)
 
 
+def load_push(username: str, fresh: bool = False) -> list[dict]:
+    """เครื่องที่เปิดรับ Web Push ไว้ของผู้ใช้คนนี้ (หลายเครื่องได้)"""
+    return _load_json(_user_file(username, "push.json"), [], fresh)
+
+
+def save_push(username: str, subs: list[dict]):
+    _save_user_file(username, "push.json", subs)
+
+
 def all_usernames() -> list[str]:
     return list(load_users().keys())
 
