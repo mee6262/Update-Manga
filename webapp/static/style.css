@@ -585,7 +585,101 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
 
 @media (max-width: 640px) {
   .topbar { gap: 8px; }
-  .topbar h1 { font-size: 1rem; width: 100%; }
   main { padding: 12px; }
   .manga-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
 }
+
+
+/* ================= โครงแบบแอป: แถบบน + เมนูล่าง ================= */
+:root { --nav-h: 60px; }
+body { padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom)); }
+
+.topbar { display: block; padding: 0; padding-top: env(safe-area-inset-top); }
+.topbar-row { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 0 16px; }
+.topbar-row .topbar-title { margin: 0 auto 0 0; font-size: 1.2rem; }
+.topbar-title[hidden] { display: none !important; }
+/* กระดิ่งแจ้งเตือนอยู่เฉพาะหน้าหลัก */
+body:not([data-tab="list"]) #pushBtn { display: none; }
+
+/* "เรื่องทั้งหมด | หมวดหมู่" แบบตัวหนังสือใหญ่ ตัวที่ไม่ได้เลือกเป็นสีจาง */
+.seg-tabs { display: flex; align-items: center; gap: 14px; }
+.seg-btn { background: none; border: 0; padding: 4px 0; font: inherit; font-size: 1.2rem; font-weight: 700; color: var(--text-dim); opacity: 0.55; cursor: pointer; }
+.seg-btn.active { color: var(--text); opacity: 1; }
+.seg-sep { width: 1px; height: 18px; background: var(--border); }
+
+/* แถบหมวดหมู่เลื่อนแนวนอน + ปุ่มกางทั้งหมด */
+.category-bar { display: flex; align-items: stretch; border-top: 1px solid var(--border); }
+.category-bar[hidden] { display: none; }
+.category-chips { flex: 1; display: flex; gap: 22px; overflow-x: auto; padding: 0 16px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.category-chips::-webkit-scrollbar { display: none; }
+.category-chips .chip { position: relative; flex: none; background: none; border: 0; padding: 12px 0; font: inherit; font-size: 0.95rem; color: var(--text-dim); cursor: pointer; white-space: nowrap; }
+.category-chips .chip.active { color: var(--text); font-weight: 700; }
+.category-chips .chip.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 2px; background: var(--accent); }
+.chip-empty { padding: 12px 0; color: var(--text-dim); font-size: 0.85rem; white-space: nowrap; }
+.category-expand { flex: none; width: 48px; background: none; border: 0; border-left: 1px solid var(--border); color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.category-expand svg { transition: transform 0.2s; }
+.category-expand.open svg { transform: rotate(180deg); }
+.category-expand[hidden] { display: none; }
+.category-panel { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--border); max-height: 50vh; overflow-y: auto; }
+.category-panel[hidden] { display: none; }
+.category-panel .chip { background: var(--bg-card); border: 1px solid var(--border); border-radius: 999px; padding: 7px 14px; font: inherit; font-size: 0.85rem; color: var(--text); cursor: pointer; }
+.category-panel .chip.active { background: var(--accent); border-color: var(--accent); color: #0a0f0c; font-weight: 600; }
+
+.catalog-sort-row { max-width: none; margin: 0 0 12px; }
+
+/* เมนูล่าง */
+.bottom-nav {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  display: flex; height: calc(var(--nav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
+  background: var(--bg-elevated); border-top: 1px solid var(--border);
+}
+.nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; background: none; border: 0; color: var(--text-dim); font: inherit; font-size: 0.72rem; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.nav-item svg { width: 24px; height: 24px; }
+.nav-item.active { color: var(--accent); font-weight: 600; }
+.nav-item.active svg path, .nav-item.active svg rect { fill: currentColor; fill-opacity: 0.18; }
+
+/* ค้นหา */
+.search-box { display: flex; align-items: center; gap: 10px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 0 14px; margin-bottom: 20px; color: var(--text-dim); }
+.search-box:focus-within { border-color: var(--accent); }
+.search-box svg { flex: none; width: 20px; height: 20px; }
+.search-box input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--text); font: inherit; font-size: 0.95rem; padding: 13px 0; }
+.section-title { font-size: 1.05rem; margin: 4px 0 12px; }
+.cover-row { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 20px; scrollbar-width: none; scroll-snap-type: x proximity; }
+.cover-row::-webkit-scrollbar { display: none; }
+.cover-tile { flex: none; width: 118px; cursor: pointer; scroll-snap-align: start; }
+.cover-tile img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 8px; background: #0a0c10; display: block; }
+.cover-tile-name { font-size: 0.8rem; margin-top: 6px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.search-count { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 12px; }
+
+/* ตั้งค่า */
+.account-card { display: flex; align-items: center; gap: 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 20px; }
+.account-avatar { width: 44px; height: 44px; flex: none; border-radius: 50%; background: var(--bg); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; color: var(--text-dim); }
+.account-name { font-weight: 700; }
+.account-role { font-size: 0.8rem; color: var(--text-dim); }
+.hint { font-size: 0.8rem; color: var(--text-dim); margin: 0 0 12px; }
+.btn.small { padding: 6px 10px; font-size: 0.78rem; white-space: nowrap; }
+.empty-state.small { padding: 20px; }
+
+/* จัดการหมวดหมู่ */
+.category-item { list-style: none; }
+.category-item.open > .settings-row { border-color: var(--accent); border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.category-item .settings-row { gap: 6px; }
+.category-members { background: var(--bg); border: 1px solid var(--accent); border-top: 0; border-radius: 0 0 8px 8px; padding: 8px 12px 12px; }
+.member-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; cursor: pointer; font-size: 0.88rem; }
+.member-row input { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
+.member-row img { width: 28px; height: 38px; object-fit: cover; border-radius: 3px; background: #0a0c10; flex: none; }
+
+/* หมวดหมู่ในหน้าแก้ไขเรื่อง */
+.chip-checks { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip-check input { position: absolute; opacity: 0; pointer-events: none; }
+.chip-check span { display: inline-block; border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; font-size: 0.85rem; cursor: pointer; color: var(--text-dim); }
+.chip-check input:checked + span { background: var(--accent); border-color: var(--accent); color: #0a0f0c; font-weight: 600; }
+.chip-check input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (max-width: 640px) {
+  .topbar-row { padding: 0 12px; }
+  .category-item .settings-row { flex-wrap: wrap; }
+  .category-item .settings-row .grow { flex-basis: 100%; }
+}
+.account-card .grow { flex: 1; min-width: 0; }
+a.btn { text-decoration: none; display: inline-block; }

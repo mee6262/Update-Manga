@@ -11,6 +11,7 @@ MANGA_FILE = DATA_DIR / "manga.json"
 CHAPTERS_DIR = DATA_DIR / "chapters"
 COVERS_DIR = DATA_DIR / "covers"
 IMAGE_DOMAINS_FILE = DATA_DIR / "image_domains.json"
+CATEGORIES_FILE = DATA_DIR / "categories.json"
 USERS_FILE = DATA_DIR / "users.json"
 USERS_DIR = DATA_DIR / "users"
 
@@ -186,6 +187,15 @@ def load_prefs(username: str, fresh: bool = False) -> dict:
 
 def save_prefs(username: str, prefs: dict):
     _save_user_file(username, "prefs.json", prefs)
+
+
+def load_categories(fresh: bool = False) -> list[dict]:
+    """หมวดหมู่ทั้งหมด [{"id", "name"}] ตามลำดับที่ admin จัดไว้ — เรื่องไหนอยู่หมวดไหนเก็บที่ manga["categories"]"""
+    return _load_json(CATEGORIES_FILE, [], fresh)
+
+
+def save_categories(categories: list[dict]):
+    _save_json(CATEGORIES_FILE, categories)
 
 
 def load_image_domains() -> set[str]:

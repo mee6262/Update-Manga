@@ -70,29 +70,152 @@ function reloadIfPending() {
 
 function applyAdminGating() {
   els(".admin-only").forEach((elm) => { elm.hidden = !state.currentUser.is_admin; });
+  el("#accountName").textContent = state.currentUser.username || "ผู้ใช้";
+  el("#accountRole").textContent = state.currentUser.is_admin ? "ผู้ดูแลระบบ" : "สมาชิก";
 }
 
-// ---------- Tabs ----------
+// ---------- Tabs (เมนูล่าง) ----------
 // วาดจากข้อมูลที่มีอยู่ทันที แล้วค่อยดึงของใหม่มาอัปเดตทีหลัง (ไม่ปล่อยจอว่างรอเน็ต)
-function initTabs() {
-  els(".tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      els(".tab-btn").forEach((b) => b.classList.remove("active"));
-      els(".view").forEach((v) => v.classList.remove("active"));
-      btn.classList.add("active");
-      el(`#${btn.dataset.tab}View`).classList.add("active");
+function showTab(tab) {
+  state.tab = tab;
+  document.body.dataset.tab = tab;
+  els(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  els(".view").forEach((v) => v.classList.toggle("active", v.id === `${tab}View`));
+  els(".topbar-title").forEach((t) => { t.hidden = t.dataset.for !== tab; });
+  updateCategoryBar();
+  window.scrollTo(0, 0);
 
-      if (btn.dataset.tab === "catalog") {
-        renderCatalog(filterCatalog());
-        loadCatalog().then(() => renderCatalog(filterCatalog()));
-      }
-      if (btn.dataset.tab === "settings") {
-        renderSettings();
-        loadCatalog().then(renderSettings);
-        renderUserList();
-      }
+  if (tab === "catalog") {
+    renderCatalog(filterCatalog());
+    loadCatalog().then(() => renderCatalog(filterCatalog()));
+  }
+  if (tab === "search") {
+    renderSearch();
+    loadCatalog().then(renderSearch);
+  }
+  if (tab === "settings" && state.currentUser.is_admin) {
+    renderSettings();
+    renderCategoryAdmin();
+    loadCatalog().then(() => { renderSettings(); renderCategoryAdmin(); });
+    renderUserList();
+  }
+}
+
+function initTabs() {
+  els(".nav-item").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      // กดแท็บเดิมซ้ำ = เลื่อนกลับบนสุด (เหมือนแอปทั่วไป)
+      if (btn.dataset.tab === state.tab) return window.scrollTo({ top: 0, behavior: "smooth" });
+      showTab(btn.dataset.tab);
     });
   });
+  document.body.dataset.tab = "list";
+  state.tab = "list";
+}
+
+// ---------- หมวดหมู่ในหน้า "ทั้งหมด" ----------
+state.categories = BOOT.categories || [];
+state.catalogMode = "all"; // "all" = เรื่องทั้งหมด, "category" = กรองตามหมวด
+state.activeCategory = null;
+
+function updateCategoryBar() {
+  const show = state.tab === "catalog" && state.catalogMode === "category";
+  el("#categoryBar").hidden = !show;
+  if (!show) setCategoryPanel(false);
+}
+
+function renderCategoryChips() {
+  const cats = state.categories;
+  if (!cats.some((c) => c.id === state.activeCategory)) state.activeCategory = cats[0] ? cats[0].id : null;
+  const html = cats.length
+    ? cats
+        .map(
+          (c) =>
+            `<button class="chip${c.id === state.activeCategory ? " active" : ""}" data-cat="${escapeHtml(c.id)}" role="tab">${escapeHtml(c.name)}</button>`
+        )
+        .join("")
+    : `<span class="chip-empty">ยังไม่มีหมวดหมู่${state.currentUser.is_admin ? " — เพิ่มได้ที่ ตั้งค่า → หมวดหมู่" : ""}</span>`;
+  el("#categoryChips").innerHTML = html;
+  el("#categoryPanel").innerHTML = html;
+  el("#categoryExpand").hidden = cats.length === 0;
+  const active = el(`#categoryChips .chip.active`);
+  if (active) active.scrollIntoView({ block: "nearest", inline: "center" });
+}
+
+function setCategoryPanel(open) {
+  el("#categoryPanel").hidden = !open;
+  el("#categoryExpand").classList.toggle("open", open);
+  el("#categoryExpand").setAttribute("aria-expanded", String(open));
+}
+
+function initCatalogModes() {
+  els(".seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.catalogMode = btn.dataset.catmode;
+      els(".seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      renderCategoryChips();
+      updateCategoryBar();
+      renderCatalog(filterCatalog());
+    });
+  });
+  const pick = (e) => {
+    const chip = e.target.closest(".chip[data-cat]");
+    if (!chip) return;
+    state.activeCategory = chip.dataset.cat;
+    setCategoryPanel(false);
+    renderCategoryChips();
+    renderCatalog(filterCatalog());
+    window.scrollTo(0, 0);
+  };
+  el("#categoryChips").addEventListener("click", pick);
+  el("#categoryPanel").addEventListener("click", pick);
+  el("#categoryExpand").addEventListener("click", () => setCategoryPanel(el("#categoryPanel").hidden));
+  renderCategoryChips();
+}
+
+function categoryNames(m) {
+  const ids = m.categories || [];
+  return state.categories.filter((c) => ids.includes(c.id)).map((c) => c.name);
+}
+
+// ---------- ค้นหา ----------
+function coverTileHtml(m) {
+  return `
+    <div class="cover-tile" data-id="${escapeHtml(m.id)}">
+      <img src="${proxied(m.cover_url, COVER_WIDTH)}" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0" />
+      <div class="cover-tile-name">${escapeHtml(m.name)}</div>
+    </div>`;
+}
+
+function searchMatches(q) {
+  const needle = q.toLowerCase();
+  return state.catalog.filter(
+    (m) => m.name.toLowerCase().includes(needle) || categoryNames(m).some((n) => n.toLowerCase().includes(needle))
+  );
+}
+
+function renderSearch() {
+  const q = el("#searchInput").value.trim();
+  el("#searchHome").hidden = Boolean(q);
+  el("#searchResults").hidden = !q;
+  if (q) {
+    const items = sortCatalog(searchMatches(q));
+    el("#searchCount").textContent = items.length ? `พบ ${items.length} เรื่อง` : `ไม่พบเรื่องที่ตรงกับ "${q}"`;
+    el("#searchGrid").innerHTML = items.map(catalogCardHtml).join("");
+    return;
+  }
+  // เรื่องที่มีคนติดตามเยอะสุด (ยังไม่มีใครติดตามเลยก็ใช้เรื่องที่อัปเดตล่าสุดแทน จะได้ไม่เป็นแถวว่าง)
+  const updatedKey = (m) => m.latest_chapter_date || m.last_updated_at || "";
+  const recent = [...state.catalog].sort((a, b) => updatedKey(b).localeCompare(updatedKey(a)));
+  const popular = [...state.catalog].filter((m) => m.followers > 0).sort((a, b) => b.followers - a.followers || updatedKey(b).localeCompare(updatedKey(a)));
+  el("#popularRow").innerHTML = (popular.length ? popular : recent).slice(0, 12).map(coverTileHtml).join("");
+  el("#recentRow").innerHTML = recent.slice(0, 12).map(coverTileHtml).join("");
+}
+
+function initSearch() {
+  el("#searchInput").addEventListener("input", debounce(renderSearch, 120));
+  // กด "ค้นหา" บนแป้นมือถือ = ปิดแป้น ให้เห็นผลเต็มจอ
+  el("#searchInput").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
 }
 
 // ---------- แท็บย่อยในหน้าตั้งค่า (จัดการเรื่อง / จัดการสมาชิก) ----------
@@ -160,8 +283,8 @@ function initGridClicks() {
     if (card) openChapterList(mangaById(card.dataset.id));
   });
 
-  el("#catalogGrid").addEventListener("click", (e) => {
-    const card = e.target.closest(".manga-card");
+  const onCatalogClick = (e) => {
+    const card = e.target.closest(".manga-card, .cover-tile");
     if (!card) return;
     const manga = state.catalog.find((m) => m.id === card.dataset.id);
     if (!manga) return;
@@ -171,7 +294,8 @@ function initGridClicks() {
       return;
     }
     openChapterList(manga);
-  });
+  };
+  ["#catalogGrid", "#searchGrid", "#popularRow", "#recentRow"].forEach((sel) => el(sel).addEventListener("click", onCatalogClick));
 }
 
 // ---------- Refresh ----------
@@ -279,25 +403,28 @@ async function loadCatalog() {
 }
 
 let lastCatalogSignature = null;
+function catalogCardHtml(m) {
+  return cardHtml(
+    m,
+    `<button class="follow-btn${m.is_subscribed ? " subscribed" : ""}" data-action="toggle-follow">
+       ${m.is_subscribed ? "✓ ติดตามอยู่" : "+ ติดตาม"}
+     </button>`
+  );
+}
+
 function renderCatalog(items = state.catalog) {
   const grid = el("#catalogGrid");
   const empty = el("#catalogEmpty");
   empty.hidden = items.length > 0;
+  empty.textContent =
+    state.catalogMode === "category"
+      ? state.categories.length ? "หมวดนี้ยังไม่มีเรื่อง" : "ยังไม่มีหมวดหมู่"
+      : "ยังไม่มีเรื่องในระบบเลย";
 
   const signature = JSON.stringify(items.map((m) => [m.id, m.is_subscribed, m.latest_chapter, m.cover_url]));
   if (signature === lastCatalogSignature) return;
   lastCatalogSignature = signature;
-
-  grid.innerHTML = items
-    .map((m) =>
-      cardHtml(
-        m,
-        `<button class="follow-btn${m.is_subscribed ? " subscribed" : ""}" data-action="toggle-follow">
-           ${m.is_subscribed ? "✓ ติดตามอยู่" : "+ ติดตาม"}
-         </button>`
-      )
-    )
-    .join("");
+  grid.innerHTML = items.map(catalogCardHtml).join("");
 }
 
 // สลับสถานะในจอทันที ไม่รอเซิร์ฟเวอร์ตอบ (ถ้าพลาดค่อยสลับกลับ) — กดแล้วรู้สึกตอบสนองทันที
@@ -305,6 +432,7 @@ async function toggleSubscribe(manga) {
   const wasSubscribed = manga.is_subscribed;
   manga.is_subscribed = !wasSubscribed;
   renderCatalog(filterCatalog());
+  if (state.tab === "search") renderSearch();
 
   try {
     const action = wasSubscribed ? "unsubscribe" : "subscribe";
@@ -314,13 +442,14 @@ async function toggleSubscribe(manga) {
   } catch (e) {
     manga.is_subscribed = wasSubscribed;
     renderCatalog(filterCatalog());
+    if (state.tab === "search") renderSearch();
   }
 }
 
 function filterCatalog() {
-  const q = el("#catalogSearch").value.trim().toLowerCase();
-  const items = q ? state.catalog.filter((m) => m.name.toLowerCase().includes(q)) : state.catalog;
-  return sortCatalog(items);
+  if (state.catalogMode !== "category") return sortCatalog(state.catalog);
+  const cat = state.activeCategory;
+  return sortCatalog(cat ? state.catalog.filter((m) => (m.categories || []).includes(cat)) : []);
 }
 
 function sortCatalog(items) {
@@ -350,9 +479,6 @@ function debounce(fn, ms) {
 }
 
 function initCatalogSearch() {
-  // หน่วงระหว่างพิมพ์ ไม่ต้องกรอง+วาดใหม่ทุกตัวอักษร (รายการเยอะ ๆ จะหน่วงตอนพิมพ์)
-  el("#catalogSearch").addEventListener("input", debounce(() => renderCatalog(filterCatalog()), 120));
-
   const sortSelect = el("#catalogSort");
   // ลำดับที่เลือกไว้เก็บฝั่งเซิร์ฟเวอร์แยกบัญชีใครบัญชีมัน (ไม่ใช่ localStorage) ผู้ใช้แต่ละคน
   // ตั้งค่าของตัวเองได้อิสระ ไม่ปนกัน — ค่ามาพร้อมหน้าเว็บแล้ว (BOOT.prefs) ไม่ต้องยิง API เพิ่ม
@@ -360,11 +486,140 @@ function initCatalogSearch() {
 
   sortSelect.addEventListener("change", () => {
     renderCatalog(filterCatalog());
+    if (state.tab === "search") renderSearch();
     fetch("/api/prefs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ catalog_sort: sortSelect.value }),
     });
+  });
+}
+
+// ---------- จัดการหมวดหมู่ (admin) ----------
+// แต่ละแถว: ชื่อ + จำนวนเรื่อง, ปุ่ม ↑ ↓ (จัดลำดับ) / แก้ชื่อ / ลบ และ "เลือกเรื่อง" กางรายการเรื่องให้ติ๊ก
+// ทุกการแก้บันทึกทันที ไม่มีปุ่มบันทึกรวม — แก้ทีละหมวดบนมือถือง่ายกว่า
+const ICON_UP = '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const ICON_DOWN = '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+let openCategoryId = null; // หมวดที่กำลังกางรายการเรื่องอยู่
+
+async function sendJSON(method, url, body) {
+  const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "บันทึกไม่สำเร็จ");
+  return data;
+}
+
+function categoryMsg(text, isError = false) {
+  const msg = el("#categoryMsg");
+  msg.className = "form-msg" + (text ? (isError ? " error" : " success") : "");
+  msg.textContent = text;
+}
+
+// เปลี่ยนหมวดหมู่แล้วต้องอัปเดตทุกที่ที่แสดง (แถบหมวดในหน้าทั้งหมด, หน้าค้นหา, รายการนี้เอง)
+async function reloadCategories() {
+  [state.categories] = await Promise.all([getJSON("/api/categories"), loadCatalog()]);
+  renderCategoryChips();
+  renderCategoryAdmin();
+  lastCatalogSignature = null;
+  renderCatalog(filterCatalog());
+}
+
+function renderCategoryAdmin() {
+  const list = el("#categoryList");
+  if (!state.categories.length) {
+    list.innerHTML = '<li class="empty-state small">ยังไม่มีหมวดหมู่</li>';
+    return;
+  }
+  const count = (id) => state.catalog.filter((m) => (m.categories || []).includes(id)).length;
+  const last = state.categories.length - 1;
+  list.innerHTML = state.categories
+    .map((c, i) => {
+      const open = c.id === openCategoryId;
+      const members = new Set(state.catalog.filter((m) => (m.categories || []).includes(c.id)).map((m) => m.id));
+      const picker = open
+        ? `<div class="category-members">
+             ${[...state.catalog]
+               .sort((a, b) => a.name.localeCompare(b.name, "th"))
+               .map(
+                 (m) => `<label class="member-row"><input type="checkbox" value="${escapeHtml(m.id)}"${members.has(m.id) ? " checked" : ""} />
+                   <img src="${proxied(m.cover_url, THUMB_WIDTH)}" alt="" loading="lazy" onerror="this.style.opacity=0" /><span>${escapeHtml(m.name)}</span></label>`
+               )
+               .join("")}
+             <div class="modal-actions"><button class="btn" data-action="close-members">ยกเลิก</button><button class="btn primary" data-action="save-members">บันทึก</button></div>
+           </div>`
+        : "";
+      return `
+        <li class="category-item${open ? " open" : ""}" data-id="${escapeHtml(c.id)}">
+          <div class="settings-row">
+            <div class="grow">
+              <div class="name">${escapeHtml(c.name)}</div>
+              <div class="meta">${count(c.id)} เรื่อง</div>
+            </div>
+            <button class="btn small" data-action="members">${open ? "ปิด" : "เลือกเรื่อง"}</button>
+            <button class="icon-btn" data-action="up" title="เลื่อนขึ้น"${i === 0 ? " disabled" : ""}>${ICON_UP}</button>
+            <button class="icon-btn" data-action="down" title="เลื่อนลง"${i === last ? " disabled" : ""}>${ICON_DOWN}</button>
+            <button class="icon-btn" data-action="rename" title="แก้ชื่อ">${ICON_EDIT}</button>
+            <button class="icon-btn danger" data-action="delete" title="ลบ">${ICON_DELETE}</button>
+          </div>
+          ${picker}
+        </li>`;
+    })
+    .join("");
+}
+
+function initCategoryAdmin() {
+  el("#addCategoryForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = el("#newCategoryName");
+    try {
+      await sendJSON("POST", "/api/categories", { name: input.value });
+      categoryMsg(`เพิ่มหมวด "${input.value.trim()}" แล้ว`);
+      input.value = "";
+      await reloadCategories();
+    } catch (err) {
+      categoryMsg(err.message, true);
+    }
+  });
+
+  el("#categoryList").addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-action]");
+    if (!btn) return;
+    const item = btn.closest(".category-item");
+    const id = item.dataset.id;
+    const cat = state.categories.find((c) => c.id === id);
+    const action = btn.dataset.action;
+    try {
+      if (action === "members" || action === "close-members") {
+        openCategoryId = action === "members" && openCategoryId !== id ? id : null;
+        renderCategoryAdmin();
+        return;
+      }
+      if (action === "save-members") {
+        const ids = [...item.querySelectorAll(".category-members input:checked")].map((i) => i.value);
+        await sendJSON("PUT", `/api/categories/${id}/manga`, { manga_ids: ids });
+        openCategoryId = null;
+        categoryMsg(`บันทึกเรื่องในหมวด "${cat.name}" แล้ว (${ids.length} เรื่อง)`);
+      } else if (action === "up" || action === "down") {
+        const ids = state.categories.map((c) => c.id);
+        const i = ids.indexOf(id);
+        const j = action === "up" ? i - 1 : i + 1;
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+        await sendJSON("PUT", "/api/categories/order", { ids });
+        categoryMsg("");
+      } else if (action === "rename") {
+        const name = prompt("ชื่อหมวดหมู่ใหม่", cat.name);
+        if (!name || name.trim() === cat.name) return;
+        await sendJSON("PUT", `/api/categories/${id}`, { name });
+        categoryMsg(`เปลี่ยนชื่อเป็น "${name.trim()}" แล้ว`);
+      } else if (action === "delete") {
+        if (!confirm(`ลบหมวด "${cat.name}"? (เรื่องในหมวดนี้ไม่ถูกลบ แค่ไม่อยู่ในหมวดนี้แล้ว)`)) return;
+        await sendJSON("DELETE", `/api/categories/${id}`);
+        categoryMsg(`ลบหมวด "${cat.name}" แล้ว`);
+      }
+      await reloadCategories();
+    } catch (err) {
+      categoryMsg(err.message, true);
+    }
   });
 }
 
@@ -421,6 +676,7 @@ function initAddUserForm() {
 
 // ---------- ป็อปอัพเพิ่ม/แก้ไขเรื่อง (หลายแหล่งที่มาต่อเรื่อง) ----------
 let editingMangaId = null; // null = โหมดเพิ่มเรื่องใหม่, ไม่ null = โหมดแก้ไขเรื่องนี้
+let editingOriginal = null; // ชื่อ/แหล่งที่มาเดิม — เปลี่ยนแค่หมวดหมู่ไม่ต้องส่งแก้ไขเรื่อง (ซึ่งต้องดึงเว็บใหม่ ช้า)
 
 function addSourceRow(value = "") {
   const list = el("#mangaFormSources");
@@ -445,6 +701,15 @@ function openMangaModal(manga = null) {
   el("#mangaFormSources").innerHTML = "";
   const urls = manga ? (manga.sources || []).map((s) => s.url) : [""];
   for (const u of urls) addSourceRow(u);
+  editingOriginal = manga ? { name: manga.name, sources: urls.join("\n") } : null;
+  const selected = new Set((manga && manga.categories) || []);
+  el("#mangaFormCategoriesWrap").hidden = state.categories.length === 0;
+  el("#mangaFormCategories").innerHTML = state.categories
+    .map(
+      (c) =>
+        `<label class="chip-check"><input type="checkbox" value="${escapeHtml(c.id)}"${selected.has(c.id) ? " checked" : ""} /><span>${escapeHtml(c.name)}</span></label>`
+    )
+    .join("");
   const msg = el("#mangaFormMsg");
   msg.className = "form-msg";
   msg.textContent = "";
@@ -470,18 +735,32 @@ function initMangaForm() {
     msg.className = "form-msg";
     msg.textContent = editingMangaId ? "กำลังบันทึก..." : "กำลังเพิ่ม...";
 
+    const categoryIds = els("#mangaFormCategories input:checked").map((i) => i.value);
+    const unchanged = editingOriginal && editingOriginal.name === name && editingOriginal.sources === sources.join("\n");
+
     try {
-      const url = editingMangaId ? `/api/manga/${editingMangaId}` : "/api/manga";
-      const res = await fetch(url, {
-        method: editingMangaId ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, sources }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        msg.classList.add("error");
-        msg.textContent = data.error || "บันทึกไม่สำเร็จ";
-        return;
+      let mangaId = editingMangaId;
+      if (!unchanged) {
+        const url = editingMangaId ? `/api/manga/${editingMangaId}` : "/api/manga";
+        const res = await fetch(url, {
+          method: editingMangaId ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, sources }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          msg.classList.add("error");
+          msg.textContent = data.error || "บันทึกไม่สำเร็จ";
+          return;
+        }
+        mangaId = data.id || mangaId;
+      }
+      if (mangaId && state.categories.length) {
+        await fetch(`/api/manga/${mangaId}/categories`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ category_ids: categoryIds }),
+        });
       }
       closeMangaModal();
       await Promise.all([loadCatalog(), loadManga()]);
@@ -1248,6 +1527,9 @@ function init() {
   initMangaForm();
   initChapterSearch();
   initCatalogSearch();
+  initCatalogModes();
+  initSearch();
+  initCategoryAdmin();
   initAddUserForm();
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkForUpdate();

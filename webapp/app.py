@@ -657,6 +657,7 @@ def index():
     boot = {
         "build": build_id(),
         "push_key": webpush.public_key() if username else None,
+        "categories": storage.load_categories(),
         "me": {"username": username, "is_admin": is_admin()},
         "prefs": storage.load_prefs(username) if username else {},
         "manga": manga_list_payload(username),
@@ -676,13 +677,147 @@ def list_manga():
 def list_catalog():
     """เรื่องทั้งหมดในระบบ (ไม่กรองตามที่ติดตาม) ไว้ให้เลือกติดตามเพิ่ม"""
     subscribed_ids = set(storage.load_subscriptions(current_username())) if current_username() else set()
+    followers = _follower_counts()
     items = []
     for m in storage.load_manga():
         out = public_manga(m)
         out["is_subscribed"] = m["id"] in subscribed_ids
+        out["followers"] = followers.get(m["id"], 0)
         items.append(out)
     items.sort(key=lambda m: m["name"])
     return jsonify(items)
+
+
+def _follower_counts() -> dict[str, int]:
+    """จำนวนคนที่ติดตามแต่ละเรื่อง (ไว้ทำ "เรื่องที่ทุกคนกำลังตาม" ในหน้าค้นหา) — อ่านจากแคชในหน่วยความจำ ถูกมาก"""
+    counts: dict[str, int] = {}
+    for username in storage.all_usernames():
+        for manga_id in storage.load_subscriptions(username):
+            counts[manga_id] = counts.get(manga_id, 0) + 1
+    return counts
+
+
+# ---------- หมวดหมู่ (admin จัดการ, ทุกคนใช้กรองในหน้าเรื่องทั้งหมด) ----------
+# ทุก endpoint ไม่แตะเน็ต แก้แค่ไฟล์ — โหลดแบบ fresh ก่อนแก้เสมอ (ของจากแคชแชร์กันทั้ง process)
+
+def _category_name(body: dict) -> tuple[str | None, str | None]:
+    name = " ".join(str(body.get("name") or "").split())
+    if not name:
+        return None, "ต้องระบุชื่อหมวดหมู่"
+    if len(name) > 40:
+        return None, "ชื่อหมวดหมู่ยาวเกิน 40 ตัวอักษร"
+    return name, None
+
+
+def _name_taken(categories: list[dict], name: str, except_id: str | None = None) -> bool:
+    return any(c["name"].casefold() == name.casefold() and c["id"] != except_id for c in categories)
+
+
+@app.route("/api/categories", methods=["GET"])
+def list_categories():
+    return jsonify(storage.load_categories())
+
+
+@app.route("/api/categories", methods=["POST"])
+@require_admin
+def add_category():
+    name, error = _category_name(request.get_json(force=True, silent=True) or {})
+    if error:
+        return jsonify({"error": error}), 400
+    categories = storage.load_categories(fresh=True)
+    if _name_taken(categories, name):
+        return jsonify({"error": "มีหมวดหมู่นี้อยู่แล้ว"}), 409
+    category = {"id": secrets.token_hex(4), "name": name}
+    categories.append(category)
+    storage.save_categories(categories)
+    return jsonify(category), 201
+
+
+@app.route("/api/categories/<category_id>", methods=["PUT"])
+@require_admin
+def rename_category(category_id):
+    name, error = _category_name(request.get_json(force=True, silent=True) or {})
+    if error:
+        return jsonify({"error": error}), 400
+    categories = storage.load_categories(fresh=True)
+    category = next((c for c in categories if c["id"] == category_id), None)
+    if not category:
+        return jsonify({"error": "ไม่พบหมวดหมู่นี้"}), 404
+    if _name_taken(categories, name, except_id=category_id):
+        return jsonify({"error": "มีหมวดหมู่นี้อยู่แล้ว"}), 409
+    category["name"] = name
+    storage.save_categories(categories)
+    return jsonify(category)
+
+
+@app.route("/api/categories/<category_id>", methods=["DELETE"])
+@require_admin
+def delete_category(category_id):
+    categories = storage.load_categories(fresh=True)
+    remaining = [c for c in categories if c["id"] != category_id]
+    if len(remaining) == len(categories):
+        return jsonify({"error": "ไม่พบหมวดหมู่นี้"}), 404
+    storage.save_categories(remaining)
+    # เอาออกจากทุกเรื่องด้วย กันมี id หมวดที่ไม่มีอยู่จริงค้างใน manga.json
+    manga_items = storage.load_manga(fresh=True)
+    changed = False
+    for m in manga_items:
+        if category_id in (m.get("categories") or []):
+            m["categories"] = [c for c in m["categories"] if c != category_id]
+            changed = True
+    if changed:
+        storage.save_manga(manga_items)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/categories/order", methods=["PUT"])
+@require_admin
+def reorder_categories():
+    ids = (request.get_json(force=True, silent=True) or {}).get("ids")
+    categories = storage.load_categories(fresh=True)
+    by_id = {c["id"]: c for c in categories}
+    if not isinstance(ids, list) or sorted(ids) != sorted(by_id):
+        return jsonify({"error": "ลำดับไม่ครบหรือมีหมวดหมู่ที่ไม่รู้จัก ลองโหลดหน้าใหม่"}), 400
+    storage.save_categories([by_id[i] for i in ids])
+    return jsonify({"ok": True})
+
+
+@app.route("/api/categories/<category_id>/manga", methods=["PUT"])
+@require_admin
+def set_category_manga(category_id):
+    """กำหนดว่าหมวดนี้มีเรื่องอะไรบ้าง (ส่งรายการ id เรื่องทั้งหมดของหมวดนี้มา)"""
+    manga_ids = (request.get_json(force=True, silent=True) or {}).get("manga_ids")
+    if not isinstance(manga_ids, list):
+        return jsonify({"error": "ข้อมูลไม่ถูกต้อง"}), 400
+    if not any(c["id"] == category_id for c in storage.load_categories()):
+        return jsonify({"error": "ไม่พบหมวดหมู่นี้"}), 404
+    wanted = set(manga_ids)
+    manga_items = storage.load_manga(fresh=True)
+    for m in manga_items:
+        cats = [c for c in (m.get("categories") or []) if c != category_id]
+        if m["id"] in wanted:
+            cats.append(category_id)
+        m["categories"] = cats
+    storage.save_manga(manga_items)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/manga/<manga_id>/categories", methods=["PUT"])
+@require_admin
+def set_manga_categories(manga_id):
+    """กำหนดหมวดหมู่ของเรื่องเดียว (จากหน้าแก้ไขเรื่อง) — แยกจากการแก้ชื่อ/แหล่งที่มา เพราะอันนั้นต้องดึง
+    ข้อมูลจากเว็บใหม่ทุกครั้ง ช้าหลายวินาที ส่วนเปลี่ยนแค่หมวดหมู่ไม่จำเป็น"""
+    ids = (request.get_json(force=True, silent=True) or {}).get("category_ids")
+    if not isinstance(ids, list):
+        return jsonify({"error": "ข้อมูลไม่ถูกต้อง"}), 400
+    known = {c["id"] for c in storage.load_categories()}
+    manga_items = storage.load_manga(fresh=True)
+    manga = next((m for m in manga_items if m["id"] == manga_id), None)
+    if not manga:
+        return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
+    manga["categories"] = [i for i in dict.fromkeys(ids) if i in known]
+    storage.save_manga(manga_items)
+    return jsonify({"categories": manga["categories"]})
 
 
 @app.route("/api/catalog/<manga_id>/subscribe", methods=["POST"])
