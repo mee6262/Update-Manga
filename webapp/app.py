@@ -956,13 +956,26 @@ def _drop_placeholder_chapters(manga_id: str | None, chapters: list[dict], min_i
     ตัดออกจากลิสต์ (แก้ list ที่ส่งมาเลย) คืนรายการตอนที่ตัดทิ้ง — ตอนที่ถูกตัดไม่ขึ้นเป็นตอนใหม่ ไม่แจ้ง
     เตือน และจะถูกตรวจซ้ำทุกรอบรีเฟรช พอเว็บอัปโหลดรูปจริงเมื่อไหร่ก็ผ่านและขึ้นเป็นตอนใหม่ตามปกติ
 
-    ตอนที่ผ่านแล้วถูกเก็บลงแคช รอบถัดไปไม่ต้องยิงเน็ตซ้ำ (และผู้ใช้กดอ่านได้ทันทีด้วย) ส่วนตอนที่ตรวจ
-    ไม่ได้ (เว็บล่ม/timeout) ปล่อยไว้ตามเดิม ไม่ตัดทิ้งเพราะแค่สงสัย"""
+    ตอนที่ผ่านแล้วถูกเก็บลงแคช รอบถัดไปไม่ต้องยิงเน็ตซ้ำ (และผู้ใช้กดอ่านได้ทันทีด้วย)
+
+    ตอนที่ตรวจไม่ได้ (เว็บล่ม/timeout/ค้าง): ถ้าเป็นตอนที่รู้จักอยู่แล้วปล่อยไว้ตามเดิม แต่ถ้าเป็นตอนใหม่
+    (เลขเกินตอนล่าสุดที่บันทึกไว้) ต้องรอยืนยันก่อน — เคยประกาศตอนหลอกไปทั้งที่แค่ตรวจไม่ทัน: แจ้งเตือน
+    ออกไปแล้ว รอบถัดไปตรวจได้ว่าหลอก ตอนล่าสุดถอยกลับ ป้าย NEW หาย (Magic Emperor 916 ของ manga-lc)"""
     dropped = []
+    known = storage.get_manga(manga_id) if manga_id else None
+    known_latest = _chapter_key(known.get("latest_chapter")) if known else None
     for chapter in list(chapters[:MAX_PLACEHOLDER_CHECKS]):
         verdict, real_url = _verify_chapter(manga_id, chapter, min_interval)
-        if verdict == "placeholder":
-            print(f"⚠️ ข้าม {chapter['text']} — หน้าตอนยังไม่มีภาพมังงะจริง (น่าจะเป็นตอนที่ลงไว้เรียกยอด)")
+        is_unconfirmed_new = (
+            verdict == "unknown"
+            and isinstance(known_latest, float)
+            and isinstance(_chapter_key(chapter["text"]), float)
+            and _chapter_key(chapter["text"]) > known_latest
+        )
+        if verdict == "placeholder" or is_unconfirmed_new:
+            reason = "หน้าตอนยังไม่มีภาพมังงะจริง (น่าจะเป็นตอนที่ลงไว้เรียกยอด)" if verdict == "placeholder" \
+                else "ตอนใหม่แต่เปิดหน้าตอนไม่สำเร็จ รอยืนยันรอบหน้า"
+            print(f"⚠️ ข้าม {chapter['text']} — {reason}")
             chapters.remove(chapter)
             dropped.append(chapter)
             continue
