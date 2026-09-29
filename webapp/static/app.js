@@ -142,6 +142,72 @@ function catalogVisible() {
   return state.catalog.filter((m) => !(m.categories || []).some((id) => hidden.has(id)));
 }
 
+// ---------- ธีม ----------
+const THEMES = [
+  { id: "light", icon: "☀️", label: "โหมดสว่าง" },
+  { id: "dark", icon: "🌙", label: "โหมดมืด" },
+  { id: "system", icon: "📱", label: "ตามการตั้งค่าอุปกรณ์" },
+];
+
+function currentTheme() {
+  return document.documentElement.dataset.theme || "dark";
+}
+
+// สีแถบสถานะ/แถบที่อยู่ของมือถือ ให้ตรงกับสีแถบด้านบนของเว็บในธีมที่ใช้อยู่จริง
+function syncThemeColor() {
+  const color = getComputedStyle(document.documentElement).getPropertyValue("--bg-elevated").trim();
+  els('meta[name="theme-color"]').forEach((m) => m.setAttribute("content", color));
+}
+
+function renderThemeMenu() {
+  const theme = THEMES.find((t) => t.id === currentTheme()) || THEMES[1];
+  el("#themeBtn").textContent = `${theme.icon} ${theme.label}`;
+  el("#themeMenu").innerHTML = THEMES.map(
+    (t) =>
+      `<button class="menu-item" role="menuitemradio" aria-checked="${t.id === theme.id}" data-theme="${t.id}">
+         <span class="menu-check">${t.id === theme.id ? "✓" : ""}</span><span>${t.icon}</span><span>${t.label}</span>
+       </button>`
+  ).join("");
+}
+
+function setThemeMenu(open) {
+  el("#themeMenu").hidden = !open;
+  el("#themeBtn").setAttribute("aria-expanded", String(open));
+}
+
+function initTheme() {
+  renderThemeMenu();
+  syncThemeColor();
+  // โหมด "ตามอุปกรณ์": เครื่องสลับสว่าง/มืดเอง (เช่นตามเวลา) ต้องเปลี่ยนสีแถบสถานะตามด้วย
+  window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", syncThemeColor);
+  // บางเครื่อง/บางเบราว์เซอร์ไม่ยิง event ข้างบนตอนแอปอยู่เบื้องหลัง — เช็คซ้ำทุกครั้งที่กลับมาเปิด
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) syncThemeColor(); });
+
+  el("#themeBtn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    setThemeMenu(el("#themeMenu").hidden);
+  });
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest("#themeMenu")) setThemeMenu(false);
+  });
+  el("#themeMenu").addEventListener("click", (e) => {
+    const item = e.target.closest("[data-theme]");
+    if (!item) return;
+    const theme = item.dataset.theme;
+    document.documentElement.dataset.theme = theme;
+    state.prefs.theme = theme;
+    try {
+      localStorage.setItem("theme", theme); // ให้หน้า login ใช้ธีมเดียวกันด้วย (หน้านั้นยังไม่รู้ว่าเป็นใคร)
+    } catch (err) {
+      // โหมดส่วนตัวบางเบราว์เซอร์เขียนไม่ได้ ไม่เป็นไร
+    }
+    renderThemeMenu();
+    syncThemeColor();
+    setThemeMenu(false);
+    fetch("/api/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ theme }) });
+  });
+}
+
 function renderPrefs() {
   el("#prefCard").hidden = !state.categories.some((c) => c.special);
   el("#showSpecialToggle").checked = showSpecial();
@@ -1605,6 +1671,7 @@ function init() {
   initSearch();
   initCategoryAdmin();
   initPrefs();
+  initTheme();
   initAddUserForm();
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkForUpdate();

@@ -5,6 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>เข้าสู่ระบบ - Update Manga</title>
   <meta name="theme-color" content="#0f1115" />
+  <script>
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem("theme"); } catch (e) {}
+      document.documentElement.dataset.theme = t || "dark";
+      document.addEventListener("DOMContentLoaded", function () {
+        var c = getComputedStyle(document.documentElement).getPropertyValue("--bg-elevated").trim();
+        if (c) document.querySelector('meta[name="theme-color"]').setAttribute("content", c);
+      });
+    })();
+  </script>
   <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="any" />
   <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32.png') }}" />
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}" />

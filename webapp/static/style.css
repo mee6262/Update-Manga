@@ -9,6 +9,41 @@
   --accent-dark: #2f9e6e;
   --new-badge: #ff5c5c;
   --danger: #ff5c5c;
+  --img-bg: #0a0c10; /* พื้นหลังระหว่างรอรูปโหลด */
+  color-scheme: dark;
+}
+
+/* ธีม: ตั้งที่ <html data-theme="dark|light|system"> (สคริปต์ใน <head> ใส่ให้ก่อนหน้าเว็บแสดง จะได้ไม่กระพริบ)
+   ชุดสีสว่างต้องเขียน 2 ที่ — เลือกเองกับตามเครื่อง — CSS ยังรวม selector กับ media query เป็นก้อนเดียวไม่ได้ */
+:root[data-theme="light"] {
+  --bg: #f3f4f7;
+  --bg-elevated: #ffffff;
+  --bg-card: #ffffff;
+  --border: #dde0e7;
+  --text: #16181d;
+  --text-dim: #5f6775;
+  --accent: #16a066;
+  --accent-dark: #0f7d4f;
+  --new-badge: #e5484d;
+  --danger: #d93036;
+  --img-bg: #e6e8ee;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    --bg: #f3f4f7;
+    --bg-elevated: #ffffff;
+    --bg-card: #ffffff;
+    --border: #dde0e7;
+    --text: #16181d;
+    --text-dim: #5f6775;
+    --accent: #16a066;
+    --accent-dark: #0f7d4f;
+    --new-badge: #e5484d;
+    --danger: #d93036;
+    --img-bg: #e6e8ee;
+    color-scheme: light;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -233,7 +268,7 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
   width: 100%;
   aspect-ratio: 3 / 4;
   object-fit: cover;
-  background: #0a0c10;
+  background: var(--img-bg);
   display: block;
 }
 
@@ -347,7 +382,7 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
   padding: 10px 14px;
 }
 
-.settings-row img { width: 36px; height: 48px; object-fit: cover; border-radius: 4px; background: #0a0c10; }
+.settings-row img { width: 36px; height: 48px; object-fit: cover; border-radius: 4px; background: var(--img-bg); }
 .settings-row .name { font-weight: 600; font-size: 0.9rem; }
 .settings-row .meta { font-size: 0.75rem; color: var(--text-dim); }
 .settings-row .grow { flex: 1; min-width: 0; }
@@ -654,7 +689,7 @@ body:not([data-tab="list"]) #pushBtn { display: none; }
 .cover-row { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 20px; scrollbar-width: none; scroll-snap-type: x proximity; }
 .cover-row::-webkit-scrollbar { display: none; }
 .cover-tile { flex: none; width: 118px; cursor: pointer; scroll-snap-align: start; }
-.cover-tile img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 8px; background: #0a0c10; display: block; }
+.cover-tile img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 8px; background: var(--img-bg); display: block; }
 .cover-tile-name { font-size: 0.8rem; margin-top: 6px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .search-count { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 12px; }
 
@@ -674,7 +709,7 @@ body:not([data-tab="list"]) #pushBtn { display: none; }
 .category-members { background: var(--bg); border: 1px solid var(--accent); border-top: 0; border-radius: 0 0 8px 8px; padding: 8px 12px 12px; }
 .member-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; cursor: pointer; font-size: 0.88rem; }
 .member-row input { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
-.member-row img { width: 28px; height: 38px; object-fit: cover; border-radius: 3px; background: #0a0c10; flex: none; }
+.member-row img { width: 28px; height: 38px; object-fit: cover; border-radius: 3px; background: var(--img-bg); flex: none; }
 
 /* หมวดหมู่ในหน้าแก้ไขเรื่อง */
 .chip-checks { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -711,3 +746,22 @@ a.btn { text-decoration: none; display: inline-block; }
 .add-form .checkbox-label { white-space: nowrap; }
 /* ปุ่มติดตามชิดล่างการ์ดเสมอ ให้ทุกการ์ดในแถวปุ่มอยู่ระดับเดียวกัน แม้ชื่อเรื่องยาวไม่เท่ากัน */
 .manga-info .follow-btn { margin-top: auto; }
+
+/* เมนูเลือกธีม (ป๊อปอัปแบบเมนูของ iOS) */
+.pref-card .pref-row + .pref-row { border-top: 1px solid var(--border); }
+.menu-anchor { position: relative; flex: none; }
+.menu-btn { white-space: nowrap; }
+.menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 60; min-width: 250px;
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 14px; padding: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35); animation: fade-in 0.12s ease-out;
+}
+.menu[hidden] { display: none; }
+.menu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 12px; border: 0; border-radius: 9px;
+  background: none; color: var(--text); font: inherit; font-size: 0.95rem; text-align: left; cursor: pointer;
+}
+.menu-item:hover, .menu-item:focus-visible { background: var(--bg-card); outline: none; }
+.menu-check { width: 16px; color: var(--accent); font-weight: 700; }
+.pref-row .grow { flex: 1; min-width: 0; }
+
