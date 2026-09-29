@@ -765,3 +765,10 @@ a.btn { text-decoration: none; display: inline-block; }
 .menu-check { width: 16px; color: var(--accent); font-weight: 700; }
 .pref-row .grow { flex: 1; min-width: 0; }
 
+/* กันหน้าเว็บซูมเข้าเองตอนแตะช่องพิมพ์บน iPhone: Safari ซูมอัตโนมัติเมื่อตัวหนังสือในช่องเล็กกว่า 16px
+   แก้ที่ขนาดตัวหนังสือแทนการปิดซูมทั้งหน้า (user-scalable=no) ผู้ใช้จะยังถ่างนิ้วซูมดูรูปมังงะได้ตามปกติ */
+@media (pointer: coarse), (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea { font-size: 16px !important; }
+}
