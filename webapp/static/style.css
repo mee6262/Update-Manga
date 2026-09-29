@@ -586,7 +586,14 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
 @media (max-width: 640px) {
   .topbar { gap: 8px; }
   main { padding: 12px; }
-  .manga-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+  /* มือถือ: แถวละ 3 เรื่องเสมอ (การ์ดแคบลง เลยย่อตัวหนังสือ/ระยะในการ์ดตาม) */
+  .manga-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .manga-card { contain-intrinsic-size: auto 220px; }
+  .manga-info { padding: 7px; gap: 2px; }
+  .manga-name { font-size: 0.78rem; }
+  .manga-chapter { font-size: 0.7rem; }
+  .new-badge { top: 5px; right: 5px; font-size: 0.55rem; padding: 2px 6px; }
+  .follow-btn { padding: 5px 4px; font-size: 0.68rem; }
 }
 
 
@@ -702,3 +709,5 @@ a.btn { text-decoration: none; display: inline-block; }
 .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .add-form .checkbox-label input, .category-edit .checkbox-label input { flex: none; min-width: 0; width: 18px; height: 18px; accent-color: var(--accent); }
 .add-form .checkbox-label { white-space: nowrap; }
+/* ปุ่มติดตามชิดล่างการ์ดเสมอ ให้ทุกการ์ดในแถวปุ่มอยู่ระดับเดียวกัน แม้ชื่อเรื่องยาวไม่เท่ากัน */
+.manga-info .follow-btn { margin-top: auto; }
