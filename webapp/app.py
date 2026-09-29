@@ -721,13 +721,15 @@ def list_categories():
 @app.route("/api/categories", methods=["POST"])
 @require_admin
 def add_category():
-    name, error = _category_name(request.get_json(force=True, silent=True) or {})
+    body = request.get_json(force=True, silent=True) or {}
+    name, error = _category_name(body)
     if error:
         return jsonify({"error": error}), 400
     categories = storage.load_categories(fresh=True)
     if _name_taken(categories, name):
         return jsonify({"error": "มีหมวดหมู่นี้อยู่แล้ว"}), 409
-    category = {"id": secrets.token_hex(4), "name": name}
+    # special = หมวดพิเศษ: ผู้ใช้จะเห็นก็ต่อเมื่อเปิด "แสดงหมวดพิเศษ" ในหน้าตั้งค่าของตัวเอง
+    category = {"id": secrets.token_hex(4), "name": name, "special": bool(body.get("special"))}
     categories.append(category)
     storage.save_categories(categories)
     return jsonify(category), 201
@@ -735,17 +737,22 @@ def add_category():
 
 @app.route("/api/categories/<category_id>", methods=["PUT"])
 @require_admin
-def rename_category(category_id):
-    name, error = _category_name(request.get_json(force=True, silent=True) or {})
-    if error:
-        return jsonify({"error": error}), 400
+def update_category(category_id):
+    """แก้ชื่อ และ/หรือ ตั้งเป็นหมวดพิเศษ (ส่งมาเฉพาะค่าที่จะเปลี่ยน)"""
+    body = request.get_json(force=True, silent=True) or {}
     categories = storage.load_categories(fresh=True)
     category = next((c for c in categories if c["id"] == category_id), None)
     if not category:
         return jsonify({"error": "ไม่พบหมวดหมู่นี้"}), 404
-    if _name_taken(categories, name, except_id=category_id):
-        return jsonify({"error": "มีหมวดหมู่นี้อยู่แล้ว"}), 409
-    category["name"] = name
+    if "name" in body:
+        name, error = _category_name(body)
+        if error:
+            return jsonify({"error": error}), 400
+        if _name_taken(categories, name, except_id=category_id):
+            return jsonify({"error": "มีหมวดหมู่นี้อยู่แล้ว"}), 409
+        category["name"] = name
+    if "special" in body:
+        category["special"] = bool(body["special"])
     storage.save_categories(categories)
     return jsonify(category)
 

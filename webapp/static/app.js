@@ -124,8 +124,47 @@ function updateCategoryBar() {
   if (!show) setCategoryPanel(false);
 }
 
+// ---------- หมวดพิเศษ ----------
+// หมวดที่ admin ตั้งเป็น "พิเศษ" ซ่อนไว้ (ทั้งตัวหมวดและเรื่องที่อยู่ในหมวดนั้น) จนกว่าผู้ใช้จะเปิดเองในหน้าตั้งค่า
+// เรื่องที่ผู้ใช้ติดตามอยู่แล้วยังขึ้นในหน้าหลักตามปกติ — ซ่อนเฉพาะตอนเลือกดู/ค้นหา
+function showSpecial() {
+  return Boolean(state.prefs.show_special);
+}
+
+function visibleCategories() {
+  return showSpecial() ? state.categories : state.categories.filter((c) => !c.special);
+}
+
+function catalogVisible() {
+  if (showSpecial()) return state.catalog;
+  const hidden = new Set(state.categories.filter((c) => c.special).map((c) => c.id));
+  if (!hidden.size) return state.catalog;
+  return state.catalog.filter((m) => !(m.categories || []).some((id) => hidden.has(id)));
+}
+
+function renderPrefs() {
+  el("#prefCard").hidden = !state.categories.some((c) => c.special);
+  el("#showSpecialToggle").checked = showSpecial();
+}
+
+function initPrefs() {
+  renderPrefs();
+  el("#showSpecialToggle").addEventListener("change", (e) => {
+    state.prefs.show_special = e.target.checked;
+    lastCatalogSignature = null;
+    renderCategoryChips();
+    renderCatalog(filterCatalog());
+    renderSearch();
+    fetch("/api/prefs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ show_special: e.target.checked }),
+    });
+  });
+}
+
 function renderCategoryChips() {
-  const cats = state.categories;
+  const cats = visibleCategories();
   if (!cats.some((c) => c.id === state.activeCategory)) state.activeCategory = cats[0] ? cats[0].id : null;
   const html = cats.length
     ? cats
@@ -175,7 +214,7 @@ function initCatalogModes() {
 
 function categoryNames(m) {
   const ids = m.categories || [];
-  return state.categories.filter((c) => ids.includes(c.id)).map((c) => c.name);
+  return visibleCategories().filter((c) => ids.includes(c.id)).map((c) => c.name);
 }
 
 // ---------- ค้นหา ----------
@@ -189,7 +228,7 @@ function coverTileHtml(m) {
 
 function searchMatches(q) {
   const needle = q.toLowerCase();
-  return state.catalog.filter(
+  return catalogVisible().filter(
     (m) => m.name.toLowerCase().includes(needle) || categoryNames(m).some((n) => n.toLowerCase().includes(needle))
   );
 }
@@ -206,8 +245,8 @@ function renderSearch() {
   }
   // เรื่องที่มีคนติดตามเยอะสุด (ยังไม่มีใครติดตามเลยก็ใช้เรื่องที่อัปเดตล่าสุดแทน จะได้ไม่เป็นแถวว่าง)
   const updatedKey = (m) => m.latest_chapter_date || m.last_updated_at || "";
-  const recent = [...state.catalog].sort((a, b) => updatedKey(b).localeCompare(updatedKey(a)));
-  const popular = [...state.catalog].filter((m) => m.followers > 0).sort((a, b) => b.followers - a.followers || updatedKey(b).localeCompare(updatedKey(a)));
+  const recent = [...catalogVisible()].sort((a, b) => updatedKey(b).localeCompare(updatedKey(a)));
+  const popular = [...catalogVisible()].filter((m) => m.followers > 0).sort((a, b) => b.followers - a.followers || updatedKey(b).localeCompare(updatedKey(a)));
   el("#popularRow").innerHTML = (popular.length ? popular : recent).slice(0, 12).map(coverTileHtml).join("");
   el("#recentRow").innerHTML = recent.slice(0, 12).map(coverTileHtml).join("");
 }
@@ -447,9 +486,9 @@ async function toggleSubscribe(manga) {
 }
 
 function filterCatalog() {
-  if (state.catalogMode !== "category") return sortCatalog(state.catalog);
+  if (state.catalogMode !== "category") return sortCatalog(catalogVisible());
   const cat = state.activeCategory;
-  return sortCatalog(cat ? state.catalog.filter((m) => (m.categories || []).includes(cat)) : []);
+  return sortCatalog(cat ? catalogVisible().filter((m) => (m.categories || []).includes(cat)) : []);
 }
 
 function sortCatalog(items) {
@@ -501,6 +540,7 @@ function initCatalogSearch() {
 const ICON_UP = '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICON_DOWN = '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 let openCategoryId = null; // หมวดที่กำลังกางรายการเรื่องอยู่
+let editCategoryId = null; // หมวดที่กำลังแก้ชื่อ/ตั้งค่าพิเศษอยู่
 
 async function sendJSON(method, url, body) {
   const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
@@ -520,6 +560,7 @@ async function reloadCategories() {
   [state.categories] = await Promise.all([getJSON("/api/categories"), loadCatalog()]);
   renderCategoryChips();
   renderCategoryAdmin();
+  renderPrefs();
   lastCatalogSignature = null;
   renderCatalog(filterCatalog());
 }
@@ -548,17 +589,30 @@ function renderCategoryAdmin() {
              <div class="modal-actions"><button class="btn" data-action="close-members">ยกเลิก</button><button class="btn primary" data-action="save-members">บันทึก</button></div>
            </div>`
         : "";
+      if (c.id === editCategoryId) {
+        return `
+        <li class="category-item open" data-id="${escapeHtml(c.id)}">
+          <form class="settings-row category-edit">
+            <input type="text" name="name" value="${escapeHtml(c.name)}" maxlength="40" required />
+            <label class="checkbox-label"><input type="checkbox" name="special"${c.special ? " checked" : ""} /> หมวดพิเศษ</label>
+            <div class="category-edit-actions">
+              <button type="button" class="btn small" data-action="cancel-edit">ยกเลิก</button>
+              <button type="submit" class="btn small primary">บันทึก</button>
+            </div>
+          </form>
+        </li>`;
+      }
       return `
         <li class="category-item${open ? " open" : ""}" data-id="${escapeHtml(c.id)}">
           <div class="settings-row">
             <div class="grow">
-              <div class="name">${escapeHtml(c.name)}</div>
+              <div class="name">${escapeHtml(c.name)}${c.special ? ' <span class="badge-special">พิเศษ</span>' : ""}</div>
               <div class="meta">${count(c.id)} เรื่อง</div>
             </div>
             <button class="btn small" data-action="members">${open ? "ปิด" : "เลือกเรื่อง"}</button>
             <button class="icon-btn" data-action="up" title="เลื่อนขึ้น"${i === 0 ? " disabled" : ""}>${ICON_UP}</button>
             <button class="icon-btn" data-action="down" title="เลื่อนลง"${i === last ? " disabled" : ""}>${ICON_DOWN}</button>
-            <button class="icon-btn" data-action="rename" title="แก้ชื่อ">${ICON_EDIT}</button>
+            <button class="icon-btn" data-action="edit" title="แก้ไข">${ICON_EDIT}</button>
             <button class="icon-btn danger" data-action="delete" title="ลบ">${ICON_DELETE}</button>
           </div>
           ${picker}
@@ -568,13 +622,32 @@ function renderCategoryAdmin() {
 }
 
 function initCategoryAdmin() {
+  // บันทึกฟอร์มแก้ไขหมวด (ชื่อ + หมวดพิเศษ)
+  el("#categoryList").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const id = form.closest(".category-item").dataset.id;
+    const name = form.elements.name.value;
+    const special = form.elements.special.checked;
+    try {
+      await sendJSON("PUT", `/api/categories/${id}`, { name, special });
+      editCategoryId = null;
+      categoryMsg(`บันทึกหมวด "${name.trim()}" แล้ว${special ? " (หมวดพิเศษ)" : ""}`);
+      await reloadCategories();
+    } catch (err) {
+      categoryMsg(err.message, true);
+    }
+  });
+
   el("#addCategoryForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const input = el("#newCategoryName");
     try {
-      await sendJSON("POST", "/api/categories", { name: input.value });
-      categoryMsg(`เพิ่มหมวด "${input.value.trim()}" แล้ว`);
+      const special = el("#newCategorySpecial").checked;
+      await sendJSON("POST", "/api/categories", { name: input.value, special });
+      categoryMsg(`เพิ่มหมวด${special ? "พิเศษ" : ""} "${input.value.trim()}" แล้ว`);
       input.value = "";
+      el("#newCategorySpecial").checked = false;
       await reloadCategories();
     } catch (err) {
       categoryMsg(err.message, true);
@@ -606,11 +679,12 @@ function initCategoryAdmin() {
         [ids[i], ids[j]] = [ids[j], ids[i]];
         await sendJSON("PUT", "/api/categories/order", { ids });
         categoryMsg("");
-      } else if (action === "rename") {
-        const name = prompt("ชื่อหมวดหมู่ใหม่", cat.name);
-        if (!name || name.trim() === cat.name) return;
-        await sendJSON("PUT", `/api/categories/${id}`, { name });
-        categoryMsg(`เปลี่ยนชื่อเป็น "${name.trim()}" แล้ว`);
+      } else if (action === "edit" || action === "cancel-edit") {
+        editCategoryId = action === "edit" ? id : null;
+        openCategoryId = null;
+        renderCategoryAdmin();
+        if (editCategoryId) el(`.category-item[data-id="${CSS.escape(id)}"] input[name="name"]`).focus();
+        return;
       } else if (action === "delete") {
         if (!confirm(`ลบหมวด "${cat.name}"? (เรื่องในหมวดนี้ไม่ถูกลบ แค่ไม่อยู่ในหมวดนี้แล้ว)`)) return;
         await sendJSON("DELETE", `/api/categories/${id}`);
@@ -1530,6 +1604,7 @@ function init() {
   initCatalogModes();
   initSearch();
   initCategoryAdmin();
+  initPrefs();
   initAddUserForm();
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkForUpdate();

@@ -87,6 +87,16 @@
         <a href="/logout" class="btn danger">ออกจากระบบ</a>
       </div>
 
+      <div id="prefCard" class="pref-card" hidden>
+        <label class="pref-row">
+          <div class="grow">
+            <div class="pref-title">แสดงหมวดพิเศษ</div>
+            <div class="pref-desc">แสดงหมวดพิเศษและเรื่องในหมวดนั้น ในหน้าทั้งหมดและหน้าค้นหา</div>
+          </div>
+          <input type="checkbox" id="showSpecialToggle" class="switch" role="switch" />
+        </label>
+      </div>
+
       <div class="admin-only" hidden>
         <nav class="sub-tabs">
           <button class="sub-tab-btn active" data-subtab="mangaManage">เรื่อง</button>
@@ -109,10 +119,11 @@
         <div id="categoryManageSubview" class="subview">
           <form id="addCategoryForm" class="add-form">
             <input type="text" id="newCategoryName" placeholder="ชื่อหมวดหมู่ใหม่ เช่น แอกชัน" maxlength="40" required />
+            <label class="checkbox-label"><input type="checkbox" id="newCategorySpecial" /> หมวดพิเศษ</label>
             <button type="submit" class="btn primary">+ เพิ่มหมวดหมู่</button>
           </form>
           <div id="categoryMsg" class="form-msg"></div>
-          <p class="hint">ลำดับในรายการนี้ = ลำดับที่ผู้ใช้เห็นในแถบหมวดหมู่ · แตะ "เลือกเรื่อง" เพื่อกำหนดว่าหมวดนี้มีเรื่องอะไรบ้าง</p>
+          <p class="hint">ลำดับในรายการนี้ = ลำดับที่ผู้ใช้เห็นในแถบหมวดหมู่ · แตะ "เลือกเรื่อง" เพื่อกำหนดว่าหมวดนี้มีเรื่องอะไรบ้าง · <b>หมวดพิเศษ</b> ผู้ใช้จะเห็นก็ต่อเมื่อเปิด "แสดงหมวดพิเศษ" ในหน้าตั้งค่าของตัวเอง</p>
           <ul id="categoryList" class="settings-list"></ul>
         </div>
 
