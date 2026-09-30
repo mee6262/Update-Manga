@@ -98,6 +98,7 @@ function showTab(tab) {
     renderCategoryAdmin();
     loadCatalog().then(() => { renderSettings(); renderCategoryAdmin(); });
     renderUserList();
+    loadSiteSettings();
   }
 }
 
@@ -867,15 +868,95 @@ async function renderUserList() {
     const users = await getJSON("/api/users");
     list.innerHTML = users
       .map(
-        (u) =>
-          `<li class="settings-row"><div class="grow"><div class="name">${escapeHtml(u.username)}${
-            u.is_admin ? " (admin)" : ""
-          }</div></div></li>`
+        (u) => `
+        <li class="settings-row" data-user="${escapeHtml(u.username)}">
+          <div class="grow">
+            <div class="name">${escapeHtml(u.username)}${u.is_admin ? " (admin)" : ""}</div>
+            <div class="meta">${escapeHtml(u.email || "ไม่มีอีเมล")}${u.must_change_password ? " · รอเปลี่ยนรหัสผ่าน" : ""}</div>
+          </div>
+          <button class="btn small" data-action="reset-password">รีเซ็ตรหัสผ่าน</button>
+        </li>`
       )
       .join("");
   } catch (e) {
     // เงียบไว้ ไม่ใช่ประเด็นสำคัญถ้าโหลดรายชื่อสมาชิกไม่ได้ (หรือไม่ใช่ admin)
   }
+}
+
+async function loadSiteSettings() {
+  try {
+    el("#registrationToggle").checked = (await getJSON("/api/site_settings")).registration_open;
+  } catch (e) {
+    // ไม่ใช่ admin
+  }
+}
+
+function initUserAdmin() {
+  el("#registrationToggle").addEventListener("change", async (e) => {
+    const msg = el("#addUserMsg");
+    try {
+      const res = await sendJSON("PUT", "/api/site_settings", { registration_open: e.target.checked });
+      e.target.checked = res.registration_open;
+      msg.className = "form-msg success";
+      msg.textContent = res.registration_open ? "เปิดรับสมัครสมาชิกแล้ว" : "ปิดรับสมัครสมาชิกแล้ว";
+    } catch (err) {
+      e.target.checked = !e.target.checked;
+      msg.className = "form-msg error";
+      msg.textContent = err.message;
+    }
+  });
+
+  el("#userList").addEventListener("click", async (e) => {
+    const btn = e.target.closest('[data-action="reset-password"]');
+    if (!btn) return;
+    const username = btn.closest("[data-user]").dataset.user;
+    if (!confirm(`รีเซ็ตรหัสผ่านของ "${username}" เป็น 00000000?\n\nทุกเครื่องของสมาชิกคนนี้จะต้อง login ใหม่ด้วยรหัส 00000000 แล้วไปเปลี่ยนรหัสเองที่หน้าตั้งค่า`)) return;
+    const msg = el("#addUserMsg");
+    try {
+      await sendJSON("POST", `/api/users/${encodeURIComponent(username)}/reset_password`);
+      msg.className = "form-msg success";
+      msg.textContent = `รีเซ็ตรหัสผ่านของ "${username}" เป็น 00000000 แล้ว`;
+      renderUserList();
+    } catch (err) {
+      msg.className = "form-msg error";
+      msg.textContent = err.message;
+    }
+  });
+}
+
+// ---------- เปลี่ยนรหัสผ่าน (ทุกคน) ----------
+function initPasswordForm() {
+  const mustChange = Boolean(state.currentUser.must_change_password);
+  el("#pwNotice").hidden = !mustChange;
+  if (mustChange) el("#passwordCard").open = true;
+
+  el("#passwordForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const msg = el("#passwordMsg");
+    const body = { old: form.elements.old.value, new: form.elements.new.value, confirm: form.elements.confirm.value };
+    if (body.new !== body.confirm) {
+      msg.className = "form-msg error";
+      msg.textContent = "ยืนยันรหัสผ่านใหม่ไม่ตรงกัน";
+      return;
+    }
+    try {
+      await sendJSON("POST", "/api/account/password", body);
+      form.reset();
+      msg.className = "form-msg success";
+      msg.textContent = "เปลี่ยนรหัสผ่านแล้ว เครื่องอื่นที่ login ค้างไว้จะต้อง login ใหม่ด้วยรหัสใหม่";
+      state.currentUser.must_change_password = false;
+      el("#pwNotice").hidden = true;
+      el("#homePwNotice").hidden = true;
+    } catch (err) {
+      msg.className = "form-msg error";
+      msg.textContent = err.message;
+    }
+  });
+
+  // เตือนที่หน้าแรกด้วย (ผู้ใช้ที่ถูกรีเซ็ตรหัสมักไม่ได้เข้าหน้าตั้งค่าเอง)
+  el("#homePwNotice").hidden = !mustChange;
+  el("#homePwNotice").addEventListener("click", () => showTab("settings"));
 }
 
 function initAddUserForm() {
@@ -1784,6 +1865,8 @@ function init() {
   initCategoryAdmin();
   initPrefs();
   initHomeTabs();
+  initUserAdmin();
+  initPasswordForm();
   initTheme();
   initAddUserForm();
   document.addEventListener("visibilitychange", () => {

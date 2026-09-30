@@ -23,13 +23,31 @@
 </head>
 <body>
   <div class="login-wrap">
-    <form class="login-box" method="POST">
+    <div class="login-box">
       <h1>📚 Update Manga</h1>
+      <nav class="auth-tabs">
+        <a href="/login" class="auth-tab{% if mode == 'login' %} active{% endif %}">เข้าสู่ระบบ</a>
+        {% if registration_open %}<a href="/register" class="auth-tab{% if mode == 'register' %} active{% endif %}">สมัครสมาชิก</a>{% endif %}
+      </nav>
       {% if error %}<div class="form-msg error">{{ error }}</div>{% endif %}
-      <input type="text" name="username" placeholder="ชื่อผู้ใช้" autofocus required />
-      <input type="password" name="password" placeholder="รหัสผ่าน" required />
-      <button type="submit" class="btn primary">เข้าสู่ระบบ</button>
-    </form>
+      {% if mode == 'register' %}
+      <form class="auth-form" method="POST" action="/register">
+        <input type="text" name="username" placeholder="Username" value="{{ form.username or '' }}" autocomplete="username"
+               autocapitalize="none" spellcheck="false" minlength="3" maxlength="20" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{2,19}"
+               title="3-20 ตัว ใช้ได้เฉพาะ a-z, 0-9, _ . -" required autofocus />
+        <input type="email" name="email" placeholder="E-Mail" value="{{ form.email or '' }}" autocomplete="email" autocapitalize="none" required />
+        <input type="password" name="password" placeholder="Password (อย่างน้อย 8 ตัว)" autocomplete="new-password" minlength="8" required />
+        <input type="password" name="confirm" placeholder="Confirm Password" autocomplete="new-password" minlength="8" required />
+        <button type="submit" class="btn primary">สมัครสมาชิก</button>
+      </form>
+      {% else %}
+      <form class="auth-form" method="POST">
+        <input type="text" name="username" placeholder="ชื่อผู้ใช้" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus required />
+        <input type="password" name="password" placeholder="รหัสผ่าน" autocomplete="current-password" required />
+        <button type="submit" class="btn primary">เข้าสู่ระบบ</button>
+      </form>
+      {% endif %}
+    </div>
   </div>
 </body>
 </html>

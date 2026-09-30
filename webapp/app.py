@@ -272,7 +272,7 @@ def require_admin(view):
 
 @app.before_request
 def require_login():
-    if request.endpoint in ("login", "static", "healthz", "service_worker"):
+    if request.endpoint in ("login", "register", "static", "healthz", "service_worker"):
         return None
     # ถ้ายังไม่มีผู้ใช้ในระบบเลย (เช่น dev บนเครื่องตัวเอง ไม่เคยตั้ง WEB_USERNAME/WEB_PASSWORD)
     # ปล่อยผ่านไม่บังคับ login
@@ -285,27 +285,152 @@ def require_login():
     ):
         return None
     if current_username():
-        return None
+        # บัญชีถูกลบ หรือรหัสผ่านถูกเปลี่ยน/รีเซ็ต (pw_ver เปลี่ยน) หลังจาก login เครื่องนี้ไว้ → ให้ login ใหม่
+        # ทุกเครื่องที่ค้างอยู่ ไม่งั้นคนที่รู้รหัสเก่าก็ยังใช้บัญชีต่อได้เรื่อย ๆ
+        user = storage.load_users().get(current_username())
+        if user and user.get("pw_ver", 0) == session.get("pw_ver", 0):
+            return None
+        session.clear()
     if request.path.startswith("/api/"):
         return jsonify({"error": "unauthorized"}), 401
     return redirect(url_for("login", next=request.path))
+
+
+# ---------- บัญชีผู้ใช้ ----------
+# ชื่อผู้ใช้ถูกใช้เป็นชื่อโฟลเดอร์ (data/users/<ชื่อ>/) ต้องจำกัดตัวอักษรเสมอ ไม่งั้นชื่ออย่าง "../x" จะเขียนไฟล์
+# ออกนอกโฟลเดอร์ข้อมูลได้
+USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,19}$")
+EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]+\.[^@\s]{2,}$")
+MIN_PASSWORD = 8
+RESET_PASSWORD = "00000000"
+REGISTER_LIMIT = 5              # สมัครได้ไม่เกินกี่บัญชี
+REGISTER_WINDOW = 3600          # ต่อ IP ต่อชั่วโมง (กันบอทสมัครรัว ๆ)
+_register_log: dict[str, list[float]] = {}
+
+
+def registration_open() -> bool:
+    # ค่าเริ่มต้นปิด: เว็บเปิดให้เข้าจากอินเทอร์เน็ต ถ้าเปิดรับสมัครเองโดยไม่ตั้งใจ ใครรู้ลิงก์ก็สมัครใช้เซิร์ฟเวอร์ได้
+    return bool(storage.load_site_settings().get("registration_open", False))
+
+
+def _validate_username(username: str) -> str | None:
+    if not USERNAME_RE.match(username):
+        return "ชื่อผู้ใช้ต้องยาว 3-20 ตัว ใช้ได้เฉพาะ a-z, 0-9, _ . - (ขึ้นต้นด้วยตัวอักษรหรือตัวเลข)"
+    return None
+
+
+def _validate_new_password(password: str, confirm: str | None = None) -> str | None:
+    if len(password) < MIN_PASSWORD:
+        return f"รหัสผ่านต้องยาวอย่างน้อย {MIN_PASSWORD} ตัว"
+    if len(password) > 128:
+        return "รหัสผ่านยาวเกินไป"
+    if confirm is not None and password != confirm:
+        return "ยืนยันรหัสผ่านไม่ตรงกัน"
+    return None
+
+
+def _start_session(username: str, user: dict):
+    session.clear()
+    session.permanent = True
+    session["user"] = username
+    session["is_admin"] = bool(user.get("is_admin"))
+    session["pw_ver"] = user.get("pw_ver", 0)
+
+
+def _safe_next(target: str | None) -> str:
+    # กันลิงก์ ?next=https://เว็บอื่น พาผู้ใช้ออกไปนอกเว็บหลัง login (open redirect)
+    if target and target.startswith("/") and not target.startswith("//"):
+        return target
+    return url_for("index")
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
     if request.method == "POST":
-        username = request.form.get("username", "")
+        username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         users = storage.load_users()
         user = users.get(username)
         if user and check_password_hash(user["password_hash"], password):
-            session.permanent = True
-            session["user"] = username
-            session["is_admin"] = bool(user.get("is_admin"))
-            return redirect(request.args.get("next") or url_for("index"))
+            _start_session(username, user)
+            return redirect(_safe_next(request.args.get("next")))
         error = "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง"
-    return render_template("login.html", error=error)
+    return render_template("login.html", error=error, mode="login", form={}, registration_open=registration_open())
+
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if not registration_open():
+        return render_template(
+            "login.html", error="ขณะนี้ปิดรับสมัครสมาชิก ติดต่อผู้ดูแลเพื่อขอบัญชี", mode="login", form={},
+            registration_open=False,
+        ), 403
+    if request.method == "GET":
+        return render_template("login.html", error=None, mode="register", form={}, registration_open=True)
+    form = {k: request.form.get(k, "").strip() for k in ("username", "email")}
+    password = request.form.get("password", "")
+    confirm = request.form.get("confirm", "")
+
+    def fail(message):
+        return render_template("login.html", error=message, mode="register", form=form, registration_open=True), 400
+
+    error = _validate_username(form["username"]) or (
+        None if EMAIL_RE.match(form["email"]) else "รูปแบบอีเมลไม่ถูกต้อง"
+    ) or _validate_new_password(password, confirm)
+    if error:
+        return fail(error)
+
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
+    now = time.time()
+    recent = [t for t in _register_log.get(ip, []) if now - t < REGISTER_WINDOW]
+    if len(recent) >= REGISTER_LIMIT:
+        return fail("สมัครสมาชิกถี่เกินไป ลองใหม่อีกครั้งภายหลัง")
+
+    with storage.state_lock:
+        users = storage.load_users(fresh=True)
+        if any(u.casefold() == form["username"].casefold() for u in users):
+            return fail("มีชื่อผู้ใช้นี้อยู่แล้ว")
+        if any((info.get("email") or "").casefold() == form["email"].casefold() for info in users.values()):
+            return fail("อีเมลนี้ถูกใช้สมัครไปแล้ว")
+        user = {
+            "password_hash": generate_password_hash(password),
+            "is_admin": False,
+            "email": form["email"],
+            "created_at": now_iso(),
+        }
+        users[form["username"]] = user
+        storage.save_users(users)
+        # สมาชิกใหม่เริ่มจากไม่ติดตามอะไรเลย ไปเลือกเองที่หน้า "ทั้งหมด"
+        storage.save_subscriptions(form["username"], [])
+    _register_log[ip] = recent + [now]
+    _start_session(form["username"], user)
+    return redirect(url_for("index"))
+
+
+@app.route("/api/account/password", methods=["POST"])
+def change_password():
+    username = current_username()
+    if not username:
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(force=True, silent=True) or {}
+    old, new, confirm = body.get("old") or "", body.get("new") or "", body.get("confirm") or ""
+    error = _validate_new_password(new, confirm)
+    if error:
+        return jsonify({"error": error}), 400
+    if new == RESET_PASSWORD:
+        return jsonify({"error": "รหัสผ่านใหม่ต้องไม่ใช่รหัสเริ่มต้น 00000000"}), 400
+    with storage.state_lock:
+        users = storage.load_users(fresh=True)
+        user = users.get(username)
+        if not user or not check_password_hash(user["password_hash"], old):
+            return jsonify({"error": "รหัสผ่านเดิมไม่ถูกต้อง"}), 400
+        user["password_hash"] = generate_password_hash(new)
+        user["pw_ver"] = user.get("pw_ver", 0) + 1  # เครื่องอื่นที่ login ค้างไว้ต้อง login ใหม่
+        user.pop("must_change_password", None)
+        storage.save_users(users)
+    session["pw_ver"] = user["pw_ver"]  # เครื่องที่กดเปลี่ยนเองยังใช้ต่อได้
+    return jsonify({"ok": True})
 
 
 @app.route("/logout")
@@ -333,7 +458,52 @@ def update_prefs():
 @require_admin
 def list_users():
     users = storage.load_users()
-    return jsonify([{"username": u, "is_admin": bool(info.get("is_admin"))} for u, info in users.items()])
+    return jsonify([
+        {
+            "username": u,
+            "is_admin": bool(info.get("is_admin")),
+            "email": info.get("email"),
+            "must_change_password": bool(info.get("must_change_password")),
+        }
+        for u, info in users.items()
+    ])
+
+
+@app.route("/api/site_settings", methods=["GET"])
+@require_admin
+def get_site_settings():
+    return jsonify({"registration_open": registration_open()})
+
+
+@app.route("/api/site_settings", methods=["PUT"])
+@require_admin
+def update_site_settings():
+    body = request.get_json(force=True, silent=True) or {}
+    with storage.state_lock:
+        settings = storage.load_site_settings(fresh=True)
+        if "registration_open" in body:
+            settings["registration_open"] = bool(body["registration_open"])
+        storage.save_site_settings(settings)
+    return jsonify({"registration_open": registration_open()})
+
+
+@app.route("/api/users/<username>/reset_password", methods=["POST"])
+@require_admin
+def reset_password(username):
+    """รีเซ็ตรหัสผ่านสมาชิกเป็น 00000000 — ทุกเครื่องของสมาชิกคนนั้นถูกให้ login ใหม่ และจะเห็นแจ้งเตือนให้ไป
+    เปลี่ยนรหัสผ่านที่หน้าตั้งค่าจนกว่าจะเปลี่ยน"""
+    with storage.state_lock:
+        users = storage.load_users(fresh=True)
+        user = users.get(username)
+        if not user:
+            return jsonify({"error": "ไม่พบสมาชิกนี้"}), 404
+        user["password_hash"] = generate_password_hash(RESET_PASSWORD)
+        user["pw_ver"] = user.get("pw_ver", 0) + 1
+        user["must_change_password"] = True
+        storage.save_users(users)
+    if username == current_username():
+        session["pw_ver"] = user["pw_ver"]
+    return jsonify({"ok": True})
 
 
 @app.route("/api/users", methods=["POST"])
@@ -344,13 +514,12 @@ def add_user():
     password = body.get("password") or ""
     new_is_admin = bool(body.get("is_admin"))
 
-    if not username or not password:
-        return jsonify({"error": "ต้องระบุชื่อผู้ใช้และรหัสผ่าน"}), 400
-    if len(password) < 4:
-        return jsonify({"error": "รหัสผ่านสั้นเกินไป"}), 400
+    error = _validate_username(username) or _validate_new_password(password)
+    if error:
+        return jsonify({"error": error}), 400
 
     users = storage.load_users(fresh=True)
-    if username in users:
+    if any(u.casefold() == username.casefold() for u in users):
         return jsonify({"error": "มีชื่อผู้ใช้นี้อยู่แล้ว"}), 409
 
     users[username] = {"password_hash": generate_password_hash(password), "is_admin": new_is_admin}
@@ -658,7 +827,11 @@ def index():
         "build": build_id(),
         "push_key": webpush.public_key() if username else None,
         "categories": storage.load_categories(),
-        "me": {"username": username, "is_admin": is_admin()},
+        "me": {
+            "username": username,
+            "is_admin": is_admin(),
+            "must_change_password": bool(storage.load_users().get(username, {}).get("must_change_password")) if username else False,
+        },
         "prefs": storage.load_prefs(username) if username else {},
         "manga": manga_list_payload(username),
     }

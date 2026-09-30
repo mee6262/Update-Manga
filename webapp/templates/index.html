@@ -55,6 +55,7 @@
 
   <main>
     <section id="listView" class="view active">
+      <button id="homePwNotice" class="notice-card notice-btn" hidden>รหัสผ่านของคุณถูกรีเซ็ต แตะเพื่อไปตั้งรหัสผ่านใหม่ ›</button>
       <div id="mangaGrid" class="manga-grid"></div>
       <div id="emptyState" class="empty-state" hidden>
         ยังไม่ได้ติดตามเรื่องไหนเลย ไปที่แท็บ "ทั้งหมด" เพื่อเลือกเรื่องที่อยากติดตาม
@@ -104,6 +105,26 @@
         </div>
         <a href="/logout" class="btn danger">ออกจากระบบ</a>
       </div>
+
+      <div id="pwNotice" class="notice-card" hidden>
+        รหัสผ่านของคุณถูกรีเซ็ตเป็นรหัสเริ่มต้น กรุณาตั้งรหัสผ่านใหม่ด้านล่าง
+      </div>
+
+      <details id="passwordCard" class="pref-card collapsible">
+        <summary class="pref-row">
+          <div class="grow">
+            <div class="pref-title">เปลี่ยนรหัสผ่าน</div>
+          </div>
+          <span class="chev" aria-hidden="true">›</span>
+        </summary>
+        <form id="passwordForm" class="password-form">
+          <input type="password" name="old" placeholder="รหัสผ่านเดิม" autocomplete="current-password" required />
+          <input type="password" name="new" placeholder="รหัสผ่านใหม่ (อย่างน้อย 8 ตัว)" autocomplete="new-password" minlength="8" required />
+          <input type="password" name="confirm" placeholder="ยืนยันรหัสผ่านใหม่" autocomplete="new-password" minlength="8" required />
+          <div id="passwordMsg" class="form-msg"></div>
+          <button type="submit" class="btn primary">บันทึกรหัสผ่านใหม่</button>
+        </form>
+      </details>
 
       <div class="pref-card">
         <div class="pref-row">
@@ -159,6 +180,15 @@
         </div>
 
         <div id="userManageSubview" class="subview">
+          <div class="pref-card">
+            <label class="pref-row">
+              <div class="grow">
+                <div class="pref-title">เปิดรับสมัครสมาชิก</div>
+                <div class="pref-desc">เปิดไว้ = ใครมีลิงก์เว็บก็สมัครเองได้ที่หน้า login · ปิด = แอดมินเพิ่มสมาชิกให้เท่านั้น</div>
+              </div>
+              <input type="checkbox" id="registrationToggle" class="switch" role="switch" />
+            </label>
+          </div>
         <form id="addUserForm" class="add-form">
           <input type="text" id="newUsername" placeholder="ชื่อผู้ใช้" required />
           <input type="password" id="newPassword" placeholder="รหัสผ่าน" required />
