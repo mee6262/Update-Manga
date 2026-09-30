@@ -1304,6 +1304,7 @@ def reading_history():
             "id": manga_id,
             "name": manga["name"],
             "cover_url": manga.get("cover_url"),
+            "categories": manga.get("categories") or [],  # หน้าเว็บใช้ซ่อนเรื่องในหมวดพิเศษตามที่ผู้ใช้ตั้งค่า
             "latest_chapter": manga.get("latest_chapter"),
             "latest_chapter_url": manga.get("latest_chapter_url"),
             "chapter_text": chapter["text"],

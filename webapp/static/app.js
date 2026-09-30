@@ -163,7 +163,7 @@ function readAgo(iso) {
 }
 
 function renderHistory() {
-  const items = state.history;
+  const items = withoutSpecial(state.history);
   const unread = items.filter((h) => h.is_new).length;
   el("#historyStats").innerHTML = items.length
     ? `<span class="history-count">${items.length} เรื่อง</span><span class="history-unread">${unread} เรื่องที่มีตอนใหม่ยังไม่อ่าน</span>`
@@ -226,11 +226,16 @@ function visibleCategories() {
   return showSpecial() ? state.categories : state.categories.filter((c) => !c.special);
 }
 
-function catalogVisible() {
-  if (showSpecial()) return state.catalog;
+// กรองเรื่องที่อยู่ในหมวดพิเศษออก (ถ้าผู้ใช้ไม่ได้เปิดแสดง) — ใช้ทั้งหน้าทั้งหมด, ค้นหา และรายการอ่านล่าสุด
+function withoutSpecial(items) {
+  if (showSpecial()) return items;
   const hidden = new Set(state.categories.filter((c) => c.special).map((c) => c.id));
-  if (!hidden.size) return state.catalog;
-  return state.catalog.filter((m) => !(m.categories || []).some((id) => hidden.has(id)));
+  if (!hidden.size) return items;
+  return items.filter((m) => !(m.categories || []).some((id) => hidden.has(id)));
+}
+
+function catalogVisible() {
+  return withoutSpecial(state.catalog);
 }
 
 // ---------- ธีม ----------
@@ -312,6 +317,7 @@ function initPrefs() {
     renderCategoryChips();
     renderCatalog(filterCatalog());
     renderSearch();
+    renderHistory();
     fetch("/api/prefs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
