@@ -40,6 +40,10 @@
         <svg viewBox="0 0 24 24" width="20" height="20"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M13.73 21a2 2 0 0 1-3.46 0" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><line class="bell-off" x1="3" y1="3" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
     </div>
+    <nav id="homeTabs" class="home-tabs" aria-label="หน้าหลัก">
+      <button class="home-tab active" data-home="grid">หน้าหลัก</button>
+      <button class="home-tab" data-home="history">รายการอ่านล่าสุด</button>
+    </nav>
     <div id="categoryBar" class="category-bar" hidden>
       <div id="categoryChips" class="category-chips" role="tablist"></div>
       <button id="categoryExpand" class="category-expand" title="แสดงหมวดหมู่ทั้งหมด" aria-expanded="false">
@@ -54,6 +58,11 @@
       <div id="mangaGrid" class="manga-grid"></div>
       <div id="emptyState" class="empty-state" hidden>
         ยังไม่ได้ติดตามเรื่องไหนเลย ไปที่แท็บ "ทั้งหมด" เพื่อเลือกเรื่องที่อยากติดตาม
+      </div>
+      <div id="historyView" hidden>
+        <div id="historyStats" class="history-stats"></div>
+        <ul id="historyList" class="history-list"></ul>
+        <div id="historyEmpty" class="empty-state" hidden>ยังไม่มีประวัติการอ่าน เปิดอ่านเรื่องไหนก็ตามจะขึ้นที่นี่</div>
       </div>
     </section>
 

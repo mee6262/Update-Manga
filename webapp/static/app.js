@@ -113,6 +113,97 @@ function initTabs() {
   state.tab = "list";
 }
 
+// ---------- หน้าหลัก: "หน้าหลัก" (กริดเรื่องที่ติดตาม) / "รายการอ่านล่าสุด" ----------
+state.homeMode = "grid";
+state.history = [];
+let readerFromHistory = false; // เปิดหน้าอ่านจากปุ่ม "อ่านต่อ" — ปิดแล้วกลับมารายการอ่านล่าสุด ไม่ใช่หน้าเลือกตอน
+
+function setHomeMode(mode) {
+  state.homeMode = mode;
+  els(".home-tab").forEach((b) => b.classList.toggle("active", b.dataset.home === mode));
+  el("#mangaGrid").hidden = mode !== "grid";
+  el("#emptyState").hidden = mode !== "grid" || state.manga.length > 0;
+  el("#historyView").hidden = mode !== "history";
+  if (mode === "history") {
+    renderHistory();
+    loadHistory();
+  }
+}
+
+function initHomeTabs() {
+  els(".home-tab").forEach((b) => b.addEventListener("click", () => setHomeMode(b.dataset.home)));
+  el("#historyList").addEventListener("click", (e) => {
+    const row = e.target.closest(".history-row");
+    if (!row) return;
+    const item = state.history.find((h) => h.id === row.dataset.id);
+    if (!item) return;
+    if (e.target.closest('[data-action="resume"]')) resumeReading(item);
+    else openChapterList(item);
+  });
+}
+
+async function loadHistory() {
+  try {
+    state.history = (await getJSON("/api/history")).items;
+    renderHistory();
+  } catch (e) {
+    // ใช้ของเดิมต่อ
+  }
+}
+
+// "อ่านล่าสุดวันนี้" / "เมื่อวาน" / "N วันที่แล้ว" — นับตามวันในปฏิทินของเครื่อง ไม่ใช่ครบ 24 ชม.
+function readAgo(iso) {
+  if (!iso) return "";
+  const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((day(new Date()) - day(new Date(iso))) / 86400000);
+  if (days <= 0) return "อ่านล่าสุดวันนี้";
+  if (days === 1) return "อ่านล่าสุดเมื่อวาน";
+  if (days < 30) return `อ่านล่าสุด ${days} วันที่แล้ว`;
+  return `อ่านล่าสุด ${new Date(iso).toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "numeric" })}`;
+}
+
+function renderHistory() {
+  const items = state.history;
+  const unread = items.filter((h) => h.is_new).length;
+  el("#historyStats").innerHTML = items.length
+    ? `<span class="history-count">${items.length} เรื่อง</span><span class="history-unread">${unread} เรื่องที่มีตอนใหม่ยังไม่อ่าน</span>`
+    : "";
+  el("#historyEmpty").hidden = items.length > 0;
+  el("#historyList").innerHTML = items
+    .map(
+      (h) => `
+      <li class="history-row" data-id="${escapeHtml(h.id)}">
+        <img class="history-cover" src="${proxied(h.cover_url, COVER_WIDTH)}" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0" />
+        <div class="history-info">
+          <div class="history-name">${h.is_new ? '<span class="badge-up" title="มีตอนใหม่ที่ยังไม่อ่าน">ใหม่</span>' : ""}<span>${escapeHtml(h.name)}</span></div>
+          <div class="history-chapter">${escapeHtml(h.chapter_text || "")}${h.fraction ? ` · ค้างไว้ ${Math.round(h.fraction * 100)}%` : ""}</div>
+          <div class="history-time">${readAgo(h.last_read_at)}</div>
+        </div>
+        <button class="btn resume-btn" data-action="resume"${h.chapter_url ? "" : " disabled"}>อ่านต่อ</button>
+      </li>`
+    )
+    .join("");
+}
+
+// เปิดตอนที่อ่านล่าสุดตรง ๆ และเลื่อนไปจุดที่อ่านค้างไว้ (ใช้กลไกกู้ตำแหน่งเดียวกับหน้าเลือกตอน)
+function resumeReading(item) {
+  if (!item.chapter_url) return;
+  currentManga = { id: item.id, name: item.name, latest_chapter_url: item.latest_chapter_url };
+  readerFromHistory = true;
+  lastReadUrl = item.chapter_url;
+  lastScrollInfo = item.fraction ? { url: item.chapter_url, fraction: item.fraction } : null;
+  const cached = chapterListCache.get(item.id);
+  currentChapters = cached ? cached.chapters || [] : [];
+  openReader(item.chapter_url);
+  // รายชื่อตอนไว้แสดงชื่อตอน/มาร์คอ่านแล้วในเครื่อง ไม่ต้องรอ — หน้าอ่านเปิดได้ก่อน
+  getJSON(`/api/manga/${item.id}/chapters`)
+    .then((data) => {
+      chapterListCache.set(item.id, data);
+      if (currentManga && currentManga.id === item.id) currentChapters = data.chapters || [];
+    })
+    .catch(() => {});
+}
+
 // ---------- หมวดหมู่ในหน้า "ทั้งหมด" ----------
 state.categories = BOOT.categories || [];
 state.catalogMode = "all"; // "all" = เรื่องทั้งหมด, "category" = กรองตามหมวด
@@ -368,7 +459,7 @@ let lastGridSignature = null;
 function renderGrid() {
   const grid = el("#mangaGrid");
   const empty = el("#emptyState");
-  empty.hidden = state.manga.length > 0;
+  empty.hidden = state.manga.length > 0 || state.homeMode !== "grid";
 
   const signature = JSON.stringify(
     state.manga.map((m) => [m.id, m.is_new, m.latest_chapter, m.cover_url, m.last_checked_at])
@@ -927,6 +1018,7 @@ const BOOKMARK_ICON =
 
 function openChapterList(manga) {
   if (!manga) return;
+  readerFromHistory = false;
   currentManga = { id: manga.id, name: manga.name, latest_chapter_url: manga.latest_chapter_url };
   const view = el("#chapterListView");
   view.hidden = false;
@@ -1062,6 +1154,7 @@ function closeChapterList() {
     mangaListStale = false;
     loadManga();
   }
+  if (state.homeMode === "history") loadHistory();
   reloadIfPending();
 }
 
@@ -1532,6 +1625,19 @@ async function closeReader() {
   el("#reader").hidden = true;
   prefetchedChapters.clear();
   document.body.style.overflow = "";
+  if (readerFromHistory) {
+    readerFromHistory = false;
+    currentManga = null;
+    currentChapters = [];
+    await saved;
+    loadHistory();
+    if (mangaListStale) {
+      mangaListStale = false;
+      loadManga();
+    }
+    reloadIfPending();
+    return;
+  }
   if (currentManga) {
     // กลับไปหน้าเลือกตอน พร้อมสถานะอ่านแล้วที่อัปเดตล่าสุด (วาดจากของในมือก่อน แล้วค่อยเช็คของจริง)
     el("#chapterListView").hidden = false;
@@ -1671,6 +1777,7 @@ function init() {
   initSearch();
   initCategoryAdmin();
   initPrefs();
+  initHomeTabs();
   initTheme();
   initAddUserForm();
   document.addEventListener("visibilitychange", () => {

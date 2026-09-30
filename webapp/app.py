@@ -1279,6 +1279,44 @@ def get_chapter(manga_id):
     return jsonify(data)
 
 
+@app.route("/api/history", methods=["GET"])
+def reading_history():
+    """รายการอ่านล่าสุด: ทุกเรื่องที่เคยเปิดอ่าน (ไม่จำกัดเฉพาะที่ติดตาม) เรียงจากอ่านล่าสุดก่อน พร้อมตอนที่อ่าน
+    ล่าสุดของแต่ละเรื่อง และตำแหน่งที่อ่านค้างไว้ (ถ้ายังอ่านตอนนั้นไม่จบ) ให้ปุ่ม "อ่านต่อ" เปิดไปจุดเดิม"""
+    username = current_username()
+    if not username:
+        return jsonify({"items": []})
+    read_state = storage.load_read_state(username)
+    items = []
+    for manga_id, entry in read_state.items():
+        manga = storage.get_manga(manga_id)
+        read_keys = (entry or {}).get("read_keys") or []
+        if not manga or not read_keys:
+            continue
+        last_key = read_keys[-1]
+        chapter = next((c for c in manga.get("chapters") or [] if _chapter_key(c["text"]) == last_key), None)
+        if not chapter:
+            # ตอนที่อ่านไม่อยู่ในรายชื่อแล้ว (เช่นเว็บลบ/เปลี่ยนลิงก์) ยังแสดงเรื่องได้ แต่อ่านต่อจากลิงก์เดิมไม่ได้
+            text = f"ตอนที่ {last_key:g}" if isinstance(last_key, float) else None
+            chapter = {"text": text, "url": None}
+        scroll = entry.get("last_scroll") or {}
+        items.append({
+            "id": manga_id,
+            "name": manga["name"],
+            "cover_url": manga.get("cover_url"),
+            "latest_chapter": manga.get("latest_chapter"),
+            "latest_chapter_url": manga.get("latest_chapter_url"),
+            "chapter_text": chapter["text"],
+            "chapter_url": chapter["url"],
+            # ตำแหน่งค้างใช้ได้เฉพาะเมื่อเป็นตอนเดียวกับที่อ่านล่าสุด (ตอนอื่นเปิดจากบนสุดตามปกติ)
+            "fraction": scroll.get("fraction") if scroll.get("key") == last_key else None,
+            "last_read_at": entry.get("last_read_at"),
+            "is_new": is_new(manga, read_state),
+        })
+    items.sort(key=lambda i: i["last_read_at"] or "", reverse=True)
+    return jsonify({"items": items})
+
+
 @app.route("/api/manga/<manga_id>/chapters", methods=["GET"])
 def list_chapters(manga_id):
     manga = storage.get_manga(manga_id)

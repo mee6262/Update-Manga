@@ -772,3 +772,29 @@ a.btn { text-decoration: none; display: inline-block; }
   select,
   textarea { font-size: 16px !important; }
 }
+
+/* หน้าหลัก: แถบ "หน้าหลัก | รายการอ่านล่าสุด" (แสดงเฉพาะแท็บหน้าหลัก) */
+.home-tabs { display: flex; gap: 26px; padding: 0 16px; border-top: 1px solid var(--border); }
+body:not([data-tab="list"]) .home-tabs { display: none; }
+.home-tab { position: relative; background: none; border: 0; padding: 12px 0; font: inherit; font-size: 0.95rem; color: var(--text-dim); cursor: pointer; }
+.home-tab.active { color: var(--text); font-weight: 700; }
+.home-tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 2px; background: var(--text); }
+.manga-grid[hidden] { display: none; }
+
+/* รายการอ่านล่าสุด (แบบ webtoon) */
+.history-stats { display: flex; align-items: center; gap: 16px; padding: 2px 2px 12px; font-size: 0.9rem; }
+.history-count { font-weight: 600; }
+.history-unread { color: var(--text-dim); }
+.history-list { list-style: none; margin: 0 -20px; padding: 0; border-top: 1px solid var(--border); }
+.history-row { background: var(--bg-elevated); display: flex; align-items: center; gap: 14px; padding: 0 16px 0 0; border-bottom: 1px solid var(--border); cursor: pointer; content-visibility: auto; contain-intrinsic-size: auto 104px; }
+.history-cover { width: 84px; height: 104px; object-fit: cover; flex: none; background: var(--img-bg); display: block; }
+.history-info { flex: 1; min-width: 0; padding: 10px 0; }
+.history-name { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 0.98rem; line-height: 1.3; min-width: 0; }
+.history-name > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge-up { flex: none; background: var(--new-badge); color: #fff; font-size: 0.62rem; font-weight: 700; padding: 2px 6px; border-radius: 999px; }
+.history-chapter { font-size: 0.82rem; color: var(--text-dim); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-time { font-size: 0.78rem; color: var(--text-dim); margin-top: 2px; }
+.resume-btn { flex: none; padding: 9px 12px; font-size: 0.82rem; line-height: 1.25; }
+@media (max-width: 640px) {
+  .history-list { margin: 0 -12px; }
+}
