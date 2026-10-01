@@ -7,7 +7,7 @@ import json
 import re
 import threading
 import time
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -298,6 +298,23 @@ def fetch_chrow_chapters(soup: BeautifulSoup, min_interval: float = 0.0) -> list
     return unique
 
 
+def _parse_sh_ep_rows(soup: BeautifulSoup, base_url: str | None) -> list[dict]:
+    """รายชื่อตอนแบบ bully-manga.com (<a class="sh-ep" href="/เรื่อง-ep0026"><h3>ตอนที่ 26</h3>)
+    ลิงก์เป็น path relative ต้องต่อโดเมนเอง และหน้าเรื่องเรียงเก่า -> ใหม่ เลยเรียงใหม่ตามเลขตอน"""
+    chapters = []
+    for a in soup.select("a.sh-ep[href]"):
+        label = a.select_one(".sh-ep-label")
+        raw = (label.get_text(strip=True) if label else "") or (a.get("data-title") or "")
+        text = f"ตอนที่ {raw}" if re.fullmatch(r"\d+(?:\.\d+)?", raw) else raw
+        date_el = a.select_one(".sh-ep-date")
+        href = urljoin(base_url, a["href"]) if base_url else a["href"]
+        chapters.append({"text": text, "url": href, "date": date_el.get_text(strip=True) if date_el else None})
+    seen = set()
+    unique = [c for c in chapters if not (c["url"] in seen or seen.add(c["url"]))]
+    unique.sort(key=lambda c: chapter_number(c["text"]) or -1, reverse=True)
+    return unique
+
+
 def fetch_madara_chapters(manga_url: str, min_interval: float = 0.0) -> list[dict]:
     """เว็บกลุ่ม Madara ไม่ได้ฝังรายชื่อตอนมาในหน้าเรื่อง (มีแค่ไอคอนหมุน ๆ รอ AJAX) ต้องยิง
     ขอลิสต์เต็มแยกอีกทีที่ {manga_url}/ajax/chapters/ — และต้องเป็น POST เท่านั้น
@@ -385,6 +402,10 @@ def parse_index_page(html: str, url: str | None = None, min_interval: float = 0.
     if not result["chapters"]:
         result["chapters"] = fetch_chrow_chapters(soup, min_interval)
 
+    # bully-manga.com (a.sh-ep ลิงก์ relative ฝังครบทุกตอนในหน้าเรื่อง)
+    if not result["chapters"]:
+        result["chapters"] = _parse_sh_ep_rows(soup, url)
+
     # ยังไม่เจออีก ลองแบบ Madara แทน (ต้องยิงขอรายชื่อตอนเพิ่มอีก request เพราะหน้าเรื่องไม่ได้ฝังลิสต์มาให้)
     if not result["chapters"] and url:
         result["chapters"] = fetch_madara_chapters(url, min_interval)
@@ -420,8 +441,12 @@ def _real_img_src(img) -> str | None:
     return None
 
 
-def parse_chapter_page(html: str) -> dict:
-    """ดึงรายการรูปหน้ามังงะ + ลิงก์ตอนก่อนหน้า/ถัดไป จากหน้าอ่านตอน"""
+_IMAGE_MAP_RE = re.compile(r"\bIMAGE_MAP\s*=\s*\[(.*?)\]", re.S)
+
+
+def parse_chapter_page(html: str, url: str | None = None) -> dict:
+    """ดึงรายการรูปหน้ามังงะ + ลิงก์ตอนก่อนหน้า/ถัดไป จากหน้าอ่านตอน
+    (url ใช้ต่อโดเมนให้ลิงก์รูปแบบ relative เช่น bully-manga.com)"""
     data = _extract_balanced_json(html, "ts_reader.run(")
     result = {"images": [], "prev_url": None, "next_url": None, "chapter_text": None}
     soup = BeautifulSoup(html, "html.parser")
@@ -450,6 +475,14 @@ def parse_chapter_page(html: str) -> dict:
                 src = _real_img_src(img)
                 if src:
                     result["images"].append(src)
+
+        # bully-manga.com: <img> ในหน้าเป็นไอคอนหลอกทั้งหมด รูปจริงอยู่ใน JS `const IMAGE_MAP = [...]`
+        # เป็น path relative (/img/backcat/...) ต้องต่อโดเมนจากลิงก์ตอนเอง
+        if not result["images"]:
+            match = _IMAGE_MAP_RE.search(html)
+            if match:
+                for src in re.findall(r"[\"']([^\"']+)[\"']", match.group(1)):
+                    result["images"].append(urljoin(url, src) if url else src)
 
     # บางเว็บ h1 บนหน้าตอนเป็นหัวข้อทั่วไปของทั้งเว็บ (ไม่ใช่ชื่อตอน) เช่น "อ่านมังงะอ่านการ์ตูน
     # ออนไลน์แปลไทย 2026" — ลองทุก tag ที่มักมีเลขตอนกำกับ ใช้ตัวแรกที่แมตช์ได้จริง ๆ ไม่ใช่

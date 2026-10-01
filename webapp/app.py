@@ -1317,7 +1317,7 @@ def _verify_chapter(manga_id: str | None, chapter: dict, min_interval: float) ->
             continue
         try:
             html = scraper.fetch(url, referer=_referer_for(url), min_interval=min_interval, timeout=FAST_FAIL_TIMEOUT)
-            data = scraper.parse_chapter_page(html)
+            data = scraper.parse_chapter_page(html, url)
         except Exception:
             continue
         if _has_real_images(data):
@@ -1372,7 +1372,7 @@ def _fetch_chapter(manga_id: str, url: str, is_last: bool) -> tuple[dict | None,
     """ดึงหน้าตอนจากลิงก์เดียว คืน (data, error) และเก็บแคชไว้ถ้าได้รูปมา"""
     try:
         timeout = scraper.TIMEOUT if is_last else FAST_FAIL_TIMEOUT
-        data = scraper.parse_chapter_page(scraper.fetch(url, referer=_referer_for(url), timeout=timeout))
+        data = scraper.parse_chapter_page(scraper.fetch(url, referer=_referer_for(url), timeout=timeout), url)
     except Exception as e:
         return None, f"{urlparse(url).netloc}: {e}"
     if not _has_real_images(data):
