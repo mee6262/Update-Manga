@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 import hmac
 import io
 import os
@@ -10,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template, request, Response, session, url_for
@@ -868,6 +869,147 @@ def _follower_counts() -> dict[str, int]:
         for manga_id in storage.load_subscriptions(username):
             counts[manga_id] = counts.get(manga_id, 0) + 1
     return counts
+
+
+# ---------- วิดีโอ Facebook ----------
+
+FACEBOOK_VIDEO_HOSTS = {"facebook.com", "www.facebook.com", "m.facebook.com", "fb.watch"}
+MAX_VIDEO_TITLE = 160
+MAX_VIDEO_POSITION = 24 * 60 * 60
+
+
+def _canonical_facebook_video_url(value: object) -> tuple[str | None, str | None]:
+    """ตรวจ URL ที่ฝังได้และตัด tracking ออกก่อนใช้เป็นตัวตนของคลิป
+
+    Facebook มีทั้ง /videos/, /reel/ และ fb.watch ที่ไม่ได้มีเลข id ใน URL เสมอไป จึงใช้ URL ที่
+    normalize แล้ว hash แทน regex ดึงตัวเลข ซึ่งกันคลิปซ้ำได้ไม่ครบและพังกับ Reels บางแบบ.
+    """
+    if not isinstance(value, str):
+        return None, "ลิงก์วิดีโอไม่ถูกต้อง"
+    try:
+        parsed = urlsplit(value.strip())
+    except ValueError:
+        return None, "ลิงก์วิดีโอไม่ถูกต้อง"
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or host not in FACEBOOK_VIDEO_HOSTS or not parsed.path:
+        return None, "รับเฉพาะลิงก์ https ของ Facebook หรือ fb.watch"
+    if host != "fb.watch" and parsed.path.startswith("/share/"):
+        # URL share เป็นแค่ลิงก์พาไปหน้า Reel; plugin/video.php ฝังมันตรง ๆ ไม่ได้ แม้เปิดใน Facebook
+        # แล้ว redirect ได้ จึงให้คัดลอก URL ปลายทาง (/reel/, /videos/ หรือ /watch/) แทน
+        return None, "ลิงก์แชร์ Facebook ฝังไม่ได้: เปิดลิงก์แล้วคัดลอก URL /reel/, /videos/ หรือ /watch/"
+    # URL query ของ Facebook ส่วนใหญ่เป็น tracking; ใช้ path เป็น identity เพื่อกันการเพิ่มคลิปเดิมซ้ำ
+    path = "/" + parsed.path.strip("/")
+    canonical_host = "www.facebook.com" if host in {"facebook.com", "m.facebook.com"} else host
+    return urlunsplit(("https", canonical_host, path, "", "")), None
+
+
+def _public_video(video: dict) -> dict:
+    return {
+        "id": video["id"],
+        "title": video["title"],
+        "facebook_url": video["facebook_url"],
+        "thumbnail_url": video.get("thumbnail_url") or None,
+        "added_by": video["added_by"],
+        "created_at": video["created_at"],
+    }
+
+
+@app.route("/api/videos", methods=["GET"])
+def list_videos():
+    try:
+        limit = min(max(int(request.args.get("limit", 20)), 1), 50)
+    except ValueError:
+        return jsonify({"error": "limit ไม่ถูกต้อง"}), 400
+    cursor = request.args.get("cursor") or ""
+    videos = sorted(storage.load_videos(), key=lambda item: item.get("created_at", ""), reverse=True)
+    if cursor:
+        cursor_index = next((i for i, video in enumerate(videos) if video.get("id") == cursor), None)
+        if cursor_index is None:
+            return jsonify({"error": "cursor ไม่ถูกต้อง"}), 400
+        videos = videos[cursor_index + 1 :]
+    page = videos[:limit]
+    return jsonify({"items": [_public_video(video) for video in page], "next_cursor": page[-1]["id"] if len(videos) > limit else None})
+
+
+@app.route("/api/videos", methods=["POST"])
+def add_video():
+    username = current_username()
+    if not username and storage.load_users():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(force=True, silent=True) or {}
+    title = " ".join(str(body.get("title") or "").split())
+    if not title or len(title) > MAX_VIDEO_TITLE:
+        return jsonify({"error": f"ชื่อเรื่องต้องมี 1-{MAX_VIDEO_TITLE} ตัวอักษร"}), 400
+    facebook_url, error = _canonical_facebook_video_url(body.get("facebook_url"))
+    if error:
+        return jsonify({"error": error}), 400
+    thumbnail_url = str(body.get("thumbnail_url") or "").strip()
+    if thumbnail_url:
+        thumb = urlsplit(thumbnail_url)
+        if thumb.scheme != "https" or not thumb.hostname:
+            return jsonify({"error": "รูปปกต้องเป็นลิงก์ https"}), 400
+    canonical_key = hashlib.sha256(facebook_url.encode("utf-8")).hexdigest()[:20]
+    # เขียนคลังกลางใต้ lock และ fresh=True เพื่อไม่ให้ request เพิ่มคนละคลิปพร้อมกันทับกัน
+    with storage.state_lock:
+        videos = storage.load_videos(fresh=True)
+        if any(video.get("canonical_key") == canonical_key for video in videos):
+            return jsonify({"error": "คลิปนี้มีอยู่ในระบบแล้ว"}), 409
+        video = {
+            "id": canonical_key,
+            "canonical_key": canonical_key,
+            "title": title,
+            "facebook_url": facebook_url,
+            "thumbnail_url": thumbnail_url or None,
+            "added_by": username or "local",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        videos.append(video)
+        storage.save_videos(videos)
+    return jsonify(_public_video(video)), 201
+
+
+def _video_exists(video_id: str) -> bool:
+    return any(video.get("id") == video_id for video in storage.load_videos())
+
+
+@app.route("/api/videos/<video_id>/progress", methods=["GET"])
+def get_video_progress(video_id):
+    username = current_username()
+    if not username and storage.load_users():
+        return jsonify({"error": "unauthorized"}), 401
+    if not _video_exists(video_id):
+        return jsonify({"error": "ไม่พบวิดีโอ"}), 404
+    entry = storage.load_video_progress(username or "local").get(video_id) or {}
+    return jsonify({"position_seconds": entry.get("position_seconds", 0)})
+
+
+@app.route("/api/videos/<video_id>/progress", methods=["POST"])
+def save_video_progress(video_id):
+    username = current_username()
+    if not username and storage.load_users():
+        return jsonify({"error": "unauthorized"}), 401
+    if not _video_exists(video_id):
+        return jsonify({"error": "ไม่พบวิดีโอ"}), 404
+    value = (request.get_json(force=True, silent=True) or {}).get("position_seconds")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= MAX_VIDEO_POSITION:
+        return jsonify({"error": "ตำแหน่งวิดีโอไม่ถูกต้อง"}), 400
+    with storage.state_lock:
+        progress = storage.load_video_progress(username or "local", fresh=True)
+        progress[video_id] = {"position_seconds": round(float(value), 1), "updated_at": datetime.now(timezone.utc).isoformat()}
+        storage.save_video_progress(username or "local", progress)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/videos/<video_id>/progress", methods=["DELETE"])
+def clear_video_progress(video_id):
+    username = current_username()
+    if not username and storage.load_users():
+        return jsonify({"error": "unauthorized"}), 401
+    with storage.state_lock:
+        progress = storage.load_video_progress(username or "local", fresh=True)
+        progress.pop(video_id, None)
+        storage.save_video_progress(username or "local", progress)
+    return jsonify({"ok": True})
 
 
 # ---------- หมวดหมู่ (admin จัดการ, ทุกคนใช้กรองในหน้าเรื่องทั้งหมด) ----------

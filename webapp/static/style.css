@@ -244,6 +244,22 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
   gap: 16px;
 }
 
+.video-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
+.video-toolbar p { margin: 0; color: var(--text-dim); font-size: 0.9rem; }
+.video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.video-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; text-align: left; color: var(--text); padding: 0; cursor: pointer; }
+.video-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.video-thumb { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: var(--img-bg); }
+.video-placeholder { display: grid; place-items: center; width: 100%; aspect-ratio: 16 / 9; background: linear-gradient(135deg, #29313d, #15191f); color: var(--accent); font-size: 2rem; }
+.video-card-info { display: block; padding: 11px; }
+.video-card-title { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.video-card-meta { display: block; margin-top: 5px; color: var(--text-dim); font-size: 0.76rem; }
+#videoMoreBtn { display: block; margin: 18px auto 0; }
+.video-form { display: flex; flex-direction: column; gap: 10px; }
+.video-form input { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 9px 12px; border-radius: 8px; font-size: 0.9rem; }
+.video-player-body { flex: 1; display: grid; place-items: center; overflow: auto; padding: 70px 16px 20px; }
+.video-player-body .fb-video, .video-player-body iframe { max-width: 100%; }
+
 .manga-card {
   background: var(--bg-card);
   border: 1px solid var(--border);

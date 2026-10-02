@@ -35,6 +35,7 @@
         <button class="seg-btn" data-catmode="category">หมวดหมู่</button>
       </div>
       <h1 class="topbar-title" data-for="search" hidden>ค้นหา</h1>
+      <h1 class="topbar-title" data-for="videos" hidden>หนังสั้น AI</h1>
       <h1 class="topbar-title" data-for="settings" hidden>ตั้งค่า</h1>
       <button id="pushBtn" class="icon-btn" title="แจ้งเตือนตอนใหม่" hidden>
         <svg viewBox="0 0 24 24" width="20" height="20"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M13.73 21a2 2 0 0 1-3.46 0" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><line class="bell-off" x1="3" y1="3" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -94,6 +95,16 @@
         <div id="searchCount" class="search-count"></div>
         <div id="searchGrid" class="manga-grid"></div>
       </div>
+    </section>
+
+    <section id="videosView" class="view">
+      <div class="video-toolbar">
+        <p>คลิป Facebook ที่สมาชิกเพิ่มไว้</p>
+        <button id="addVideoBtn" class="btn primary">+ เพิ่มคลิป</button>
+      </div>
+      <div id="videoGrid" class="video-grid"></div>
+      <div id="videoEmpty" class="empty-state" hidden>ยังไม่มีคลิปในคลัง</div>
+      <button id="videoMoreBtn" class="btn" hidden>โหลดเพิ่ม</button>
     </section>
 
     <section id="settingsView" class="view">
@@ -206,6 +217,7 @@
     <button class="nav-item active" data-tab="list"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span>หน้าหลัก</span></button>
     <button class="nav-item" data-tab="catalog"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><rect x="14" y="3" width="7" height="5" rx="1" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><rect x="14" y="12" width="7" height="9" rx="1" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="16" width="7" height="5" rx="1" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span>ทั้งหมด</span></button>
     <button class="nav-item" data-tab="search"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span>ค้นหา</span></button>
+    <button class="nav-item" data-tab="videos"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="m10 9 5 3-5 3z" fill="currentColor"/></svg><span>วิดีโอ</span></button>
     <button class="nav-item" data-tab="settings"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span>ตั้งค่า</span></button>
   </nav>
 
@@ -228,6 +240,24 @@
         </div>
       </form>
     </div>
+  </div>
+
+  <div id="videoFormModal" class="modal" hidden>
+    <div class="modal-content">
+      <h2>เพิ่มหนังสั้น AI</h2>
+      <form id="videoForm" class="video-form">
+        <input name="title" type="text" maxlength="160" placeholder="ชื่อเรื่อง" required />
+        <input name="facebook_url" type="url" placeholder="ลิงก์ Facebook Video, Reel หรือ fb.watch" required />
+        <input name="thumbnail_url" type="url" placeholder="ลิงก์รูปปก (ไม่บังคับ)" />
+        <div id="videoFormMsg" class="form-msg"></div>
+        <div class="modal-actions"><button type="button" class="btn" data-close-video-form>ยกเลิก</button><button class="btn primary">เพิ่มคลิป</button></div>
+      </form>
+    </div>
+  </div>
+
+  <div id="videoPlayer" class="reader video-player" hidden>
+    <div class="reader-topbar"><button id="videoPlayerClose" class="btn">✕ ปิด</button><div class="reader-title"><span id="videoPlayerTitle"></span></div></div>
+    <div id="videoPlayerBody" class="video-player-body"><div class="reader-msg">กำลังโหลด...</div></div>
   </div>
 
   <div id="chapterListView" class="reader" hidden>

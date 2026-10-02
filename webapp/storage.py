@@ -13,6 +13,7 @@ COVERS_DIR = DATA_DIR / "covers"
 IMAGE_DOMAINS_FILE = DATA_DIR / "image_domains.json"
 CATEGORIES_FILE = DATA_DIR / "categories.json"
 SITE_SETTINGS_FILE = DATA_DIR / "site_settings.json"
+VIDEOS_FILE = DATA_DIR / "videos.json"
 USERS_FILE = DATA_DIR / "users.json"
 USERS_DIR = DATA_DIR / "users"
 
@@ -206,6 +207,24 @@ def load_site_settings(fresh: bool = False) -> dict:
 
 def save_site_settings(settings: dict):
     _save_json(SITE_SETTINGS_FILE, settings)
+
+
+# ---------- วิดีโอ ----------
+# คลังวิดีโอเป็นข้อมูลที่ผู้ใช้เพิ่มบน VPS จึงแยกจาก manga.json (ซึ่งเป็นข้อมูลตั้งต้นที่ track ใน git)
+def load_videos(fresh: bool = False) -> list[dict]:
+    return _load_json(VIDEOS_FILE, [], fresh)
+
+
+def save_videos(videos: list[dict]):
+    _save_json(VIDEOS_FILE, videos)
+
+
+def load_video_progress(username: str, fresh: bool = False) -> dict:
+    return _load_json(_user_file(username, "video_progress.json"), {}, fresh)
+
+
+def save_video_progress(username: str, progress: dict):
+    _save_user_file(username, "video_progress.json", progress)
 
 
 def load_image_domains() -> set[str]:

@@ -7,6 +7,8 @@ const state = {
   catalog: [],
   prefs: BOOT.prefs || {},
   currentUser: BOOT.me || { username: null, is_admin: false },
+  videos: [],
+  videoCursor: null,
 };
 
 const el = (sel) => document.querySelector(sel);
@@ -93,6 +95,7 @@ function showTab(tab) {
     renderSearch();
     loadCatalog().then(renderSearch);
   }
+  if (tab === "videos") loadVideos();
   if (tab === "settings" && state.currentUser.is_admin) {
     renderSettings();
     renderCategoryAdmin();
@@ -100,6 +103,188 @@ function showTab(tab) {
     renderUserList();
     loadSiteSettings();
   }
+}
+
+// ---------- หนังสั้น AI (Facebook Embed) ----------
+// แยก state ออกจาก reader มังงะโดยสิ้นเชิง: วิดีโอจำเวลาเป็นวินาที ไม่แตะ chapter/read_state เดิม
+let videoLoading = false;
+let activeVideo = null;
+let activeFbPlayer = null;
+let videoSaveTimer = null;
+let lastSavedVideoPosition = null;
+let activeVideoFinished = false;
+let facebookSdkPromise = null;
+
+function videoCardHtml(video) {
+  const image = video.thumbnail_url
+    ? `<img class="video-thumb" src="${escapeHtml(video.thumbnail_url)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'video-placeholder',textContent:'▶'}))" />`
+    : '<span class="video-placeholder" aria-hidden="true">▶</span>';
+  return `<button class="video-card" data-video-id="${escapeHtml(video.id)}">${image}<span class="video-card-info"><span class="video-card-title">${escapeHtml(video.title)}</span><span class="video-card-meta">เพิ่มโดย ${escapeHtml(video.added_by)} · ${timeAgo(video.created_at)}</span></span></button>`;
+}
+
+function renderVideos() {
+  el("#videoGrid").innerHTML = state.videos.map(videoCardHtml).join("");
+  el("#videoEmpty").hidden = state.videos.length > 0;
+  el("#videoMoreBtn").hidden = !state.videoCursor;
+}
+
+async function loadVideos(append = false) {
+  if (videoLoading) return;
+  videoLoading = true;
+  try {
+    const qs = append && state.videoCursor ? `?cursor=${encodeURIComponent(state.videoCursor)}` : "";
+    const data = await getJSON(`/api/videos${qs}`);
+    state.videos = append ? state.videos.concat(data.items || []) : (data.items || []);
+    state.videoCursor = data.next_cursor || null;
+    renderVideos();
+  } catch (e) {
+    if (!append) el("#videoGrid").innerHTML = `<div class="reader-msg">${escapeHtml(e.body?.error || "โหลดคลิปไม่สำเร็จ")}</div>`;
+  } finally {
+    videoLoading = false;
+  }
+}
+
+function showVideoForm(show) {
+  el("#videoFormModal").hidden = !show;
+  if (show) el("#videoForm [name=title]").focus();
+}
+
+function videoFormMsg(message, isError = false) {
+  const target = el("#videoFormMsg");
+  target.textContent = message;
+  target.classList.toggle("error", isError);
+}
+
+function loadFacebookSdk() {
+  if (window.FB) return Promise.resolve(window.FB);
+  if (facebookSdkPromise) return facebookSdkPromise;
+  facebookSdkPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.async = true;
+    script.defer = true;
+    script.src = "https://connect.facebook.net/en_US/sdk.js#xfbml=1&version=v22.0";
+    script.onload = () => window.FB ? resolve(window.FB) : reject(new Error("Facebook SDK ไม่พร้อมใช้งาน"));
+    script.onerror = () => reject(new Error("โหลด Facebook SDK ไม่สำเร็จ"));
+    document.head.appendChild(script);
+  });
+  return facebookSdkPromise;
+}
+
+async function mountFacebookVideo(video, position) {
+  const body = el("#videoPlayerBody");
+  body.innerHTML = '<div id="fb-root"></div><div id="facebookVideoMount" class="fb-video" data-href="" data-show-text="false" data-allowfullscreen="true" data-width="500"></div>';
+  const mount = el("#facebookVideoMount");
+  mount.dataset.href = video.facebook_url;
+  const FB = await loadFacebookSdk();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (player) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (FB.Event?.unsubscribe) FB.Event.unsubscribe("xfbml.ready", onReady);
+      resolve(player);
+    };
+    const onReady = (message) => {
+      // หน้า player parse อยู่เพียง embed เดียว จึงจับ instance วิดีโอที่ SDK ส่งกลับมาได้โดยตรง
+      if (message?.type === "video" && message.instance) finish(message.instance);
+    };
+    const timeout = setTimeout(() => {
+      if (!settled) { settled = true; reject(new Error("Facebook ไม่ตอบกลับสำหรับคลิปนี้")); }
+    }, 12000);
+    FB.Event.subscribe("xfbml.ready", onReady);
+    try { FB.XFBML.parse(body); } catch (e) { clearTimeout(timeout); reject(e); }
+  }).then((player) => {
+    activeFbPlayer = player;
+    if (position > 0) {
+      try { player.seek(position); } catch (e) { /* provider ไม่ยอม seek: ยังเล่นจากต้นได้ */ }
+    }
+    try { player.subscribe("finishedPlaying", clearActiveVideoProgress); } catch (e) { /* SDK บางรุ่นไม่มี event นี้ */ }
+    return player;
+  });
+}
+
+async function openVideo(video) {
+  activeVideo = video;
+  activeFbPlayer = null;
+  lastSavedVideoPosition = null;
+  activeVideoFinished = false;
+  el("#videoPlayerTitle").textContent = video.title;
+  el("#videoPlayer").hidden = false;
+  document.body.style.overflow = "hidden";
+  try {
+    const progress = await getJSON(`/api/videos/${encodeURIComponent(video.id)}/progress`);
+    if (!activeVideo || activeVideo.id !== video.id) return;
+    await mountFacebookVideo(video, Number(progress.position_seconds) || 0);
+    clearInterval(videoSaveTimer);
+    videoSaveTimer = setInterval(saveActiveVideoProgress, 10000);
+  } catch (e) {
+    if (activeVideo?.id === video.id) el("#videoPlayerBody").innerHTML = `<div class="reader-msg">${escapeHtml(e.body?.error || e.message || "เปิดคลิปไม่สำเร็จ")}</div>`;
+  }
+}
+
+function activeVideoPosition() {
+  if (!activeVideo || !activeFbPlayer) return null;
+  try {
+    const value = Number(activeFbPlayer.getCurrentPosition());
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  } catch (e) { return null; }
+}
+
+function saveActiveVideoProgress() {
+  const position = activeVideoPosition();
+  if (activeVideoFinished || position === null || !activeVideo || (lastSavedVideoPosition !== null && Math.abs(position - lastSavedVideoPosition) < 5)) return;
+  lastSavedVideoPosition = position;
+  fetch(`/api/videos/${encodeURIComponent(activeVideo.id)}/progress`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ position_seconds: position }), keepalive: true,
+  }).catch(() => { lastSavedVideoPosition = null; });
+}
+
+function clearActiveVideoProgress() {
+  if (!activeVideo) return;
+  activeVideoFinished = true; // กัน close หลัง event จบเขียนเวลาสุดท้ายกลับเข้ามาแข่งกับ DELETE
+  fetch(`/api/videos/${encodeURIComponent(activeVideo.id)}/progress`, { method: "DELETE", keepalive: true }).catch(() => {});
+  lastSavedVideoPosition = 0;
+}
+
+function closeVideo() {
+  saveActiveVideoProgress();
+  clearInterval(videoSaveTimer);
+  videoSaveTimer = null;
+  activeFbPlayer = null;
+  activeVideo = null;
+  activeVideoFinished = false;
+  el("#videoPlayer").hidden = true;
+  el("#videoPlayerBody").innerHTML = '<div class="reader-msg">กำลังโหลด...</div>';
+  document.body.style.overflow = "";
+  reloadIfPending();
+}
+
+function initVideos() {
+  el("#addVideoBtn").addEventListener("click", () => { videoFormMsg(""); showVideoForm(true); });
+  els("[data-close-video-form]").forEach((button) => button.addEventListener("click", () => showVideoForm(false)));
+  el("#videoForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    videoFormMsg("กำลังเพิ่ม...");
+    try {
+      const response = await fetch("/api/videos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.fromEntries(form)) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw Object.assign(new Error("request failed"), { body: data });
+      event.currentTarget.reset();
+      showVideoForm(false);
+      state.videos.unshift(data);
+      renderVideos();
+    } catch (e) { videoFormMsg(e.body?.error || "เพิ่มคลิปไม่สำเร็จ", true); }
+  });
+  el("#videoGrid").addEventListener("click", (event) => {
+    const card = event.target.closest(".video-card");
+    const video = state.videos.find((item) => item.id === card?.dataset.videoId);
+    if (video) openVideo(video);
+  });
+  el("#videoMoreBtn").addEventListener("click", () => loadVideos(true));
+  el("#videoPlayerClose").addEventListener("click", closeVideo);
+  window.addEventListener("pagehide", saveActiveVideoProgress);
 }
 
 function initTabs() {
@@ -1869,6 +2054,7 @@ function init() {
   initPasswordForm();
   initTheme();
   initAddUserForm();
+  initVideos();
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkForUpdate();
   });
