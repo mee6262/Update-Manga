@@ -176,6 +176,8 @@ async function mountFacebookVideo(video, position) {
   body.innerHTML = '<div id="fb-root"></div><div id="facebookVideoMount" class="fb-video" data-href="" data-show-text="false" data-allowfullscreen="true" data-width="500"></div>';
   const mount = el("#facebookVideoMount");
   mount.dataset.href = video.facebook_url;
+  // กว้างเต็มพื้นที่ที่มี (หัก padding ซ้าย-ขวา 16px) แต่ไม่เกิน 500px
+  mount.dataset.width = Math.max(200, Math.min(500, Math.floor(body.clientWidth - 32)));
   const FB = await loadFacebookSdk();
   return new Promise((resolve, reject) => {
     let settled = false;
