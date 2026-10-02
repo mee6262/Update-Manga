@@ -268,8 +268,9 @@ function initVideos() {
     event.preventDefault();
     if (videoSubmitting) return;
     videoSubmitting = true;
-    const form = new FormData(event.currentTarget);
-    const submitButton = event.currentTarget.querySelector(".btn.primary");
+    const formEl = event.currentTarget;
+  const form = new FormData(formEl);
+  const submitButton = formEl.querySelector(".btn.primary");
     submitButton.disabled = true;
     videoFormMsg("กำลังเพิ่ม...");
     try {
