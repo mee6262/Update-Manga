@@ -211,6 +211,7 @@ async function openVideo(video) {
   lastSavedVideoPosition = null;
   activeVideoFinished = false;
   el("#videoPlayerTitle").textContent = video.title;
+  el("#videoDeleteBtn").hidden = !video.can_delete;
   el("#videoPlayer").hidden = false;
   document.body.style.overflow = "hidden";
   try {
@@ -256,6 +257,7 @@ function closeVideo() {
   activeVideo = null;
   activeVideoFinished = false;
   el("#videoPlayer").hidden = true;
+  el("#videoDeleteBtn").hidden = true;
   el("#videoPlayerBody").innerHTML = '<div class="reader-msg">กำลังโหลด...</div>';
   document.body.style.overflow = "";
   reloadIfPending();
@@ -295,6 +297,23 @@ function initVideos() {
   el("#videoMoreBtn").addEventListener("click", () => loadVideos(true));
   el("#videoPlayerClose").addEventListener("click", closeVideo);
   window.addEventListener("pagehide", saveActiveVideoProgress);
+  el("#videoDeleteBtn").addEventListener("click", async (event) => {
+  const video = activeVideo;
+  if (!video || !confirm(`ลบคลิป "${video.title}"?\n(ทุกคนจะไม่เห็นคลิปนี้อีก)`)) return;
+  const btn = event.currentTarget;
+  btn.disabled = true;
+  try {
+    await sendJSON("DELETE", `/api/videos/${encodeURIComponent(video.id)}`);
+  } catch (e) {
+    alert(e.message || "ลบคลิปไม่สำเร็จ");
+    return;
+  } finally {
+    btn.disabled = false;
+  }
+  activeVideoFinished = true; // กัน closeVideo เซฟตำแหน่งของคลิปที่เพิ่งลบ
+  closeVideo();
+  await loadVideos();
+});
 }
 
 function initTabs() {
