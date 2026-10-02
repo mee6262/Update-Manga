@@ -903,6 +903,12 @@ def _canonical_facebook_video_url(value: object) -> tuple[str | None, str | None
     return urlunsplit(("https", canonical_host, path, "", "")), None
 
 
+def _can_delete_video(video: dict) -> bool:
+    if not storage.load_users():  # dev mode ไม่มีบัญชี
+        return True
+    return is_admin() or video.get("added_by") == current_username()
+
+
 def _public_video(video: dict) -> dict:
     return {
         "id": video["id"],
@@ -911,6 +917,7 @@ def _public_video(video: dict) -> dict:
         "thumbnail_url": video.get("thumbnail_url") or None,
         "added_by": video["added_by"],
         "created_at": video["created_at"],
+        "can_delete": _can_delete_video(video),
     }
 
 
@@ -969,6 +976,26 @@ def add_video():
         storage.save_videos(videos)
     return jsonify(_public_video(video)), 201
 
+@app.route("/api/videos/<video_id>", methods=["DELETE"])
+def delete_video(video_id):
+    username = current_username()
+    if not username and storage.load_users():
+        return jsonify({"error": "unauthorized"}), 401
+    with storage.state_lock:
+        videos = storage.load_videos(fresh=True)
+        video = next((v for v in videos if v.get("id") == video_id), None)
+        if not video:
+            return jsonify({"error": "ไม่พบวิดีโอ"}), 404
+        if not _can_delete_video(video):
+            return jsonify({"error": "ลบได้เฉพาะคลิปที่ตัวเองเพิ่ม หรือ admin"}), 403
+        storage.save_videos([v for v in videos if v.get("id") != video_id])
+        # ล้างตำแหน่งที่ดูค้างของทุกคน กันข้อมูลค้างใน video_progress.json
+        for u in [*storage.all_usernames(), "local"]:
+            progress = storage.load_video_progress(u, fresh=True)
+            if video_id in progress:
+                del progress[video_id]
+                storage.save_video_progress(u, progress)
+    return jsonify({"ok": True})
 
 def _video_exists(video_id: str) -> bool:
     return any(video.get("id") == video_id for video in storage.load_videos())
