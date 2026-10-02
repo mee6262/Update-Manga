@@ -952,8 +952,10 @@ def add_video():
     # เขียนคลังกลางใต้ lock และ fresh=True เพื่อไม่ให้ request เพิ่มคนละคลิปพร้อมกันทับกัน
     with storage.state_lock:
         videos = storage.load_videos(fresh=True)
-        if any(video.get("canonical_key") == canonical_key for video in videos):
-            return jsonify({"error": "คลิปนี้มีอยู่ในระบบแล้ว"}), 409
+        existing = next((video for video in videos if video.get("canonical_key") == canonical_key), None)
+        if existing:
+            # POST แบบ idempotent: มือถือ/เน็ตช้าส่งซ้ำได้ แต่หน้าเว็บต้องไม่แจ้งล้มเหลวหลังคลิปถูกสร้างแล้ว
+            return jsonify({**_public_video(existing), "already_exists": True})
         video = {
             "id": canonical_key,
             "canonical_key": canonical_key,

@@ -114,6 +114,7 @@ let videoSaveTimer = null;
 let lastSavedVideoPosition = null;
 let activeVideoFinished = false;
 let facebookSdkPromise = null;
+let videoSubmitting = false;
 
 function videoCardHtml(video) {
   const image = video.thumbnail_url
@@ -265,7 +266,11 @@ function initVideos() {
   els("[data-close-video-form]").forEach((button) => button.addEventListener("click", () => showVideoForm(false)));
   el("#videoForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (videoSubmitting) return;
+    videoSubmitting = true;
     const form = new FormData(event.currentTarget);
+    const submitButton = event.currentTarget.querySelector(".btn.primary");
+    submitButton.disabled = true;
     videoFormMsg("กำลังเพิ่ม...");
     try {
       const response = await fetch("/api/videos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.fromEntries(form)) });
@@ -273,9 +278,13 @@ function initVideos() {
       if (!response.ok) throw Object.assign(new Error("request failed"), { body: data });
       event.currentTarget.reset();
       showVideoForm(false);
-      state.videos.unshift(data);
-      renderVideos();
+      // ดึงรายการจริงอีกครั้ง: แม้ network ตัดหลัง POST สำเร็จ/คำตอบไม่ครบ หน้าคลังก็ตรงกับเซิร์ฟเวอร์
+      await loadVideos();
     } catch (e) { videoFormMsg(e.body?.error || "เพิ่มคลิปไม่สำเร็จ", true); }
+    finally {
+      videoSubmitting = false;
+      submitButton.disabled = false;
+    }
   });
   el("#videoGrid").addEventListener("click", (event) => {
     const card = event.target.closest(".video-card");
