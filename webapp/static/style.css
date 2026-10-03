@@ -858,3 +858,16 @@ a.video-card { display: block; text-decoration: none; }
 .video-quality { display: flex; gap: 6px; justify-content: center; margin-top: 10px; flex-wrap: wrap; }
 .video-quality-btn { background: rgba(255, 255, 255, 0.12); color: #fff; border: 1px solid transparent; border-radius: 999px; padding: 5px 12px; font: inherit; font-size: 0.8rem; cursor: pointer; }
 .video-quality-btn.active { border-color: var(--accent); color: var(--accent); }
+/* มือถือ: การ์ดคลิปแถวละ 2 — ย่อตัวอักษร/ป้ายให้พอดีการ์ดแคบ (~165px) */
+@media (max-width: 640px) {
+  .video-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .video-card-info { padding: 8px; }
+  .video-card-title { font-size: 0.82rem; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .video-card-meta { font-size: 0.68rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .video-resume-badge { top: 6px; right: 6px; font-size: 0.62rem; padding: 2px 7px; }
+  .video-card-delete { top: 6px; left: 6px; font-size: 0.62rem; padding: 2px 7px; }
+  .video-time { right: 6px; bottom: 8px; font-size: 0.62rem; padding: 1px 5px; }
+  .video-placeholder { font-size: 1.5rem; }
+  .video-item { gap: 6px; }
+  .video-save-btn { font-size: 0.76rem; padding: 5px 8px; }
+}
