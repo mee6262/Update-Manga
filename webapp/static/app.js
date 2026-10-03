@@ -104,7 +104,7 @@ function showTab(tab) {
   }
 }
 
-// ---------- หนังสั้น AI (Facebook Embed) ----------
+// ---------- MeeMovie (คลิป Facebook) ----------
 // แยก state ออกจาก reader มังงะโดยสิ้นเชิง: วิดีโอจำเวลาเป็นวินาที ไม่แตะ chapter/read_state เดิม
 let videoLoading = false;
 let activeVideo = null;
