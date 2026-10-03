@@ -1147,14 +1147,6 @@ def clear_video_progress(video_id):
     return jsonify({"ok": True})
 
 
-@app.route("/api/videos/<video_id>/debug", methods=["POST"])
-def video_debug(video_id):
-    """ชั่วคราว: บันทึกว่าตัวเล่น Facebook บน iPhone ส่ง event/ตำแหน่งอะไรมา ลง webapp.log"""
-    raw = request.get_data(cache=False)[:4000]
-    print(f"[video-debug] user={current_username() or 'local'} video={video_id[:20]} {raw.decode('utf-8', 'replace')}", flush=True)
-    return "", 204
-
-
 # ---------- หมวดหมู่ (admin จัดการ, ทุกคนใช้กรองในหน้าเรื่องทั้งหมด) ----------
 # ทุก endpoint ไม่แตะเน็ต แก้แค่ไฟล์ — โหลดแบบ fresh ก่อนแก้เสมอ (ของจากแคชแชร์กันทั้ง process)
 
