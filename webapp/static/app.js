@@ -120,7 +120,14 @@ function videoCardHtml(video) {
   const image = video.thumbnail_url
     ? `<img class="video-thumb" src="${escapeHtml(video.thumbnail_url)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'video-placeholder',textContent:'▶'}))" />`
     : '<span class="video-placeholder" aria-hidden="true">▶</span>';
-  return `<button class="video-card" data-video-id="${escapeHtml(video.id)}">${image}<span class="video-card-info"><span class="video-card-title">${escapeHtml(video.title)}</span><span class="video-card-meta">เพิ่มโดย ${escapeHtml(video.added_by)} · ${timeAgo(video.created_at)}</span></span></button>`;
+  // ดูค้างไว้: แถบหลอดใต้ภาพ + ป้าย "ดูต่อ" (ไม่รู้ความยาวคลิปก็ยังขึ้นป้าย แต่ไม่มีหลอด)
+  const pos = Number(video.position_seconds) || 0;
+  const dur = Number(video.duration_seconds) || 0;
+  const pct = pos > 0 && dur > 0 ? Math.min(100, Math.max(3, (pos / dur) * 100)) : 0;
+  const resume = pos > 0
+    ? `<span class="video-resume-badge">ดูต่อ</span>${pct ? `<span class="video-progress"><span style="width:${pct.toFixed(1)}%"></span></span>` : ""}`
+    : "";
+  return `<button class="video-card" data-video-id="${escapeHtml(video.id)}"><span class="video-media">${image}${resume}</span><span class="video-card-info"><span class="video-card-title">${escapeHtml(video.title)}</span><span class="video-card-meta">เพิ่มโดย ${escapeHtml(video.added_by)} · ${timeAgo(video.created_at)}</span></span></button>`;
 }
 
 function renderVideos() {
@@ -202,7 +209,19 @@ async function mountFacebookVideo(video, position) {
     if (position > 0) {
       try { player.seek(position); } catch (e) { /* provider ไม่ยอม seek: ยังเล่นจากต้นได้ */ }
     }
-    try { player.subscribe("finishedPlaying", clearActiveVideoProgress); } catch (e) { /* SDK บางรุ่นไม่มี event นี้ */ }
+    // seek ก่อนคลิปเริ่มเล่น Facebook มักไม่สนใจ (โดยเฉพาะบนมือถือที่ต้องแตะเล่นเอง) เลยกระโดดซ้ำอีกครั้ง
+    // ตอนเริ่มเล่นจริงครั้งแรก — นี่คือเหตุที่เดิมเปิดคลิปแล้วเริ่มจากต้นทุกครั้ง
+    let resumed = false;
+    try {
+      player.subscribe("startedPlaying", () => {
+        rememberVideoDuration();
+        if (resumed || position <= 0) return;
+        resumed = true;
+        try { if (Number(player.getCurrentPosition()) < position - 3) player.seek(position); } catch (e) { /* เล่นจากต้นต่อได้ */ }
+      });
+      player.subscribe("paused", () => saveActiveVideoProgress(true));
+      player.subscribe("finishedPlaying", clearActiveVideoProgress);
+    } catch (e) { /* SDK บางรุ่นไม่มี event เหล่านี้ */ }
     return player;
   });
 }
@@ -210,6 +229,7 @@ async function mountFacebookVideo(video, position) {
 async function openVideo(video) {
   activeVideo = video;
   activeFbPlayer = null;
+  activeVideoDuration = Number(video.duration_seconds) || null;
   lastSavedVideoPosition = null;
   activeVideoFinished = false;
   el("#videoPlayerTitle").textContent = video.title;
@@ -235,12 +255,31 @@ function activeVideoPosition() {
   } catch (e) { return null; }
 }
 
-function saveActiveVideoProgress() {
+let activeVideoDuration = null;
+
+function rememberVideoDuration() {
+  try {
+    const d = Number(activeFbPlayer && activeFbPlayer.getDuration());
+    if (Number.isFinite(d) && d > 0) activeVideoDuration = d;
+  } catch (e) { /* ไม่รู้ความยาวก็ยังบันทึกตำแหน่งได้ */ }
+}
+
+function saveActiveVideoProgress(force = false) {
   const position = activeVideoPosition();
-  if (activeVideoFinished || position === null || !activeVideo || (lastSavedVideoPosition !== null && Math.abs(position - lastSavedVideoPosition) < 5)) return;
+  if (activeVideoFinished || position === null || !activeVideo) return;
+  if (!force && lastSavedVideoPosition !== null && Math.abs(position - lastSavedVideoPosition) < 5) return;
+  rememberVideoDuration();
+  // ดูไปไม่ถึง 5 วิ ไม่นับว่าดูค้าง / ดูเกือบจบ (95%) นับว่าจบ — เปิดใหม่ควรเริ่มจากต้น
+  if (position < 5) return;
+  if (activeVideoDuration && position >= activeVideoDuration * 0.95) return clearActiveVideoProgress();
   lastSavedVideoPosition = position;
-  fetch(`/api/videos/${encodeURIComponent(activeVideo.id)}/progress`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ position_seconds: position }), keepalive: true,
+  const video = activeVideo;
+  // อัปเดตการ์ดในหน้าคลังทันที ไม่ต้องรอโหลดใหม่ (แถบความคืบหน้า + ป้ายดูต่อ)
+  video.position_seconds = position;
+  if (activeVideoDuration) video.duration_seconds = activeVideoDuration;
+  fetch(`/api/videos/${encodeURIComponent(video.id)}/progress`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true,
+    body: JSON.stringify({ position_seconds: position, duration_seconds: activeVideoDuration || undefined }),
   }).catch(() => { lastSavedVideoPosition = null; });
 }
 
@@ -248,11 +287,12 @@ function clearActiveVideoProgress() {
   if (!activeVideo) return;
   activeVideoFinished = true; // กัน close หลัง event จบเขียนเวลาสุดท้ายกลับเข้ามาแข่งกับ DELETE
   fetch(`/api/videos/${encodeURIComponent(activeVideo.id)}/progress`, { method: "DELETE", keepalive: true }).catch(() => {});
+  activeVideo.position_seconds = 0;
   lastSavedVideoPosition = 0;
 }
 
 function closeVideo() {
-  saveActiveVideoProgress();
+  saveActiveVideoProgress(true);
   clearInterval(videoSaveTimer);
   videoSaveTimer = null;
   activeFbPlayer = null;
@@ -262,6 +302,7 @@ function closeVideo() {
   el("#videoDeleteBtn").hidden = true;
   el("#videoPlayerBody").innerHTML = '<div class="reader-msg">กำลังโหลด...</div>';
   document.body.style.overflow = "";
+  renderVideos();
   reloadIfPending();
 }
 
@@ -281,7 +322,7 @@ function initVideos() {
       const response = await fetch("/api/videos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.fromEntries(form)) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw Object.assign(new Error("request failed"), { body: data });
-      event.currentTarget.reset();
+      formEl.reset();
       showVideoForm(false);
       // ดึงรายการจริงอีกครั้ง: แม้ network ตัดหลัง POST สำเร็จ/คำตอบไม่ครบ หน้าคลังก็ตรงกับเซิร์ฟเวอร์
       await loadVideos();
@@ -298,7 +339,9 @@ function initVideos() {
   });
   el("#videoMoreBtn").addEventListener("click", () => loadVideos(true));
   el("#videoPlayerClose").addEventListener("click", closeVideo);
-  window.addEventListener("pagehide", saveActiveVideoProgress);
+  window.addEventListener("pagehide", () => saveActiveVideoProgress(true));
+  // สลับแอป/ปิดจอบนมือถือ: pagehide มักไม่ยิง แต่ visibilitychange ยิงเสมอ
+  document.addEventListener("visibilitychange", () => { if (document.hidden) saveActiveVideoProgress(true); });
   el("#videoDeleteBtn").addEventListener("click", async (event) => {
   const video = activeVideo;
   if (!video || !confirm(`ลบคลิป "${video.title}"?\n(ทุกคนจะไม่เห็นคลิปนี้อีก)`)) return;

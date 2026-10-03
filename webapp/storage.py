@@ -14,6 +14,7 @@ IMAGE_DOMAINS_FILE = DATA_DIR / "image_domains.json"
 CATEGORIES_FILE = DATA_DIR / "categories.json"
 SITE_SETTINGS_FILE = DATA_DIR / "site_settings.json"
 VIDEOS_FILE = DATA_DIR / "videos.json"
+VIDEO_THUMBS_DIR = DATA_DIR / "video_thumbs"
 USERS_FILE = DATA_DIR / "users.json"
 USERS_DIR = DATA_DIR / "users"
 
@@ -217,6 +218,18 @@ def load_videos(fresh: bool = False) -> list[dict]:
 
 def save_videos(videos: list[dict]):
     _save_json(VIDEOS_FILE, videos)
+
+
+def video_thumb_path(video_id: str) -> Path:
+    return VIDEO_THUMBS_DIR / f"{video_id}.webp"
+
+
+def save_video_thumb(video_id: str, data: bytes):
+    VIDEO_THUMBS_DIR.mkdir(exist_ok=True)
+    path = video_thumb_path(video_id)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_bytes(data)
+    _atomic_replace(tmp, path)
 
 
 def load_video_progress(username: str, fresh: bool = False) -> dict:

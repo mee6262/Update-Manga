@@ -15,3 +15,4 @@ webapp/data/vapid_private.pem
 webapp/data/categories.json
 webapp/data/site_settings.json
 webapp/data/videos.json
+webapp/data/video_thumbs/

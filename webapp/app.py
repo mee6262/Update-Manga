@@ -1,6 +1,7 @@
 import gzip
 import hashlib
 import hmac
+import html
 import io
 import os
 import re
@@ -13,6 +14,7 @@ from functools import wraps
 from pathlib import Path
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
+import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template, request, Response, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -894,13 +896,76 @@ def _canonical_facebook_video_url(value: object) -> tuple[str | None, str | None
     if parsed.scheme != "https" or host not in FACEBOOK_VIDEO_HOSTS or not parsed.path:
         return None, "รับเฉพาะลิงก์ https ของ Facebook หรือ fb.watch"
     if host != "fb.watch" and parsed.path.startswith("/share/"):
-        # URL share เป็นแค่ลิงก์พาไปหน้า Reel; plugin/video.php ฝังมันตรง ๆ ไม่ได้ แม้เปิดใน Facebook
-        # แล้ว redirect ได้ จึงให้คัดลอก URL ปลายทาง (/reel/, /videos/ หรือ /watch/) แทน
-        return None, "ลิงก์แชร์ Facebook ฝังไม่ได้: เปิดลิงก์แล้วคัดลอก URL /reel/, /videos/ หรือ /watch/"
+        # ลิงก์แชร์ต้องถูกแปลงเป็นลิงก์ /reel/ ก่อน (add_video ทำให้ด้วย _facebook_page_meta) — ถ้ามาถึงตรงนี้
+        # แปลว่าแปลงไม่สำเร็จ ฝังลิงก์ share ตรง ๆ ไม่ได้
+        return None, "แปลงลิงก์แชร์ Facebook ไม่สำเร็จ ลองเปิดลิงก์แล้วคัดลอก URL /reel/ หรือ /videos/ มาแทน"
+    video_id = _facebook_video_id(parsed)
+    if video_id and "/reel/" in parsed.path:
+        return f"https://www.facebook.com/reel/{video_id}", None
+    if video_id and parsed.path.rstrip("/") in ("/watch", "/video.php"):
+        # เดิมตัด query ทิ้งทั้งหมด ลิงก์ /watch?v=... ทุกคลิปเลยกลายเป็นลิงก์เดียวกัน (เพิ่มคลิปที่ 2 ไม่ได้)
+        return f"https://www.facebook.com/watch/?v={video_id}", None
     # URL query ของ Facebook ส่วนใหญ่เป็น tracking; ใช้ path เป็น identity เพื่อกันการเพิ่มคลิปเดิมซ้ำ
     path = "/" + parsed.path.strip("/")
     canonical_host = "www.facebook.com" if host in {"facebook.com", "m.facebook.com"} else host
     return urlunsplit(("https", canonical_host, path, "", "")), None
+
+
+def _facebook_video_id(parsed) -> str | None:
+    match = re.search(r"/(?:reel|videos)/(?:[^/]+/)*?(\d{6,})", parsed.path)
+    if match:
+        return match.group(1)
+    if parsed.path.rstrip("/") in ("/watch", "/video.php"):
+        match = re.search(r"(?:^|&)v=(\d{6,})", parsed.query)
+        return match.group(1) if match else None
+    return None
+
+
+FB_META_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+)
+
+
+def _facebook_page_meta(url: str) -> dict:
+    """เปิดหน้า Facebook แบบเบราว์เซอร์มือถือ แล้วอ่าน og:url / og:image / og:title — ใช้แปลงลิงก์แชร์
+    (/share/v/...) เป็นลิงก์ reel และดึงชื่อ/รูปปกให้อัตโนมัติ ไม่ต้องใช้ App Token พลาดคืน {} (ไม่ล้มทั้งการเพิ่ม)"""
+    try:
+        resp = requests.get(url, headers={"User-Agent": FB_META_UA, "Accept-Language": "th,en;q=0.8"},
+                            timeout=(5, 10), allow_redirects=True)
+        if (urlsplit(resp.url).hostname or "").lower() not in FACEBOOK_VIDEO_HOSTS:
+            return {}
+        text = resp.text[:600_000]
+    except Exception as e:
+        print(f"⚠️ อ่านข้อมูลคลิป Facebook ไม่สำเร็จ: {e}")
+        return {}
+    meta = {}
+    for key in ("url", "image", "title"):
+        match = re.search(rf'<meta property="og:{key}" content="([^"]+)"', text)
+        if match:
+            meta[key] = html.unescape(match.group(1))
+    return meta
+
+
+def _fetch_video_thumb(video_id: str, image_url: str) -> bool:
+    """ดาวน์โหลดรูปปกจาก Facebook มาย่อเก็บบนเซิร์ฟเวอร์ — ลิงก์รูปของ fbcdn มีวันหมดอายุ (พารามิเตอร์ oe=)
+    ถ้าเก็บแค่ลิงก์ ปกจะหายเองภายในไม่กี่สัปดาห์ รับเฉพาะรูปจาก fbcdn.net (กันใช้เซิร์ฟเวอร์ยิงที่อยู่อื่น)"""
+    host = (urlsplit(image_url).hostname or "").lower()
+    if urlsplit(image_url).scheme != "https" or not host.endswith(".fbcdn.net"):
+        return False
+    try:
+        resp = requests.get(image_url, headers={"User-Agent": FB_META_UA}, timeout=(5, 10))
+        resp.raise_for_status()
+        if len(resp.content) > MAX_RESIZE_BYTES:
+            return False
+        data = _resize_cover(resp.content, 400)
+    except Exception as e:
+        print(f"⚠️ ดาวน์โหลดรูปปกคลิปไม่สำเร็จ: {e}")
+        return False
+    if not data:
+        return False
+    storage.save_video_thumb(video_id, data)
+    return True
 
 
 def _can_delete_video(video: dict) -> bool:
@@ -909,8 +974,11 @@ def _can_delete_video(video: dict) -> bool:
     return is_admin() or video.get("added_by") == current_username()
 
 
-def _public_video(video: dict) -> dict:
+def _public_video(video: dict, progress: dict | None = None) -> dict:
+    entry = (progress or {}).get(video["id"]) or {}
     return {
+        "position_seconds": entry.get("position_seconds", 0),
+        "duration_seconds": entry.get("duration_seconds"),
         "id": video["id"],
         "title": video["title"],
         "facebook_url": video["facebook_url"],
@@ -935,7 +1003,8 @@ def list_videos():
             return jsonify({"error": "cursor ไม่ถูกต้อง"}), 400
         videos = videos[cursor_index + 1 :]
     page = videos[:limit]
-    return jsonify({"items": [_public_video(video) for video in page], "next_cursor": page[-1]["id"] if len(videos) > limit else None})
+    progress = storage.load_video_progress(current_username() or "local")
+    return jsonify({"items": [_public_video(video, progress) for video in page], "next_cursor": page[-1]["id"] if len(videos) > limit else None})
 
 
 @app.route("/api/videos", methods=["POST"])
@@ -945,17 +1014,34 @@ def add_video():
         return jsonify({"error": "unauthorized"}), 401
     body = request.get_json(force=True, silent=True) or {}
     title = " ".join(str(body.get("title") or "").split())
-    if not title or len(title) > MAX_VIDEO_TITLE:
-        return jsonify({"error": f"ชื่อเรื่องต้องมี 1-{MAX_VIDEO_TITLE} ตัวอักษร"}), 400
-    facebook_url, error = _canonical_facebook_video_url(body.get("facebook_url"))
-    if error:
-        return jsonify({"error": error}), 400
+    raw_url = str(body.get("facebook_url") or "").strip()
     thumbnail_url = str(body.get("thumbnail_url") or "").strip()
     if thumbnail_url:
         thumb = urlsplit(thumbnail_url)
         if thumb.scheme != "https" or not thumb.hostname:
             return jsonify({"error": "รูปปกต้องเป็นลิงก์ https"}), 400
+
+    # อ่านข้อมูลจากหน้า Facebook ก่อนเข้า lock (ห้ามยิงเน็ตใน state_lock) — แปลงลิงก์แชร์เป็น reel และใช้เป็น
+    # ชื่อ/ปกอัตโนมัติถ้าผู้ใช้ไม่ได้ใส่มา
+    meta = {}
+    try:
+        is_share = urlsplit(raw_url).path.startswith("/share/")
+    except ValueError:
+        is_share = False
+    if raw_url.startswith("https://") and (is_share or not title or not thumbnail_url):
+        meta = _facebook_page_meta(raw_url)
+    facebook_url, error = _canonical_facebook_video_url(meta.get("url") if is_share and meta.get("url") else raw_url)
+    if error:
+        return jsonify({"error": error}), 400
+    if not title:
+        title = " ".join((meta.get("title") or "").split())[:MAX_VIDEO_TITLE]
+    if not title or len(title) > MAX_VIDEO_TITLE:
+        return jsonify({"error": f"ชื่อเรื่องต้องมี 1-{MAX_VIDEO_TITLE} ตัวอักษร (ดึงชื่อจาก Facebook ไม่ได้ ใส่เองได้)"}), 400
     canonical_key = hashlib.sha256(facebook_url.encode("utf-8")).hexdigest()[:20]
+    if not thumbnail_url and meta.get("image") and not storage.video_thumb_path(canonical_key).exists():
+        _fetch_video_thumb(canonical_key, meta["image"])
+    if not thumbnail_url and storage.video_thumb_path(canonical_key).exists():
+        thumbnail_url = f"/api/videos/{canonical_key}/thumb"
     # เขียนคลังกลางใต้ lock และ fresh=True เพื่อไม่ให้ request เพิ่มคนละคลิปพร้อมกันทับกัน
     with storage.state_lock:
         videos = storage.load_videos(fresh=True)
@@ -997,6 +1083,18 @@ def delete_video(video_id):
                 storage.save_video_progress(u, progress)
     return jsonify({"ok": True})
 
+@app.route("/api/videos/<video_id>/thumb")
+def video_thumb(video_id):
+    if not re.fullmatch(r"[0-9a-f]{20}", video_id):
+        return "not found", 404
+    path = storage.video_thumb_path(video_id)
+    if not path.exists():
+        return "not found", 404
+    resp = Response(path.read_bytes(), content_type="image/webp")
+    resp.headers["Cache-Control"] = "private, max-age=2592000"
+    return resp
+
+
 def _video_exists(video_id: str) -> bool:
     return any(video.get("id") == video_id for video in storage.load_videos())
 
@@ -1019,12 +1117,20 @@ def save_video_progress(video_id):
         return jsonify({"error": "unauthorized"}), 401
     if not _video_exists(video_id):
         return jsonify({"error": "ไม่พบวิดีโอ"}), 404
-    value = (request.get_json(force=True, silent=True) or {}).get("position_seconds")
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= MAX_VIDEO_POSITION:
+    body = request.get_json(force=True, silent=True) or {}
+    value, duration = body.get("position_seconds"), body.get("duration_seconds")
+    valid = lambda v: not isinstance(v, bool) and isinstance(v, (int, float)) and 0 <= v <= MAX_VIDEO_POSITION
+    if not valid(value) or (duration is not None and not valid(duration)):
         return jsonify({"error": "ตำแหน่งวิดีโอไม่ถูกต้อง"}), 400
     with storage.state_lock:
         progress = storage.load_video_progress(username or "local", fresh=True)
-        progress[video_id] = {"position_seconds": round(float(value), 1), "updated_at": datetime.now(timezone.utc).isoformat()}
+        entry = {"position_seconds": round(float(value), 1), "updated_at": datetime.now(timezone.utc).isoformat()}
+        # ความยาวคลิปไว้วาดแถบความคืบหน้าบนการ์ด (ส่งมาไม่ได้ทุกครั้ง ใช้ค่าเดิมถ้ารอบนี้ไม่มี)
+        if duration:
+            entry["duration_seconds"] = round(float(duration), 1)
+        elif progress.get(video_id, {}).get("duration_seconds"):
+            entry["duration_seconds"] = progress[video_id]["duration_seconds"]
+        progress[video_id] = entry
         storage.save_video_progress(username or "local", progress)
     return jsonify({"ok": True})
 
