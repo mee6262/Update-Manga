@@ -842,3 +842,4 @@ body:not([data-tab="list"]) .home-tabs { display: none; }
 .video-resume-badge { position: absolute; top: 8px; right: 8px; background: var(--accent); color: #0a0f0c; font-size: 0.7rem; font-weight: 700; padding: 3px 9px; border-radius: 999px; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35); }
 .video-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255, 255, 255, 0.28); }
 .video-progress > span { display: block; height: 100%; background: var(--new-badge); }
+.video-resume-hint { margin-top: 10px; padding: 6px 12px; border-radius: 999px; background: rgba(255,255,255,.12); color: #fff; font-size: 13px; justify-self: center; }

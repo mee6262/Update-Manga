@@ -113,6 +113,12 @@ let activeFbPlayer = null;
 let videoSaveTimer = null;
 let lastSavedVideoPosition = null;
 let activeVideoFinished = false;
+// iPhone (โดยเฉพาะเปิดจากไอคอนหน้าจอโฮม) เล่นคลิปแบบเต็มจอของระบบ แล้ว getCurrentPosition() ของ Facebook
+// ตอบ 0 ตลอด → เดิมบันทึกได้แต่ 0.0 จึงนับเวลาเล่นเองเป็นตัวสำรอง ใช้เมื่อ API ไม่เคยตอบเลขเกิน 0
+let videoApiWorks = false;
+let videoClockBase = 0;
+let videoClockStartedAt = null;
+let videoDebugEvents = [];
 let facebookSdkPromise = null;
 let videoSubmitting = false;
 
@@ -206,6 +212,14 @@ async function mountFacebookVideo(video, position) {
     try { FB.XFBML.parse(body); } catch (e) { clearTimeout(timeout); reject(e); }
   }).then((player) => {
     activeFbPlayer = player;
+    // นาฬิกาสำรองเริ่มนับจากจุดที่ดูค้าง (ถ้า seek อัตโนมัติไม่ได้ ผู้ใช้เลื่อนไปเองตามป้ายบอกเวลา)
+    videoClockBase = position;
+    if (position > 0) {
+      const hint = document.createElement("div");
+      hint.className = "video-resume-hint";
+      hint.textContent = `ดูค้างไว้ที่ ${formatVideoTime(position)}`;
+      el("#videoPlayerBody").appendChild(hint);
+    }
     if (position > 0) {
       try { player.seek(position); } catch (e) { /* provider ไม่ยอม seek: ยังเล่นจากต้นได้ */ }
     }
@@ -214,13 +228,15 @@ async function mountFacebookVideo(video, position) {
     let resumed = false;
     try {
       player.subscribe("startedPlaying", () => {
+        noteVideoEvent("startedPlaying");
+        startVideoClock();
         rememberVideoDuration();
         if (resumed || position <= 0) return;
         resumed = true;
         try { if (Number(player.getCurrentPosition()) < position - 3) player.seek(position); } catch (e) { /* เล่นจากต้นต่อได้ */ }
       });
-      player.subscribe("paused", () => saveActiveVideoProgress(true));
-      player.subscribe("finishedPlaying", clearActiveVideoProgress);
+      player.subscribe("paused", () => { noteVideoEvent("paused"); stopVideoClock(); saveActiveVideoProgress(true); });
+      player.subscribe("finishedPlaying", () => { noteVideoEvent("finishedPlaying"); stopVideoClock(); clearActiveVideoProgress(); });
     } catch (e) { /* SDK บางรุ่นไม่มี event เหล่านี้ */ }
     return player;
   });
@@ -232,6 +248,10 @@ async function openVideo(video) {
   activeVideoDuration = Number(video.duration_seconds) || null;
   lastSavedVideoPosition = null;
   activeVideoFinished = false;
+  videoApiWorks = false;
+  videoClockBase = 0;
+  videoClockStartedAt = null;
+  videoDebugEvents = [];
   el("#videoPlayerTitle").textContent = video.title;
   el("#videoDeleteBtn").hidden = !video.can_delete;
   el("#videoPlayer").hidden = false;
@@ -251,8 +271,49 @@ function activeVideoPosition() {
   if (!activeVideo || !activeFbPlayer) return null;
   try {
     const value = Number(activeFbPlayer.getCurrentPosition());
-    return Number.isFinite(value) && value >= 0 ? value : null;
-  } catch (e) { return null; }
+    if (Number.isFinite(value) && value > 0) videoApiWorks = true;
+    if (videoApiWorks) return Number.isFinite(value) && value >= 0 ? value : null;
+  } catch (e) { /* ใช้นาฬิกาสำรอง */ }
+  // API ไม่เคยบอกตำแหน่งจริง: ใช้เวลาที่นับเอง (ยังไม่เคยเริ่มเล่น = 0 ไม่บันทึก)
+  return videoClockPosition();
+}
+
+function videoClockPosition() {
+  return videoClockBase + (videoClockStartedAt === null ? 0 : (Date.now() - videoClockStartedAt) / 1000);
+}
+
+function startVideoClock() {
+  if (videoClockStartedAt === null) videoClockStartedAt = Date.now();
+}
+
+function stopVideoClock() {
+  if (videoClockStartedAt === null) return;
+  videoClockBase = videoClockPosition();
+  videoClockStartedAt = null;
+}
+
+function noteVideoEvent(name) {
+  if (videoDebugEvents.length >= 40) return;
+  let api = null;
+  try { api = Number(activeFbPlayer && activeFbPlayer.getCurrentPosition()); } catch (e) { /* ignore */ }
+  videoDebugEvents.push([name, Math.round(videoClockPosition()), api]);
+}
+
+// ส่งสิ่งที่เกิดขึ้นตอนเล่นไปลง log เซิร์ฟเวอร์ ไว้ดูว่า iPhone ส่ง event/ตำแหน่งอะไรมาบ้าง (ชั่วคราว)
+function sendVideoDebug() {
+  if (!activeVideo) return;
+  noteVideoEvent("close");
+  try {
+    navigator.sendBeacon(`/api/videos/${encodeURIComponent(activeVideo.id)}/debug`, JSON.stringify({
+      ua: navigator.userAgent, standalone: !!navigator.standalone || matchMedia("(display-mode: standalone)").matches,
+      api_works: videoApiWorks, duration: activeVideoDuration, events: videoDebugEvents,
+    }));
+  } catch (e) { /* ignore */ }
+}
+
+function formatVideoTime(seconds) {
+  const s = Math.floor(seconds), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${r}` : `${m}:${r}`;
 }
 
 let activeVideoDuration = null;
@@ -292,7 +353,9 @@ function clearActiveVideoProgress() {
 }
 
 function closeVideo() {
+  stopVideoClock();
   saveActiveVideoProgress(true);
+  sendVideoDebug();
   clearInterval(videoSaveTimer);
   videoSaveTimer = null;
   activeFbPlayer = null;
@@ -339,9 +402,22 @@ function initVideos() {
   });
   el("#videoMoreBtn").addEventListener("click", () => loadVideos(true));
   el("#videoPlayerClose").addEventListener("click", closeVideo);
-  window.addEventListener("pagehide", () => saveActiveVideoProgress(true));
+  window.addEventListener("pagehide", () => { stopVideoClock(); saveActiveVideoProgress(true); });
+  // แตะเล่นในกรอบคลิป (iframe ของ Facebook) ทำให้หน้าเว็บเสียโฟกัส — ใช้เป็นสัญญาณเริ่มเล่นสำรอง
+  // เผื่อ iPhone ไม่ส่ง startedPlaying มา
+  window.addEventListener("blur", () => setTimeout(() => {
+    if (activeFbPlayer && document.activeElement?.tagName === "IFRAME" && el("#videoPlayerBody").contains(document.activeElement)) {
+      noteVideoEvent("iframe-tap");
+      startVideoClock();
+    }
+  }, 0));
   // สลับแอป/ปิดจอบนมือถือ: pagehide มักไม่ยิง แต่ visibilitychange ยิงเสมอ
-  document.addEventListener("visibilitychange", () => { if (document.hidden) saveActiveVideoProgress(true); });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden || !activeVideo) return;
+    noteVideoEvent("hidden");
+    stopVideoClock(); // สลับแอป/ล็อกจอ คลิปหยุดเล่น นาฬิกาสำรองต้องหยุดด้วย
+    saveActiveVideoProgress(true);
+  });
   el("#videoDeleteBtn").addEventListener("click", async (event) => {
   const video = activeVideo;
   if (!video || !confirm(`ลบคลิป "${video.title}"?\n(ทุกคนจะไม่เห็นคลิปนี้อีก)`)) return;
