@@ -854,3 +854,7 @@ a.video-card { display: block; text-decoration: none; }
 .video-item { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .video-save-btn { align-self: stretch; justify-content: center; font-size: 0.85rem; padding: 7px 10px; }
 .video-save-btn.saved { color: var(--accent); border-color: var(--accent); }
+.native-video { width: 100%; max-width: 900px; max-height: calc(100vh - 170px); background: #000; justify-self: center; border-radius: 6px; }
+.video-quality { display: flex; gap: 6px; justify-content: center; margin-top: 10px; flex-wrap: wrap; }
+.video-quality-btn { background: rgba(255, 255, 255, 0.12); color: #fff; border: 1px solid transparent; border-radius: 999px; padding: 5px 12px; font: inherit; font-size: 0.8rem; cursor: pointer; }
+.video-quality-btn.active { border-color: var(--accent); color: var(--accent); }

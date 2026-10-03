@@ -274,6 +274,125 @@ async function mountFacebookVideo(video, position) {
   });
 }
 
+// ---------- ตัวเล่นของเว็บเอง (ไฟล์ MP4 ตรงจาก Facebook) ----------
+// ได้ตำแหน่งจริงทุกเครื่อง (รวม iPhone) + seek ไปจุดดูค้างได้ + เล่นในกรอบ/PiP ได้
+// ไม่มีไฟล์/เล่นไม่ได้ → กลับไปใช้ตัวเล่น Facebook แบบฝังเหมือนเดิม
+const VIDEO_QUALITY_KEY = "videoQuality"; // auto | hd | sd (จำต่อเครื่อง)
+const VIDEO_QUALITY_LABEL = { auto: "อัตโนมัติ", hd: "720p", sd: "360p" };
+let nativeVideo = null;
+let nativeSources = null;
+let nativeQualityPref = "auto";
+let nativeCurrentQuality = null;
+let nativeStalls = [];
+
+function readVideoQualityPref() {
+  try { const v = localStorage.getItem(VIDEO_QUALITY_KEY); return VIDEO_QUALITY_LABEL[v] ? v : "auto"; } catch (e) { return "auto"; }
+}
+
+// Safari บน iPhone ไม่บอกชนิดเน็ต จึงวัดเอง: โหลดข้อมูลสุ่ม 256KB จากเซิร์ฟเวอร์เรา (ไฟล์ 720p ใช้ราว 1 Mbps)
+// วัดกับไฟล์ fbcdn ตรง ๆ ไม่ได้ — fbcdn ไม่ส่ง CORS ให้ fetch อ่าน (แต่ <video> เล่นได้)
+async function measureVideoBandwidthMbps() {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 4000);
+  const t0 = performance.now();
+  try {
+    const res = await fetch(`/api/videos/speedtest?t=${Date.now()}`, { signal: ctrl.signal, cache: "no-store" });
+    const bytes = (await res.arrayBuffer()).byteLength;
+    return (bytes * 8) / ((performance.now() - t0) / 1000) / 1e6;
+  } catch (e) {
+    return 0; // ช้าจนเกิน 4 วิ = เน็ตช้า
+  } finally { clearTimeout(timer); }
+}
+
+async function pickAutoQuality(sources) {
+  if (!sources.hd) return "sd";
+  if (!sources.sd) return "hd";
+  return (await measureVideoBandwidthMbps()) >= 3 ? "hd" : "sd";
+}
+
+function renderQualityButtons() {
+  const box = el("#videoQuality");
+  if (!box || !nativeSources) return;
+  const options = ["auto", ...["hd", "sd"].filter((q) => nativeSources[q])];
+  box.innerHTML = options.map((q) => {
+    const label = q === "auto" && nativeCurrentQuality ? `อัตโนมัติ (${VIDEO_QUALITY_LABEL[nativeCurrentQuality]})` : VIDEO_QUALITY_LABEL[q];
+    return `<button class="video-quality-btn${q === nativeQualityPref ? " active" : ""}" data-quality="${q}">${label}</button>`;
+  }).join("");
+}
+
+// เปลี่ยนไฟล์แล้วเล่นต่อจากวินาทีเดิม (สะดุดสั้น ๆ ระหว่างโหลดหัวไฟล์ใหม่)
+function setNativeQuality(quality, startAt) {
+  const v = nativeVideo;
+  if (!v || !nativeSources[quality]) return;
+  const at = startAt ?? v.currentTime;
+  const wasPlaying = startAt === undefined && !v.paused;
+  nativeCurrentQuality = quality;
+  nativeStalls = [];
+  v.src = nativeSources[quality];
+  v.addEventListener("loadedmetadata", () => {
+    // สั่งเล่นหลัง seek เสร็จ — สั่ง play ระหว่าง seek เบราว์เซอร์หยุดเองหลังกระโดดเสร็จ (เจอตอนสลับ 360p↔720p)
+    const resume = () => { if (wasPlaying) v.play().catch(() => {}); };
+    if (at > 0) {
+      v.addEventListener("seeked", resume, { once: true });
+      v.currentTime = at;
+    } else resume();
+  }, { once: true });
+  renderQualityButtons();
+}
+
+function mountNativeVideo(video, position, sources) {
+  const body = el("#videoPlayerBody");
+  body.innerHTML = '<video id="nativeVideo" class="native-video" controls playsinline preload="metadata"></video><div id="videoQuality" class="video-quality"></div>';
+  const v = el("#nativeVideo");
+  nativeVideo = v;
+  nativeSources = sources;
+  nativeQualityPref = readVideoQualityPref();
+  return new Promise(async (resolve, reject) => {
+    const quality = nativeQualityPref === "auto" || !sources[nativeQualityPref] ? await pickAutoQuality(sources) : nativeQualityPref;
+    if (nativeVideo !== v) return reject(new Error("closed"));
+    const fail = () => { clearTimeout(timer); reject(new Error("native video failed")); };
+    const timer = setTimeout(fail, 15000);
+    v.addEventListener("error", fail, { once: true });
+    v.addEventListener("loadedmetadata", () => {
+      clearTimeout(timer);
+      v.removeEventListener("error", fail);
+      resolve();
+    }, { once: true });
+    setNativeQuality(quality, position);
+  }).then(() => {
+    activeFbPlayer = { getCurrentPosition: () => v.currentTime, getDuration: () => v.duration };
+    videoApiWorks = true; // ตำแหน่งจริง ไม่ต้องใช้นาฬิกาสำรอง
+    rememberVideoDuration();
+    v.addEventListener("pause", () => { if (!v.ended) saveActiveVideoProgress(true); });
+    v.addEventListener("ended", clearActiveVideoProgress);
+    // อัตโนมัติ: กระตุก (waiting) 2 ครั้งใน 60 วิ ขณะเล่น 720p → ลดเป็น 360p
+    v.addEventListener("waiting", () => {
+      if (nativeQualityPref !== "auto" || nativeCurrentQuality !== "hd" || !nativeSources.sd || v.seeking) return;
+      const now = Date.now();
+      nativeStalls = nativeStalls.filter((t) => now - t < 60000).concat(now);
+      if (nativeStalls.length >= 2) setNativeQuality("sd");
+    });
+    el("#videoQuality").addEventListener("click", async (event) => {
+      const q = event.target.closest("[data-quality]")?.dataset.quality;
+      if (!q || q === nativeQualityPref) return;
+      nativeQualityPref = q;
+      try { localStorage.setItem(VIDEO_QUALITY_KEY, q); } catch (e) { /* ไม่จำก็ได้ */ }
+      setNativeQuality(q === "auto" ? await pickAutoQuality(nativeSources) : q);
+    });
+  });
+}
+
+function unmountNativeVideo() {
+  if (!nativeVideo) return;
+  // หยุดโหลดทันที ไม่ให้เบราว์เซอร์โหลดคลิปต่อเบื้องหลังจนเปลืองเน็ต
+  nativeVideo.pause();
+  nativeVideo.removeAttribute("src");
+  nativeVideo.load();
+  nativeVideo = null;
+  nativeSources = null;
+  nativeCurrentQuality = null;
+}
+
 async function openVideo(video) {
   activeVideo = video;
   activeFbPlayer = null;
@@ -288,9 +407,18 @@ async function openVideo(video) {
   el("#videoPlayer").hidden = false;
   document.body.style.overflow = "hidden";
   try {
-    const progress = await getJSON(`/api/videos/${encodeURIComponent(video.id)}/progress`);
+    const [progress, sources] = await Promise.all([
+      getJSON(`/api/videos/${encodeURIComponent(video.id)}/progress`),
+      getJSON(`/api/videos/${encodeURIComponent(video.id)}/sources`).catch(() => ({})),
+    ]);
     if (!activeVideo || activeVideo.id !== video.id) return;
-    await mountFacebookVideo(video, Number(progress.position_seconds) || 0);
+    const position = Number(progress.position_seconds) || 0;
+    let native = false;
+    if (sources.hd || sources.sd) {
+      try { await mountNativeVideo(video, position, sources); native = true; }
+      catch (e) { unmountNativeVideo(); if (!activeVideo || activeVideo.id !== video.id) return; }
+    }
+    if (!native) await mountFacebookVideo(video, position);
     clearInterval(videoSaveTimer);
     videoSaveTimer = setInterval(saveActiveVideoProgress, 10000);
   } catch (e) {
@@ -369,6 +497,7 @@ function clearActiveVideoProgress() {
 function closeVideo() {
   stopVideoClock();
   saveActiveVideoProgress(true);
+  unmountNativeVideo();
   clearInterval(videoSaveTimer);
   videoSaveTimer = null;
   activeFbPlayer = null;

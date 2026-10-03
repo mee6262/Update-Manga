@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import html
 import io
+import json
 import os
 import re
 import secrets
@@ -13,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
-from urllib.parse import urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlencode, urlparse, urlsplit, urlunsplit
 
 import requests
 from dotenv import load_dotenv
@@ -986,6 +987,44 @@ def _facebook_embed_check(facebook_url: str) -> tuple[float | None, bool]:
     return (round(seconds, 1) if 0 < seconds <= MAX_VIDEO_POSITION else None), False
 
 
+_HD_SD_SRC_RE = re.compile(r'"(hd_src|sd_src)":"(https:[^"]+)"')
+_video_sources_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _facebook_video_sources(facebook_url: str) -> dict:
+    """ลิงก์ไฟล์ MP4 ตรงของคลิป ({"hd": ..., "sd": ...}) จากหน้าตัวเล่นแบบฝัง ให้หน้าเว็บเล่นด้วย <video> เอง
+    — ตัวเล่น Facebook บน iPhone ไม่บอกตำแหน่ง/ไม่รับคำสั่ง seek จึงจำจุดดูค้างไม่ได้ ไฟล์ตรงได้ currentTime จริง
+    ลิงก์มีอายุ (พารามิเตอร์ oe= ราว 4 วัน) เก็บแคชไว้ถึงก่อนหมดอายุ 1 ชม. พลาดคืน {} (หน้าเว็บกลับไปใช้ตัวเล่น Facebook)"""
+    cached = _video_sources_cache.get(facebook_url)
+    if cached and cached[0] > time.time():
+        return cached[1]
+    url = "https://www.facebook.com/plugins/video.php?" + urlencode({"href": facebook_url, "show_text": "false"})
+    try:
+        resp = requests.get(url, headers={"User-Agent": FB_DESKTOP_UA, "Accept-Language": "en"}, timeout=(5, 10))
+        text = resp.text
+    except Exception as e:
+        print(f"⚠️ อ่านลิงก์ไฟล์คลิป Facebook ไม่สำเร็จ: {e}")
+        return {}
+    sources, expires = {}, time.time() + 6 * 3600
+    for kind, raw in _HD_SD_SRC_RE.findall(text):
+        try:
+            link = json.loads(f'"{raw}"')  # ในหน้าเป็นสตริง JSON (\/ และ \u0025)
+        except ValueError:
+            continue
+        parts = urlsplit(link)
+        if parts.scheme != "https" or not (parts.hostname or "").endswith(".fbcdn.net"):
+            continue
+        sources.setdefault("hd" if kind == "hd_src" else "sd", link)
+        oe = parse_qs(parts.query).get("oe", [""])[0]
+        try:
+            expires = min(expires, int(oe, 16) - 3600)
+        except ValueError:
+            pass
+    if sources:
+        _video_sources_cache[facebook_url] = (expires, sources)
+    return sources
+
+
 def _facebook_video_duration(facebook_url: str) -> float | None:
     return _facebook_embed_check(facebook_url)[0]
 
@@ -1190,6 +1229,28 @@ def video_thumb(video_id):
 
 def _video_exists(video_id: str) -> bool:
     return any(video.get("id") == video_id for video in storage.load_videos())
+
+
+_SPEEDTEST_BYTES = os.urandom(256 * 1024)  # สุ่ม = บีบอัดไม่ได้ วัดความเร็วจริง
+
+
+@app.route("/api/videos/speedtest", methods=["GET"])
+def video_speedtest():
+    """โหมดอัตโนมัติของตัวเล่นวัดความเร็วเน็ตกับ VPS เอง — fbcdn ไม่ส่ง CORS ให้ fetch ไฟล์วิดีโอวัดตรง ๆ"""
+    return Response(_SPEEDTEST_BYTES, mimetype="application/octet-stream", headers={"Cache-Control": "no-store"})
+
+
+@app.route("/api/videos/<video_id>/sources", methods=["GET"])
+def get_video_sources(video_id):
+    username = current_username()
+    if not username and storage.load_users():
+        return jsonify({"error": "unauthorized"}), 401
+    video = next((v for v in storage.load_videos() if v.get("id") == video_id), None)
+    if not video:
+        return jsonify({"error": "ไม่พบวิดีโอ"}), 404
+    if video.get("external"):
+        return jsonify({})
+    return jsonify(_facebook_video_sources(video["facebook_url"]))
 
 
 @app.route("/api/videos/<video_id>/progress", methods=["GET"])
