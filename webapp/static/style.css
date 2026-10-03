@@ -843,3 +843,4 @@ body:not([data-tab="list"]) .home-tabs { display: none; }
 .video-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255, 255, 255, 0.28); }
 .video-progress > span { display: block; height: 100%; background: var(--new-badge); }
 .video-resume-hint { margin-top: 10px; padding: 6px 12px; border-radius: 999px; background: rgba(255,255,255,.12); color: #fff; font-size: 13px; justify-self: center; }
+.video-time { position: absolute; right: 8px; bottom: 10px; background: rgba(0, 0, 0, 0.72); color: #fff; font-size: 0.72rem; font-weight: 600; padding: 2px 7px; border-radius: 6px; font-variant-numeric: tabular-nums; }

@@ -132,7 +132,11 @@ function videoCardHtml(video) {
   const resume = pos > 0
     ? `<span class="video-resume-badge">ดูต่อ</span>${pct ? `<span class="video-progress"><span style="width:${pct.toFixed(1)}%"></span></span>` : ""}`
     : "";
-  return `<button class="video-card" data-video-id="${escapeHtml(video.id)}"><span class="video-media">${image}${resume}</span><span class="video-card-info"><span class="video-card-title">${escapeHtml(video.title)}</span><span class="video-card-meta">เพิ่มโดย ${escapeHtml(video.added_by)} · ${timeAgo(video.created_at)}</span></span></button>`;
+  // มุมขวาล่างเหนือหลอด: ยังไม่เคยดู "111 นาที" / ดูค้าง "12.23/111 นาที" (นาที.วินาที ที่ดูถึง / ความยาวเป็นนาที)
+  const at = pos > 0 ? `${Math.floor(pos / 60)}.${String(Math.floor(pos % 60)).padStart(2, "0")}` : "";
+  const total = dur > 0 ? `${Math.max(1, Math.round(dur / 60))} นาที` : "";
+  const timeLabel = at || total ? `<span class="video-time">${at && total ? `${at}/${total}` : at ? `${at} นาที` : total}</span>` : "";
+  return `<button class="video-card" data-video-id="${escapeHtml(video.id)}"><span class="video-media">${image}${resume}${timeLabel}</span><span class="video-card-info"><span class="video-card-title">${escapeHtml(video.title)}</span><span class="video-card-meta">เพิ่มโดย ${escapeHtml(video.added_by)} · ${timeAgo(video.created_at)}</span></span></button>`;
 }
 
 function renderVideos() {
