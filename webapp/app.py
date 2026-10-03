@@ -963,21 +963,46 @@ FB_DESKTOP_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537
 _DASH_DURATION_RE = re.compile(r'mediaPresentationDuration=\\?"PT(?:(\d+)H)?(?:(\d+)M)?([\d.]+)S')
 
 
-def _facebook_video_duration(facebook_url: str) -> float | None:
-    """ความยาวคลิป (วินาที) จากหน้าตัวเล่นแบบฝัง (plugins/video.php) ซึ่งมี DASH manifest
-    (mediaPresentationDuration) อยู่ในหน้า — iPhone อ่านความยาวจากตัวเล่นไม่ได้ (getDuration ไม่ตอบ)
-    แถบความคืบหน้าบนการ์ดเลยไม่ขึ้น จึงดึงฝั่งเซิร์ฟเวอร์เก็บไว้กับคลิปแทน พลาดคืน None"""
+def _facebook_embed_check(facebook_url: str) -> tuple[float | None, bool]:
+    """เปิดหน้าตัวเล่นแบบฝัง (plugins/video.php) คืน (ความยาวคลิปเป็นวินาที, เล่นแบบฝังไม่ได้)
+    - ความยาว: จาก DASH manifest (mediaPresentationDuration) — iPhone อ่านความยาวจากตัวเล่นไม่ได้
+      (getDuration ไม่ตอบ) แถบความคืบหน้าบนการ์ดเลยไม่ขึ้น จึงเก็บไว้กับคลิปแทน
+    - เล่นไม่ได้: คลิปไม่สาธารณะ/เจ้าของปิดการฝัง หน้าขึ้น "Video unavailable ... permission" — เพิ่มไปก็เปิดดูในเว็บไม่ได้
+    พลาด (เน็ต/ไม่เจอ) คืน (None, False) ไม่ขวางการเพิ่มคลิป"""
     url = "https://www.facebook.com/plugins/video.php?" + urlencode({"href": facebook_url, "show_text": "false"})
     try:
         resp = requests.get(url, headers={"User-Agent": FB_DESKTOP_UA, "Accept-Language": "en"}, timeout=(5, 10))
-        match = _DASH_DURATION_RE.search(resp.text)
+        text = resp.text
     except Exception as e:
-        print(f"⚠️ อ่านความยาวคลิป Facebook ไม่สำเร็จ: {e}")
-        return None
+        print(f"⚠️ อ่านข้อมูลตัวเล่น Facebook ไม่สำเร็จ: {e}")
+        return None, False
+    match = _DASH_DURATION_RE.search(text)
     if not match:
-        return None
+        return None, "Video unavailable" in text and "permission to view" in text
     seconds = int(match.group(1) or 0) * 3600 + int(match.group(2) or 0) * 60 + float(match.group(3))
-    return round(seconds, 1) if 0 < seconds <= MAX_VIDEO_POSITION else None
+    return (round(seconds, 1) if 0 < seconds <= MAX_VIDEO_POSITION else None), False
+
+
+def _facebook_video_duration(facebook_url: str) -> float | None:
+    return _facebook_embed_check(facebook_url)[0]
+
+
+FB_CRAWLER_UA = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"
+
+
+def _resolve_facebook_share(url: str) -> str | None:
+    """ลิงก์แชร์ (/share/v/..., /share/r/...) → ลิงก์คลิปจริง จาก Location ที่ Facebook ตอบ crawler
+    — แบบเบราว์เซอร์บางคลิปโดนเด้งไปหน้า login (ไม่มี og:url ให้อ่าน) แต่ crawler ได้ 302 ไป /reel/<id> ทุกครั้ง"""
+    try:
+        resp = requests.get(url, headers={"User-Agent": FB_CRAWLER_UA}, timeout=(5, 10), allow_redirects=False)
+        location = resp.headers.get("Location") or ""
+    except Exception as e:
+        print(f"⚠️ แปลงลิงก์แชร์ Facebook ไม่สำเร็จ: {e}")
+        return None
+    target = urlsplit(location)
+    if (target.hostname or "").lower() not in FACEBOOK_VIDEO_HOSTS or target.path.startswith(("/share/", "/login")):
+        return None
+    return location
 
 
 _duration_backfill_lock = threading.Lock()
@@ -1093,19 +1118,23 @@ def add_video():
         is_share = False
     if raw_url.startswith("https://") and (is_share or not title or not thumbnail_url):
         meta = _facebook_page_meta(raw_url)
-    facebook_url, error = _canonical_facebook_video_url(meta.get("url") if is_share and meta.get("url") else raw_url)
+    resolved = (_resolve_facebook_share(raw_url) if is_share else None) or (meta.get("url") if is_share else None)
+    facebook_url, error = _canonical_facebook_video_url(resolved or raw_url)
     if error:
         return jsonify({"error": error}), 400
+    duration, unavailable = _facebook_embed_check(facebook_url)
+    if unavailable:
+        return jsonify({"error": "คลิปนี้เล่นนอก Facebook ไม่ได้ (ไม่เป็นสาธารณะ หรือเจ้าของปิดการฝังคลิป)"}), 400
     if not title:
         title = _clean_video_title(meta.get("title") or "")[:MAX_VIDEO_TITLE]
-    if not title or len(title) > MAX_VIDEO_TITLE:
-        return jsonify({"error": f"ชื่อเรื่องต้องมี 1-{MAX_VIDEO_TITLE} ตัวอักษร (ดึงชื่อจาก Facebook ไม่ได้ ใส่เองได้)"}), 400
+    title = title or "คลิปจาก Facebook"  # ฟอร์มไม่มีช่องชื่อแล้ว ดึงชื่อไม่ได้ก็ยังเพิ่มได้
+    if len(title) > MAX_VIDEO_TITLE:
+        return jsonify({"error": f"ชื่อเรื่องต้องไม่เกิน {MAX_VIDEO_TITLE} ตัวอักษร"}), 400
     canonical_key = hashlib.sha256(facebook_url.encode("utf-8")).hexdigest()[:20]
     if not thumbnail_url and meta.get("image") and not storage.video_thumb_path(canonical_key).exists():
         _fetch_video_thumb(canonical_key, meta["image"])
     if not thumbnail_url and storage.video_thumb_path(canonical_key).exists():
         thumbnail_url = f"/api/videos/{canonical_key}/thumb"
-    duration = _facebook_video_duration(facebook_url)
     # เขียนคลังกลางใต้ lock และ fresh=True เพื่อไม่ให้ request เพิ่มคนละคลิปพร้อมกันทับกัน
     with storage.state_lock:
         videos = storage.load_videos(fresh=True)
