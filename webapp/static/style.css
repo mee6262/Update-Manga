@@ -844,3 +844,6 @@ body:not([data-tab="list"]) .home-tabs { display: none; }
 .video-progress > span { display: block; height: 100%; background: var(--new-badge); }
 .video-resume-hint { margin-top: 10px; padding: 6px 12px; border-radius: 999px; background: rgba(255,255,255,.12); color: #fff; font-size: 13px; justify-self: center; }
 .video-time { position: absolute; right: 8px; bottom: 10px; background: rgba(0, 0, 0, 0.72); color: #fff; font-size: 0.72rem; font-weight: 600; padding: 2px 7px; border-radius: 6px; font-variant-numeric: tabular-nums; }
+.video-external-badge { background: #1877f2; color: #fff; }
+a.video-card { display: block; text-decoration: none; }
+.video-card-delete { position: absolute; left: 8px; top: 8px; background: rgba(0, 0, 0, 0.72); color: #ff8a8a; font-size: 0.72rem; font-weight: 600; padding: 3px 9px; border-radius: 999px; }

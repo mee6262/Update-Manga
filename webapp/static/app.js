@@ -136,7 +136,13 @@ function videoCardHtml(video) {
   const at = pos > 0 ? `${Math.floor(pos / 60)}.${String(Math.floor(pos % 60)).padStart(2, "0")}` : "";
   const total = dur > 0 ? `${Math.max(1, Math.round(dur / 60))} นาที` : "";
   const timeLabel = at || total ? `<span class="video-time">${at && total ? `${at}/${total}` : at ? `${at} นาที` : total}</span>` : "";
-  return `<button class="video-card" data-video-id="${escapeHtml(video.id)}"><span class="video-media">${image}${resume}${timeLabel}</span><span class="video-card-info"><span class="video-card-title">${escapeHtml(video.title)}</span><span class="video-card-meta">เพิ่มโดย ${escapeHtml(video.added_by)} · ${timeAgo(video.created_at)}</span></span></button>`;
+  const info = `<span class="video-card-info"><span class="video-card-title">${escapeHtml(video.title)}</span><span class="video-card-meta">เพิ่มโดย ${escapeHtml(video.added_by)} · ${timeAgo(video.created_at)}</span></span>`;
+  // คลิปที่ Facebook ไม่ให้เล่นแบบฝัง (ไม่สาธารณะ/ปิดการฝัง): เป็นลิงก์จริงให้ iPhone เปิดในแอป Facebook ที่ล็อกอินอยู่
+  // (universal link ทำงานกับการแตะ <a> เท่านั้น window.open จาก JS จะไปเปิดในเบราว์เซอร์แทน) ไม่มีจำจุดดูค้าง
+  if (video.external) {
+    return `<a class="video-card" data-video-id="${escapeHtml(video.id)}" href="${escapeHtml(video.facebook_url)}" target="_blank" rel="noopener"><span class="video-media">${image}<span class="video-resume-badge video-external-badge">เปิดใน Facebook</span>${video.can_delete ? '<span class="video-card-delete" data-delete-video role="button">ลบ</span>' : ""}</span>${info}</a>`;
+  }
+  return `<button class="video-card" data-video-id="${escapeHtml(video.id)}"><span class="video-media">${image}${resume}${timeLabel}</span>${info}</button>`;
 }
 
 function renderVideos() {
@@ -376,10 +382,20 @@ function initVideos() {
       submitButton.disabled = false;
     }
   });
-  el("#videoGrid").addEventListener("click", (event) => {
+  el("#videoGrid").addEventListener("click", async (event) => {
     const card = event.target.closest(".video-card");
+    // คลิปแบบเปิดใน Facebook ไม่มีหน้าตัวเล่น (ที่มีปุ่มลบ) จึงลบจากปุ่มบนการ์ดแทน
+    if (event.target.closest("[data-delete-video]")) {
+      event.preventDefault();
+      const target = state.videos.find((item) => item.id === card?.dataset.videoId);
+      if (!target || !confirm(`ลบคลิป "${target.title}"?\n(ทุกคนจะไม่เห็นคลิปนี้อีก)`)) return;
+      try { await sendJSON("DELETE", `/api/videos/${encodeURIComponent(target.id)}`); }
+      catch (e) { alert(e.message || "ลบคลิปไม่สำเร็จ"); return; }
+      await loadVideos();
+      return;
+    }
     const video = state.videos.find((item) => item.id === card?.dataset.videoId);
-    if (video) openVideo(video);
+    if (video && !video.external) openVideo(video);
   });
   el("#videoMoreBtn").addEventListener("click", () => loadVideos(true));
   el("#videoPlayerClose").addEventListener("click", closeVideo);

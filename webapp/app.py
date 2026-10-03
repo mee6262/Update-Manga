@@ -956,6 +956,9 @@ def _facebook_page_meta(url: str) -> dict:
         match = re.search(rf'<meta property="og:{key}" content="([^"]+)"', text)
         if match:
             meta[key] = html.unescape(match.group(1))
+    # คลิปไม่สาธารณะ Facebook ส่งหน้า login มาแทน (og:url = /login/, og:title = "เข้าสู่ระบบ Facebook") — ห้ามใช้เป็นชื่อ/ลิงก์
+    if urlsplit(meta.get("url", "")).path.startswith("/login"):
+        return {}
     return meta
 
 
@@ -1069,6 +1072,7 @@ def _public_video(video: dict, progress: dict | None = None) -> dict:
         "title": _clean_video_title(video["title"]),  # คลิปที่เพิ่มก่อนมีตัวตัดยอดดู
         "facebook_url": video["facebook_url"],
         "thumbnail_url": video.get("thumbnail_url") or None,
+        "external": bool(video.get("external")),
         "added_by": video["added_by"],
         "created_at": video["created_at"],
         "can_delete": _can_delete_video(video),
@@ -1122,9 +1126,8 @@ def add_video():
     facebook_url, error = _canonical_facebook_video_url(resolved or raw_url)
     if error:
         return jsonify({"error": error}), 400
-    duration, unavailable = _facebook_embed_check(facebook_url)
-    if unavailable:
-        return jsonify({"error": "คลิปนี้เล่นนอก Facebook ไม่ได้ (ไม่เป็นสาธารณะ หรือเจ้าของปิดการฝังคลิป)"}), 400
+    # คลิปที่เล่นแบบฝังไม่ได้ (ไม่สาธารณะ/ปิดการฝัง) ยังเพิ่มได้ แต่การ์ดจะเปิดในแอป Facebook แทนตัวเล่นในเว็บ
+    duration, external = _facebook_embed_check(facebook_url)
     if not title:
         title = _clean_video_title(meta.get("title") or "")[:MAX_VIDEO_TITLE]
     title = title or "คลิปจาก Facebook"  # ฟอร์มไม่มีช่องชื่อแล้ว ดึงชื่อไม่ได้ก็ยังเพิ่มได้
@@ -1149,6 +1152,7 @@ def add_video():
             "facebook_url": facebook_url,
             "thumbnail_url": thumbnail_url or None,
             "duration_seconds": duration,
+            "external": external,
             "added_by": username or "local",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
