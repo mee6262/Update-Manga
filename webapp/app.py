@@ -928,6 +928,17 @@ FB_META_UA = (
 )
 
 
+# og:title ของลิงก์ watch/?v= มียอดดู/ยอดรีแอคนำหน้า เช่น "ยอดดู 6 พัน ครั้ง · 159 ความรู้สึก | ชื่อจริง"
+_FB_TITLE_STATS_RE = re.compile(
+    r"^[^|]*?\d[^|]*?(?:ยอดดู|ความรู้สึก|views?|reactions?|plays?)[^|]*\|\s*", re.IGNORECASE)
+
+
+def _clean_video_title(title: str) -> str:
+    title = " ".join((title or "").split())
+    cleaned = _FB_TITLE_STATS_RE.sub("", title, count=1)
+    return cleaned or title
+
+
 def _facebook_page_meta(url: str) -> dict:
     """เปิดหน้า Facebook แบบเบราว์เซอร์มือถือ แล้วอ่าน og:url / og:image / og:title — ใช้แปลงลิงก์แชร์
     (/share/v/...) เป็นลิงก์ reel และดึงชื่อ/รูปปกให้อัตโนมัติ ไม่ต้องใช้ App Token พลาดคืน {} (ไม่ล้มทั้งการเพิ่ม)"""
@@ -1030,7 +1041,7 @@ def _public_video(video: dict, progress: dict | None = None) -> dict:
         "position_seconds": entry.get("position_seconds", 0),
         "duration_seconds": entry.get("duration_seconds") or video.get("duration_seconds"),
         "id": video["id"],
-        "title": video["title"],
+        "title": _clean_video_title(video["title"]),  # คลิปที่เพิ่มก่อนมีตัวตัดยอดดู
         "facebook_url": video["facebook_url"],
         "thumbnail_url": video.get("thumbnail_url") or None,
         "added_by": video["added_by"],
@@ -1086,7 +1097,7 @@ def add_video():
     if error:
         return jsonify({"error": error}), 400
     if not title:
-        title = " ".join((meta.get("title") or "").split())[:MAX_VIDEO_TITLE]
+        title = _clean_video_title(meta.get("title") or "")[:MAX_VIDEO_TITLE]
     if not title or len(title) > MAX_VIDEO_TITLE:
         return jsonify({"error": f"ชื่อเรื่องต้องมี 1-{MAX_VIDEO_TITLE} ตัวอักษร (ดึงชื่อจาก Facebook ไม่ได้ ใส่เองได้)"}), 400
     canonical_key = hashlib.sha256(facebook_url.encode("utf-8")).hexdigest()[:20]
