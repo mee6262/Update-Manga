@@ -258,7 +258,7 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
 .video-form { display: flex; flex-direction: column; gap: 10px; }
 .video-form input { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 9px 12px; border-radius: 8px; font-size: 0.9rem; }
 .video-player-body { flex: 1; display: grid; place-items: center; overflow: auto; padding: 70px 16px 20px; }
-.video-player-body { grid-template-columns: minmax(0, 1fr); }
+.video-player-body { grid-template-columns: minmax(0, 1fr); align-content: center; }
 .video-player-body .fb-video, .video-player-body .fb-video > span, .video-player-body iframe { max-width: 100% !important; }
 
 .manga-card {
