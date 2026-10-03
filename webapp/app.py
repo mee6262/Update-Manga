@@ -7,12 +7,13 @@ import os
 import re
 import secrets
 import shutil
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import urlencode, urlparse, urlsplit, urlunsplit
 
 import requests
 from dotenv import load_dotenv
@@ -947,6 +948,55 @@ def _facebook_page_meta(url: str) -> dict:
     return meta
 
 
+FB_DESKTOP_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
+_DASH_DURATION_RE = re.compile(r'mediaPresentationDuration=\\?"PT(?:(\d+)H)?(?:(\d+)M)?([\d.]+)S')
+
+
+def _facebook_video_duration(facebook_url: str) -> float | None:
+    """ความยาวคลิป (วินาที) จากหน้าตัวเล่นแบบฝัง (plugins/video.php) ซึ่งมี DASH manifest
+    (mediaPresentationDuration) อยู่ในหน้า — iPhone อ่านความยาวจากตัวเล่นไม่ได้ (getDuration ไม่ตอบ)
+    แถบความคืบหน้าบนการ์ดเลยไม่ขึ้น จึงดึงฝั่งเซิร์ฟเวอร์เก็บไว้กับคลิปแทน พลาดคืน None"""
+    url = "https://www.facebook.com/plugins/video.php?" + urlencode({"href": facebook_url, "show_text": "false"})
+    try:
+        resp = requests.get(url, headers={"User-Agent": FB_DESKTOP_UA, "Accept-Language": "en"}, timeout=(5, 10))
+        match = _DASH_DURATION_RE.search(resp.text)
+    except Exception as e:
+        print(f"⚠️ อ่านความยาวคลิป Facebook ไม่สำเร็จ: {e}")
+        return None
+    if not match:
+        return None
+    seconds = int(match.group(1) or 0) * 3600 + int(match.group(2) or 0) * 60 + float(match.group(3))
+    return round(seconds, 1) if 0 < seconds <= MAX_VIDEO_POSITION else None
+
+
+_duration_backfill_lock = threading.Lock()
+_duration_backfill_tried: set[str] = set()
+
+
+def _backfill_video_durations():
+    """เติมความยาวให้คลิปที่เพิ่มไว้ก่อนมีระบบนี้ — รันเป็น thread แยก ไม่ให้หน้าคลังรอเน็ต
+    ลองแต่ละคลิปครั้งเดียวต่อการรันเซิร์ฟเวอร์ (ดึงไม่ได้จะไม่ยิงซ้ำทุกครั้งที่เปิดหน้าคลัง)"""
+    if not _duration_backfill_lock.acquire(blocking=False):
+        return
+    try:
+        todo = [(v["id"], v["facebook_url"]) for v in storage.load_videos()
+                if not v.get("duration_seconds") and v["id"] not in _duration_backfill_tried]
+        for video_id, facebook_url in todo:
+            _duration_backfill_tried.add(video_id)
+            duration = _facebook_video_duration(facebook_url)  # ยิงเน็ตนอก lock
+            if not duration:
+                continue
+            with storage.state_lock:
+                videos = storage.load_videos(fresh=True)
+                for video in videos:
+                    if video.get("id") == video_id:
+                        video["duration_seconds"] = duration
+                        storage.save_videos(videos)
+                        break
+    finally:
+        _duration_backfill_lock.release()
+
+
 def _fetch_video_thumb(video_id: str, image_url: str) -> bool:
     """ดาวน์โหลดรูปปกจาก Facebook มาย่อเก็บบนเซิร์ฟเวอร์ — ลิงก์รูปของ fbcdn มีวันหมดอายุ (พารามิเตอร์ oe=)
     ถ้าเก็บแค่ลิงก์ ปกจะหายเองภายในไม่กี่สัปดาห์ รับเฉพาะรูปจาก fbcdn.net (กันใช้เซิร์ฟเวอร์ยิงที่อยู่อื่น)"""
@@ -978,7 +1028,7 @@ def _public_video(video: dict, progress: dict | None = None) -> dict:
     entry = (progress or {}).get(video["id"]) or {}
     return {
         "position_seconds": entry.get("position_seconds", 0),
-        "duration_seconds": entry.get("duration_seconds"),
+        "duration_seconds": entry.get("duration_seconds") or video.get("duration_seconds"),
         "id": video["id"],
         "title": video["title"],
         "facebook_url": video["facebook_url"],
@@ -1004,6 +1054,8 @@ def list_videos():
         videos = videos[cursor_index + 1 :]
     page = videos[:limit]
     progress = storage.load_video_progress(current_username() or "local")
+    if any(not v.get("duration_seconds") and v["id"] not in _duration_backfill_tried for v in videos):
+        threading.Thread(target=_backfill_video_durations, daemon=True).start()
     return jsonify({"items": [_public_video(video, progress) for video in page], "next_cursor": page[-1]["id"] if len(videos) > limit else None})
 
 
@@ -1042,6 +1094,7 @@ def add_video():
         _fetch_video_thumb(canonical_key, meta["image"])
     if not thumbnail_url and storage.video_thumb_path(canonical_key).exists():
         thumbnail_url = f"/api/videos/{canonical_key}/thumb"
+    duration = _facebook_video_duration(facebook_url)
     # เขียนคลังกลางใต้ lock และ fresh=True เพื่อไม่ให้ request เพิ่มคนละคลิปพร้อมกันทับกัน
     with storage.state_lock:
         videos = storage.load_videos(fresh=True)
@@ -1055,6 +1108,7 @@ def add_video():
             "title": title,
             "facebook_url": facebook_url,
             "thumbnail_url": thumbnail_url or None,
+            "duration_seconds": duration,
             "added_by": username or "local",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
