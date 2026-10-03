@@ -8,7 +8,6 @@ const state = {
   prefs: BOOT.prefs || {},
   currentUser: BOOT.me || { username: null, is_admin: false },
   videos: [],
-  videoCursor: null,
 };
 
 const el = (sel) => document.querySelector(sel);
@@ -120,6 +119,9 @@ let videoClockBase = 0;
 let videoClockStartedAt = null;
 let facebookSdkPromise = null;
 let videoSubmitting = false;
+const VIDEO_PAGE_SIZE = 15;
+let videoTab = "home"; // home = ทั้งหมด, saved = คลังวิดีโอ (กดบันทึก), history = ประวัติการดู
+let videoShown = VIDEO_PAGE_SIZE;
 
 function videoCardHtml(video) {
   const image = video.thumbnail_url
@@ -140,28 +142,50 @@ function videoCardHtml(video) {
   // คลิปที่ Facebook ไม่ให้เล่นแบบฝัง (ไม่สาธารณะ/ปิดการฝัง): เป็นลิงก์จริงให้ iPhone เปิดในแอป Facebook ที่ล็อกอินอยู่
   // (universal link ทำงานกับการแตะ <a> เท่านั้น window.open จาก JS จะไปเปิดในเบราว์เซอร์แทน) ไม่มีจำจุดดูค้าง
   if (video.external) {
-    return `<a class="video-card" data-video-id="${escapeHtml(video.id)}" href="${escapeHtml(video.facebook_url)}" target="_blank" rel="noopener"><span class="video-media">${image}<span class="video-resume-badge video-external-badge">เปิดใน Facebook</span>${video.can_delete ? '<span class="video-card-delete" data-delete-video role="button">ลบ</span>' : ""}</span>${info}</a>`;
+    return videoItemHtml(video, `<a class="video-card" data-video-id="${escapeHtml(video.id)}" href="${escapeHtml(video.facebook_url)}" target="_blank" rel="noopener"><span class="video-media">${image}<span class="video-resume-badge video-external-badge">เปิดใน Facebook</span>${video.can_delete ? '<span class="video-card-delete" data-delete-video role="button">ลบ</span>' : ""}</span>${info}</a>`);
   }
-  return `<button class="video-card" data-video-id="${escapeHtml(video.id)}"><span class="video-media">${image}${resume}${timeLabel}</span>${info}</button>`;
+  return videoItemHtml(video, `<button class="video-card" data-video-id="${escapeHtml(video.id)}"><span class="video-media">${image}${resume}${timeLabel}</span>${info}</button>`);
 }
+
+// ปุ่ม "บันทึก" แยกจากการ์ด (ปุ่มซ้อนใน <button>/<a> ของการ์ดไม่ได้)
+function videoItemHtml(video, card) {
+  const saved = !!video.saved_at;
+  return `<div class="video-item" data-video-id="${escapeHtml(video.id)}">${card}<button class="btn video-save-btn${saved ? " saved" : ""}" data-save-video>${saved ? "✓ บันทึกแล้ว" : "บันทึก"}</button></div>`;
+}
+
+function videosForTab() {
+  const byDesc = (key) => (a, b) => String(b[key] || "").localeCompare(String(a[key] || ""));
+  if (videoTab === "saved") return state.videos.filter((v) => v.saved_at).sort(byDesc("saved_at"));
+  if (videoTab === "history") return state.videos.filter((v) => v.watched_at).sort(byDesc("watched_at"));
+  return state.videos;
+}
+
+const VIDEO_EMPTY_TEXT = {
+  home: "ยังไม่มีคลิปในคลัง",
+  saved: "ยังไม่มีคลิปที่บันทึกไว้ — กด \"บันทึก\" ใต้การ์ดคลิป",
+  history: "ยังไม่มีประวัติการดู",
+};
 
 function renderVideos() {
-  el("#videoGrid").innerHTML = state.videos.map(videoCardHtml).join("");
-  el("#videoEmpty").hidden = state.videos.length > 0;
-  el("#videoMoreBtn").hidden = !state.videoCursor;
+  const list = videosForTab();
+  el("#videoGrid").innerHTML = list.slice(0, videoShown).map(videoCardHtml).join("");
+  el("#videoEmpty").textContent = VIDEO_EMPTY_TEXT[videoTab];
+  el("#videoEmpty").hidden = list.length > 0;
+  el("#videoMoreBtn").hidden = list.length <= videoShown;
+  els("[data-video-tab]").forEach((b) => b.classList.toggle("active", b.dataset.videoTab === videoTab));
+  el("#videoToolbar").hidden = videoTab !== "home";
 }
 
-async function loadVideos(append = false) {
+async function loadVideos() {
   if (videoLoading) return;
   videoLoading = true;
   try {
-    const qs = append && state.videoCursor ? `?cursor=${encodeURIComponent(state.videoCursor)}` : "";
-    const data = await getJSON(`/api/videos${qs}`);
-    state.videos = append ? state.videos.concat(data.items || []) : (data.items || []);
-    state.videoCursor = data.next_cursor || null;
+    // เซิร์ฟเวอร์ส่งทั้งคลัง หน้าเว็บแบ่งแสดงทีละ VIDEO_PAGE_SIZE เอง
+    const data = await getJSON("/api/videos");
+    state.videos = data.items || [];
     renderVideos();
   } catch (e) {
-    if (!append) el("#videoGrid").innerHTML = `<div class="reader-msg">${escapeHtml(e.body?.error || "โหลดคลิปไม่สำเร็จ")}</div>`;
+    el("#videoGrid").innerHTML = `<div class="reader-msg">${escapeHtml(e.body?.error || "โหลดคลิปไม่สำเร็จ")}</div>`;
   } finally {
     videoLoading = false;
   }
@@ -169,7 +193,7 @@ async function loadVideos(append = false) {
 
 function showVideoForm(show) {
   el("#videoFormModal").hidden = !show;
-  if (show) el("#videoForm [name=title]").focus();
+  if (show) el("#videoForm [name=facebook_url]").focus();
 }
 
 function videoFormMsg(message, isError = false) {
@@ -325,6 +349,7 @@ function saveActiveVideoProgress(force = false) {
   const video = activeVideo;
   // อัปเดตการ์ดในหน้าคลังทันที ไม่ต้องรอโหลดใหม่ (แถบความคืบหน้า + ป้ายดูต่อ)
   video.position_seconds = position;
+  video.watched_at = new Date().toISOString();
   if (activeVideoDuration) video.duration_seconds = activeVideoDuration;
   fetch(`/api/videos/${encodeURIComponent(video.id)}/progress`, {
     method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true,
@@ -337,6 +362,7 @@ function clearActiveVideoProgress() {
   activeVideoFinished = true; // กัน close หลัง event จบเขียนเวลาสุดท้ายกลับเข้ามาแข่งกับ DELETE
   fetch(`/api/videos/${encodeURIComponent(activeVideo.id)}/progress`, { method: "DELETE", keepalive: true }).catch(() => {});
   activeVideo.position_seconds = 0;
+  activeVideo.watched_at = new Date().toISOString();
   lastSavedVideoPosition = 0;
 }
 
@@ -383,6 +409,18 @@ function initVideos() {
     }
   });
   el("#videoGrid").addEventListener("click", async (event) => {
+    const saveBtn = event.target.closest("[data-save-video]");
+    if (saveBtn) {
+      const item = state.videos.find((v) => v.id === saveBtn.closest(".video-item")?.dataset.videoId);
+      if (!item) return;
+      saveBtn.disabled = true;
+      try {
+        const data = await sendJSON("POST", `/api/videos/${encodeURIComponent(item.id)}/save`, { saved: !item.saved_at });
+        item.saved_at = data.saved_at || null;
+        renderVideos();
+      } catch (e) { alert(e.message || "บันทึกไม่สำเร็จ"); saveBtn.disabled = false; }
+      return;
+    }
     const card = event.target.closest(".video-card");
     // คลิปแบบเปิดใน Facebook ไม่มีหน้าตัวเล่น (ที่มีปุ่มลบ) จึงลบจากปุ่มบนการ์ดแทน
     if (event.target.closest("[data-delete-video]")) {
@@ -397,7 +435,13 @@ function initVideos() {
     const video = state.videos.find((item) => item.id === card?.dataset.videoId);
     if (video && !video.external) openVideo(video);
   });
-  el("#videoMoreBtn").addEventListener("click", () => loadVideos(true));
+  el("#videoMoreBtn").addEventListener("click", () => { videoShown += VIDEO_PAGE_SIZE; renderVideos(); });
+  els("[data-video-tab]").forEach((button) => button.addEventListener("click", () => {
+    videoTab = button.dataset.videoTab;
+    videoShown = VIDEO_PAGE_SIZE;
+    renderVideos();
+    window.scrollTo(0, 0);
+  }));
   el("#videoPlayerClose").addEventListener("click", closeVideo);
   window.addEventListener("pagehide", () => { stopVideoClock(); saveActiveVideoProgress(true); });
   // แตะเล่นในกรอบคลิป (iframe ของ Facebook) ทำให้หน้าเว็บเสียโฟกัส — ใช้เป็นสัญญาณเริ่มเล่นสำรอง

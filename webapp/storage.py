@@ -240,6 +240,15 @@ def save_video_progress(username: str, progress: dict):
     _save_user_file(username, "video_progress.json", progress)
 
 
+def load_video_saved(username: str, fresh: bool = False) -> dict:
+    """คลิปที่ผู้ใช้กดบันทึก: video_id -> เวลาที่บันทึก (ISO)"""
+    return _load_json(_user_file(username, "video_saved.json"), {}, fresh)
+
+
+def save_video_saved(username: str, saved: dict):
+    _save_user_file(username, "video_saved.json", saved)
+
+
 def load_image_domains() -> set[str]:
     return set(_load_json(IMAGE_DOMAINS_FILE, []))
 

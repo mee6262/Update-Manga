@@ -1063,9 +1063,11 @@ def _can_delete_video(video: dict) -> bool:
     return is_admin() or video.get("added_by") == current_username()
 
 
-def _public_video(video: dict, progress: dict | None = None) -> dict:
+def _public_video(video: dict, progress: dict | None = None, saved: dict | None = None) -> dict:
     entry = (progress or {}).get(video["id"]) or {}
     return {
+        "watched_at": entry.get("updated_at"),  # มีค่า = เคยเล่น (แท็บประวัติการดู)
+        "saved_at": (saved or {}).get(video["id"]),
         "position_seconds": entry.get("position_seconds", 0),
         "duration_seconds": entry.get("duration_seconds") or video.get("duration_seconds"),
         "id": video["id"],
@@ -1081,22 +1083,15 @@ def _public_video(video: dict, progress: dict | None = None) -> dict:
 
 @app.route("/api/videos", methods=["GET"])
 def list_videos():
-    try:
-        limit = min(max(int(request.args.get("limit", 20)), 1), 50)
-    except ValueError:
-        return jsonify({"error": "limit ไม่ถูกต้อง"}), 400
-    cursor = request.args.get("cursor") or ""
+    # ส่งทั้งคลังทีเดียว (คลิปเพิ่มด้วยมือ จำนวนไม่มาก) ให้หน้าเว็บแบ่งหน้า/แยกแท็บ หน้าหลัก-คลัง-ประวัติ เอง
+    # เดิมแบ่งหน้าด้วย cursor ฝั่งเซิร์ฟเวอร์ แล้วปุ่ม "โหลดเพิ่ม" ที่ไม่มีหน้าถัดไปดึงหน้าแรกมาต่อซ้ำ
     videos = sorted(storage.load_videos(), key=lambda item: item.get("created_at", ""), reverse=True)
-    if cursor:
-        cursor_index = next((i for i, video in enumerate(videos) if video.get("id") == cursor), None)
-        if cursor_index is None:
-            return jsonify({"error": "cursor ไม่ถูกต้อง"}), 400
-        videos = videos[cursor_index + 1 :]
-    page = videos[:limit]
-    progress = storage.load_video_progress(current_username() or "local")
+    username = current_username() or "local"
+    progress = storage.load_video_progress(username)
+    saved = storage.load_video_saved(username)
     if any(not v.get("duration_seconds") and v["id"] not in _duration_backfill_tried for v in videos):
         threading.Thread(target=_backfill_video_durations, daemon=True).start()
-    return jsonify({"items": [_public_video(video, progress) for video in page], "next_cursor": page[-1]["id"] if len(videos) > limit else None})
+    return jsonify({"items": [_public_video(video, progress, saved) for video in videos], "next_cursor": None})
 
 
 @app.route("/api/videos", methods=["POST"])
@@ -1240,9 +1235,32 @@ def clear_video_progress(video_id):
         return jsonify({"error": "unauthorized"}), 401
     with storage.state_lock:
         progress = storage.load_video_progress(username or "local", fresh=True)
-        progress.pop(video_id, None)
-        storage.save_video_progress(username or "local", progress)
+        # ดูจบ: ล้างจุดที่ดูค้าง แต่เก็บรายการไว้ในประวัติการดู (เวลาที่ดู + ความยาว)
+        old = progress.get(video_id)
+        if old is not None:
+            progress[video_id] = {**old, "position_seconds": 0, "updated_at": datetime.now(timezone.utc).isoformat()}
+            storage.save_video_progress(username or "local", progress)
     return jsonify({"ok": True})
+
+
+@app.route("/api/videos/<video_id>/save", methods=["POST"])
+def save_video_bookmark(video_id):
+    """ปุ่ม "บันทึก" ใต้การ์ด — เก็บรายคนใน video_saved.json"""
+    username = current_username()
+    if not username and storage.load_users():
+        return jsonify({"error": "unauthorized"}), 401
+    if not _video_exists(video_id):
+        return jsonify({"error": "ไม่พบวิดีโอ"}), 404
+    want = bool((request.get_json(force=True, silent=True) or {}).get("saved"))
+    with storage.state_lock:
+        saved = storage.load_video_saved(username or "local", fresh=True)
+        if want:
+            saved.setdefault(video_id, datetime.now(timezone.utc).isoformat())
+        else:
+            saved.pop(video_id, None)
+        storage.save_video_saved(username or "local", saved)
+        saved_at = saved.get(video_id)
+    return jsonify({"saved_at": saved_at})
 
 
 # ---------- หมวดหมู่ (admin จัดการ, ทุกคนใช้กรองในหน้าเรื่องทั้งหมด) ----------

@@ -847,3 +847,10 @@ body:not([data-tab="list"]) .home-tabs { display: none; }
 .video-external-badge { background: #1877f2; color: #fff; }
 a.video-card { display: block; text-decoration: none; }
 .video-card-delete { position: absolute; left: 8px; top: 8px; background: rgba(0, 0, 0, 0.72); color: #ff8a8a; font-size: 0.72rem; font-weight: 600; padding: 3px 9px; border-radius: 999px; }
+#videoMoreBtn[hidden], .video-toolbar[hidden] { display: none; }
+.video-tabs { display: flex; gap: 8px; margin-bottom: 16px; overflow-x: auto; }
+.video-tab { flex: 0 0 auto; background: var(--bg-card); color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 7px 14px; font: inherit; font-size: 0.88rem; cursor: pointer; }
+.video-tab.active { background: var(--accent); border-color: var(--accent); color: #0a0f0c; font-weight: 700; }
+.video-item { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.video-save-btn { align-self: stretch; justify-content: center; font-size: 0.85rem; padding: 7px 10px; }
+.video-save-btn.saved { color: var(--accent); border-color: var(--accent); }

@@ -98,7 +98,12 @@
     </section>
 
     <section id="videosView" class="view">
-      <div class="video-toolbar">
+      <div class="video-tabs" role="tablist">
+        <button class="video-tab active" data-video-tab="home">หน้าหลัก</button>
+        <button class="video-tab" data-video-tab="saved">คลังวิดีโอ</button>
+        <button class="video-tab" data-video-tab="history">ประวัติการดู</button>
+      </div>
+      <div id="videoToolbar" class="video-toolbar">
         <p>คลิป Facebook ที่สมาชิกเพิ่มไว้</p>
         <button id="addVideoBtn" class="btn primary">+ เพิ่มคลิป</button>
       </div>
