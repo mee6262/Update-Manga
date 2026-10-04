@@ -991,35 +991,105 @@ _HD_SD_SRC_RE = re.compile(r'"(hd_src|sd_src)":"(https:[^"]+)"')
 _video_sources_cache: dict[str, tuple[float, dict]] = {}
 
 
-def _facebook_video_sources(facebook_url: str) -> dict:
-    """ลิงก์ไฟล์ MP4 ตรงของคลิป ({"hd": ..., "sd": ...}) จากหน้าตัวเล่นแบบฝัง ให้หน้าเว็บเล่นด้วย <video> เอง
-    — ตัวเล่น Facebook บน iPhone ไม่บอกตำแหน่ง/ไม่รับคำสั่ง seek จึงจำจุดดูค้างไม่ได้ ไฟล์ตรงได้ currentTime จริง
-    ลิงก์มีอายุ (พารามิเตอร์ oe= ราว 4 วัน) เก็บแคชไว้ถึงก่อนหมดอายุ 1 ชม. พลาดคืน {} (หน้าเว็บกลับไปใช้ตัวเล่น Facebook)"""
-    cached = _video_sources_cache.get(facebook_url)
-    if cached and cached[0] > time.time():
-        return cached[1]
-    url = "https://www.facebook.com/plugins/video.php?" + urlencode({"href": facebook_url, "show_text": "false"})
-    try:
-        resp = requests.get(url, headers={"User-Agent": FB_DESKTOP_UA, "Accept-Language": "en"}, timeout=(5, 10))
-        text = resp.text
-    except Exception as e:
-        print(f"⚠️ อ่านลิงก์ไฟล์คลิป Facebook ไม่สำเร็จ: {e}")
-        return {}
+def _fbcdn_sources(pairs) -> tuple[dict, float]:
+    """[(hd|sd, ลิงก์)] → ({"hd", "sd"}, เวลาหมดอายุของแคช) รับเฉพาะ https *.fbcdn.net"""
     sources, expires = {}, time.time() + 6 * 3600
-    for kind, raw in _HD_SD_SRC_RE.findall(text):
-        try:
-            link = json.loads(f'"{raw}"')  # ในหน้าเป็นสตริง JSON (\/ และ \u0025)
-        except ValueError:
-            continue
-        parts = urlsplit(link)
+    for kind, link in pairs:
+        parts = urlsplit(link or "")
         if parts.scheme != "https" or not (parts.hostname or "").endswith(".fbcdn.net"):
             continue
-        sources.setdefault("hd" if kind == "hd_src" else "sd", link)
+        sources.setdefault(kind, link)
         oe = parse_qs(parts.query).get("oe", [""])[0]
         try:
             expires = min(expires, int(oe, 16) - 3600)
         except ValueError:
             pass
+    return sources, expires
+
+
+def _facebook_embed_sources(facebook_url: str) -> list:
+    """ทางหลัก: hd_src/sd_src ในหน้าตัวเล่นแบบฝัง (plugins/video.php)"""
+    url = "https://www.facebook.com/plugins/video.php?" + urlencode({"href": facebook_url, "show_text": "false"})
+    try:
+        resp = requests.get(url, headers={"User-Agent": FB_DESKTOP_UA, "Accept-Language": "en"}, timeout=(5, 10))
+    except Exception as e:
+        print(f"⚠️ อ่านลิงก์ไฟล์คลิป Facebook ไม่สำเร็จ: {e}")
+        return []
+    pairs = []
+    for kind, raw in _HD_SD_SRC_RE.findall(resp.text):
+        try:
+            pairs.append(("hd" if kind == "hd_src" else "sd", json.loads(f'"{raw}"')))  # สตริง JSON (\/ และ \u0025)
+        except ValueError:
+            continue
+    return pairs
+
+
+_FB_LSD_RE = re.compile(r'"LSD",\[\],\{"token":"([^"]+)"')
+_FB_REELS_QUERY_RE = re.compile(
+    r'"preloaderID":"adp_FBReelsRootWithEntrypointQueryRelayPreloader_[0-9a-f]+","queryID":"(\d+)","variables":')
+
+
+def _facebook_graphql_sources(facebook_url: str) -> list:
+    """ทางสำรอง: ยิง GraphQL query เดียวกับที่หน้า reel ของ Facebook ใช้โหลดคลิป (ไม่ล็อกอิน)
+    ได้ browser_native_hd_url/sd_url — ใช้เมื่อหน้าตัวเล่นแบบฝังไม่ให้ลิงก์ (Facebook เปลี่ยนหน้า/เจ้าของปิดการฝัง)
+    doc_id และ variables อ่านจากหน้า reel ทุกครั้ง ไม่ hardcode (Facebook เปลี่ยนเลขบ่อย)
+    คลิปที่ต้องล็อกอินจะได้ video: null → คืน []"""
+    video_id = _facebook_video_id(urlsplit(facebook_url))
+    if not video_id:
+        return []
+    friendly = "FBReelsRootWithEntrypointQuery"
+    try:
+        with requests.Session() as http:  # ต้องใช้คุกกี้ (datr) จากหน้า reel ตอนยิง GraphQL
+            http.headers.update({"User-Agent": FB_DESKTOP_UA, "Accept-Language": "en-US,en;q=0.9"})
+            page_url = f"https://www.facebook.com/reel/{video_id}"
+            page = http.get(page_url, headers={"Accept": "text/html", "Sec-Fetch-Mode": "navigate"}, timeout=(5, 10)).text
+            lsd, query = _FB_LSD_RE.search(page), _FB_REELS_QUERY_RE.search(page)
+            if not lsd or not query:
+                return []
+            variables, _ = json.JSONDecoder().raw_decode(page, query.end())
+            resp = http.post(
+                "https://www.facebook.com/api/graphql/",
+                data={"lsd": lsd.group(1), "doc_id": query.group(1), "variables": json.dumps(variables),
+                      "fb_api_req_friendly_name": friendly, "server_timestamps": "true"},
+                headers={"X-FB-LSD": lsd.group(1), "X-FB-Friendly-Name": friendly, "Origin": "https://www.facebook.com",
+                         "Referer": page_url, "Sec-Fetch-Site": "same-origin"},
+                timeout=(5, 15),
+            )
+    except Exception as e:
+        print(f"⚠️ GraphQL คลิป Facebook ไม่สำเร็จ: {e}")
+        return []
+    # ผลเป็น JSON หลายบรรทัด และมีคลิปแนะนำอื่นปนมา → เอาเฉพาะโหนดที่ id ตรงกับคลิปนี้
+    found = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("id") == video_id and ("browser_native_hd_url" in node or "browser_native_sd_url" in node):
+                found.extend([("hd", node.get("browser_native_hd_url")), ("sd", node.get("browser_native_sd_url"))])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    for line in resp.text.splitlines():
+        try:
+            walk(json.loads(line))
+        except ValueError:
+            continue
+    return found
+
+
+def _facebook_video_sources(facebook_url: str) -> dict:
+    """ลิงก์ไฟล์ MP4 ตรงของคลิป ({"hd": ..., "sd": ...}) ให้หน้าเว็บเล่นด้วย <video> เอง
+    — ตัวเล่น Facebook บน iPhone ไม่บอกตำแหน่ง/ไม่รับคำสั่ง seek จึงจำจุดดูค้างไม่ได้ ไฟล์ตรงได้ currentTime จริง
+    ลองหน้าตัวเล่นแบบฝังก่อน ไม่ได้ค่อยใช้ GraphQL; ลิงก์มีอายุ (oe= ราว 4 วัน) แคชไว้ถึงก่อนหมดอายุ 1 ชม.
+    พลาดทั้งสองทางคืน {} (หน้าเว็บกลับไปใช้ตัวเล่น Facebook)"""
+    cached = _video_sources_cache.get(facebook_url)
+    if cached and cached[0] > time.time():
+        return cached[1]
+    sources, expires = _fbcdn_sources(_facebook_embed_sources(facebook_url))
+    if not sources:
+        sources, expires = _fbcdn_sources(_facebook_graphql_sources(facebook_url))
     if sources:
         _video_sources_cache[facebook_url] = (expires, sources)
     return sources
@@ -1162,6 +1232,8 @@ def add_video():
         return jsonify({"error": error}), 400
     # คลิปที่เล่นแบบฝังไม่ได้ (ไม่สาธารณะ/ปิดการฝัง) ยังเพิ่มได้ แต่การ์ดจะเปิดในแอป Facebook แทนตัวเล่นในเว็บ
     duration, external = _facebook_embed_check(facebook_url)
+    if external and _facebook_video_sources(facebook_url):
+        external = False  # ปิดการฝังแต่เป็นคลิปสาธารณะ: GraphQL ให้ไฟล์ตรง เล่นในเว็บได้
     if not title:
         title = _clean_video_title(meta.get("title") or "")[:MAX_VIDEO_TITLE]
     title = title or "คลิปจาก Facebook"  # ฟอร์มไม่มีช่องชื่อแล้ว ดึงชื่อไม่ได้ก็ยังเพิ่มได้
