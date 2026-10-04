@@ -2657,9 +2657,9 @@ function continueTileHtml({ kind, item }) {
   const at = `${Math.floor(pos / 60)}.${String(Math.floor(pos % 60)).padStart(2, "0")}`;
   const image = item.thumbnail_url ? `<img src="${escapeHtml(item.thumbnail_url)}" alt="" loading="lazy" />` : '<span class="video-placeholder">▶</span>';
   return `<button class="continue-tile video" data-kind="video" data-id="${escapeHtml(item.id)}">
-    <span class="continue-media">${image}${pct ? `<span class="video-progress"><span style="width:${pct.toFixed(1)}%"></span></span>` : ""}</span>
+    <span class="continue-media">${image}<span class="video-time">${at}${dur ? `/${Math.max(1, Math.round(dur / 60))}` : ""} นาที</span>${pct ? `<span class="video-progress"><span style="width:${pct.toFixed(1)}%"></span></span>` : ""}</span>
     <span class="continue-name">${escapeHtml(item.title)}</span>
-    <span class="continue-meta">🎬 ${at}${dur ? `/${Math.max(1, Math.round(dur / 60))}` : ""} นาที</span></button>`;
+    <span class="continue-meta">🎬 ดูค้างไว้${dur ? ` ${Math.round((pos / dur) * 100)}%` : ""}</span></button>`;
 }
 
 function renderContinue() {
