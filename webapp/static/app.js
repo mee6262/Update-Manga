@@ -361,7 +361,7 @@ function mountNativeVideo(video, position, sources) {
     <div class="tap-zone left" data-seek="-10"></div><div class="tap-zone right" data-seek="10"></div>
     <div id="seekBubble" class="seek-bubble" hidden></div></div>
     <div id="videoQuality" class="video-quality"></div>
-    <div class="video-quality"><span id="videoSpeed" class="video-quality"></span><button id="sleepBtn" class="video-quality-btn">⏾ ตั้งเวลาปิด</button></div>`;
+    <div class="video-quality"><span id="videoSpeed" class="video-quality"></span><button id="sleepBtn" class="video-quality-btn">⏾ ตั้งเวลาปิด</button><button id="pipBtn" class="video-quality-btn" hidden>⧉ จอลอย</button></div>`;
   const v = el("#nativeVideo");
   nativeVideo = v;
   nativeSources = sources;
@@ -503,6 +503,48 @@ function initNativeExtras(v) {
     renderSleepButton();
   });
   renderSleepButton();
+  initPictureInPicture(v);
+}
+
+// จอลอย (Picture-in-Picture): ดูคลิปต่อในหน้าต่างเล็กขณะใช้แอปอื่น — ทำได้เพราะเป็นตัวเล่นของเว็บเอง
+// (ตัวเล่น Facebook แบบฝังสั่งไม่ได้) Chrome/Android/เดสก์ท็อปใช้ API มาตรฐาน, Safari/iPhone ใช้ webkitSetPresentationMode
+function pipState(v) {
+  if (document.pictureInPictureEnabled && !v.disablePictureInPicture) {
+    return { supported: true, active: document.pictureInPictureElement === v };
+  }
+  if (typeof v.webkitSetPresentationMode === "function" && v.webkitSupportsPresentationMode?.("picture-in-picture")) {
+    return { supported: true, active: v.webkitPresentationMode === "picture-in-picture" };
+  }
+  return { supported: false, active: false };
+}
+
+function renderPipButton(v) {
+  const btn = el("#pipBtn");
+  if (!btn) return;
+  const { supported, active } = pipState(v);
+  btn.hidden = !supported;
+  btn.classList.toggle("active", active);
+  btn.textContent = active ? "⧉ ออกจากจอลอย" : "⧉ จอลอย";
+}
+
+function initPictureInPicture(v) {
+  v.setAttribute("autopictureinpicture", ""); // Safari: ออกไปหน้าโฮมระหว่างเล่นเต็มจอ = ย่อเป็นจอลอยเอง
+  el("#pipBtn").addEventListener("click", async () => {
+    const { active } = pipState(v);
+    try {
+      if (document.pictureInPictureEnabled && !v.disablePictureInPicture) {
+        if (active) await document.exitPictureInPicture();
+        else await v.requestPictureInPicture();
+      } else {
+        v.webkitSetPresentationMode(active ? "inline" : "picture-in-picture");
+      }
+    } catch (e) {
+      alert("เปิดจอลอยไม่ได้: " + (e.message || e));
+    }
+  });
+  ["enterpictureinpicture", "leavepictureinpicture", "webkitpresentationmodechanged", "loadedmetadata"].forEach((name) =>
+    v.addEventListener(name, () => renderPipButton(v)));
+  renderPipButton(v);
 }
 
 function unmountNativeVideo() {
