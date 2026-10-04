@@ -365,6 +365,7 @@ function mountNativeVideo(video, position, sources) {
     rememberVideoDuration();
     v.addEventListener("pause", () => { if (!v.ended) saveActiveVideoProgress(true); });
     v.addEventListener("ended", clearActiveVideoProgress);
+    v.addEventListener("webkitendfullscreen", nudgeViewport);
     // อัตโนมัติ: กระตุก (waiting) 2 ครั้งใน 60 วิ ขณะเล่น 720p → ลดเป็น 360p
     v.addEventListener("waiting", () => {
       if (nativeQualityPref !== "auto" || nativeCurrentQuality !== "hd" || !nativeSources.sd || v.seeking) return;
@@ -380,6 +381,17 @@ function mountNativeVideo(video, position, sources) {
       setNativeQuality(q === "auto" ? await pickAutoQuality(nativeSources) : q);
     });
   });
+}
+
+// iPhone (เว็บแอปจากหน้าจอโฮม): ดูเต็มจอแนวนอนแล้วออก/หมุนกลับแนวตั้ง Safari ยังจัดของที่ position: fixed
+// (หน้าตัวเล่น, แถบเมนูล่าง) ตามความสูงจอแนวนอน → ตัวเล่นเหลือครึ่งจอ เมนูล่างลอยกลางจอ
+// กระตุ้นให้คำนวณ viewport ใหม่ด้วยการเลื่อนหน้า 1px แล้วเลื่อนกลับ (ซ้ำหลังแอนิเมชันหมุนจอจบ)
+function nudgeViewport() {
+  [100, 500, 1000].forEach((ms) => setTimeout(() => {
+    const y = window.scrollY;
+    window.scrollTo(0, y + 1);
+    window.scrollTo(0, y);
+  }, ms));
 }
 
 function unmountNativeVideo() {
@@ -573,6 +585,9 @@ function initVideos() {
   }));
   el("#videoPlayerClose").addEventListener("click", closeVideo);
   window.addEventListener("pagehide", () => { stopVideoClock(); saveActiveVideoProgress(true); });
+  window.addEventListener("orientationchange", nudgeViewport);
+  document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement) nudgeViewport(); });
+  document.addEventListener("webkitfullscreenchange", () => { if (!document.webkitFullscreenElement) nudgeViewport(); });
   // แตะเล่นในกรอบคลิป (iframe ของ Facebook) ทำให้หน้าเว็บเสียโฟกัส — ใช้เป็นสัญญาณเริ่มเล่นสำรอง
   // เผื่อ iPhone ไม่ส่ง startedPlaying มา
   window.addEventListener("blur", () => setTimeout(() => {
