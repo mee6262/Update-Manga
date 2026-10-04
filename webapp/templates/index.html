@@ -86,7 +86,7 @@
     <section id="searchView" class="view">
       <label class="search-box">
         <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <input type="search" id="searchInput" placeholder="ลองหาเรื่อง, หมวดหมู่ และอื่น ๆ" autocomplete="off" enterkeyhint="search" />
+        <input type="search" id="searchInput" placeholder="ลองหาเรื่อง, หมวดหมู่, คลิปวิดีโอ และอื่น ๆ" autocomplete="off" enterkeyhint="search" />
       </label>
       <div id="searchHome">
         <h2 class="section-title">เรื่องที่ทุกคนกำลังตาม</h2>
@@ -97,6 +97,8 @@
       <div id="searchResults" hidden>
         <div id="searchCount" class="search-count"></div>
         <div id="searchGrid" class="manga-grid"></div>
+        <h2 id="searchVideoTitle" class="section-title" hidden></h2>
+        <div id="searchVideoGrid" class="video-grid"></div>
       </div>
     </section>
 

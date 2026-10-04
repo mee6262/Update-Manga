@@ -93,6 +93,7 @@ function showTab(tab) {
   if (tab === "search") {
     renderSearch();
     loadCatalog().then(renderSearch);
+    loadVideos(); // ให้ค้นคลิปได้ด้วย (renderVideos อัปเดตผลค้นหาเอง)
   }
   if (tab === "videos") loadVideos();
   if (tab === "settings" && state.currentUser.is_admin) {
@@ -173,6 +174,8 @@ function renderVideos() {
   el("#videoEmpty").hidden = list.length > 0;
   el("#videoMoreBtn").hidden = list.length <= videoShown;
   els("[data-video-tab]").forEach((b) => b.classList.toggle("active", b.dataset.videoTab === videoTab));
+  // ผลค้นหาในหน้าค้นหาใช้ข้อมูลคลิปชุดเดียวกัน — บันทึก/ลบ/ดูค้างแล้วต้องอัปเดตตามด้วย
+  if (el("#searchInput").value.trim()) renderSearch();
   el("#videoToolbar").hidden = videoTab !== "home";
 }
 
@@ -549,7 +552,7 @@ function initVideos() {
       submitButton.disabled = false;
     }
   });
-  el("#videoGrid").addEventListener("click", async (event) => {
+  const onVideoGridClick = async (event) => {
     const saveBtn = event.target.closest("[data-save-video]");
     if (saveBtn) {
       const item = state.videos.find((v) => v.id === saveBtn.closest(".video-item")?.dataset.videoId);
@@ -575,7 +578,9 @@ function initVideos() {
     }
     const video = state.videos.find((item) => item.id === card?.dataset.videoId);
     if (video && !video.external) openVideo(video);
-  });
+  };
+  el("#videoGrid").addEventListener("click", onVideoGridClick);
+  el("#searchVideoGrid").addEventListener("click", onVideoGridClick);
   el("#videoMoreBtn").addEventListener("click", () => { videoShown += VIDEO_PAGE_SIZE; renderVideos(); });
   els("[data-video-tab]").forEach((button) => button.addEventListener("click", () => {
     videoTab = button.dataset.videoTab;
@@ -921,7 +926,10 @@ function renderSearch() {
   el("#searchResults").hidden = !q;
   if (q) {
     const items = sortCatalog(searchMatches(q));
-    el("#searchCount").textContent = items.length ? `พบ ${items.length} เรื่อง` : `ไม่พบเรื่องที่ตรงกับ "${q}"`;
+    const videos = renderSearchVideos(q);
+    el("#searchCount").textContent = items.length
+      ? `พบ ${items.length} เรื่อง`
+      : videos ? `ไม่พบมังงะที่ตรงกับ "${q}"` : `ไม่พบเรื่องหรือคลิปที่ตรงกับ "${q}"`;
     el("#searchGrid").innerHTML = items.map(catalogCardHtml).join("");
     return;
   }
@@ -931,6 +939,16 @@ function renderSearch() {
   const popular = [...catalogVisible()].filter((m) => m.followers > 0).sort((a, b) => b.followers - a.followers || updatedKey(b).localeCompare(updatedKey(a)));
   el("#popularRow").innerHTML = (popular.length ? popular : recent).slice(0, 12).map(coverTileHtml).join("");
   el("#recentRow").innerHTML = recent.slice(0, 12).map(coverTileHtml).join("");
+}
+
+// คลิป MeeMovie ที่ชื่อตรงกับคำค้น — ใช้การ์ด/ปุ่มบันทึกชุดเดียวกับหน้าวิดีโอ คืนจำนวนที่เจอ
+function renderSearchVideos(q) {
+  const needle = q.toLowerCase();
+  const videos = state.videos.filter((v) => v.title.toLowerCase().includes(needle));
+  el("#searchVideoTitle").hidden = !videos.length;
+  el("#searchVideoTitle").textContent = `🎬 คลิปวิดีโอ (${videos.length})`;
+  el("#searchVideoGrid").innerHTML = videos.map(videoCardHtml).join("");
+  return videos.length;
 }
 
 function initSearch() {
