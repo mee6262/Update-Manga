@@ -1,6 +1,6 @@
 {
-  "name": "Update Manga",
-  "short_name": "Manga",
+  "name": "MeeManga",
+  "short_name": "MeeManga",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f1115",
