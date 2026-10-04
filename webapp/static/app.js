@@ -3061,6 +3061,19 @@ function initEdgeSwipe(force = false) {
   document.addEventListener("touchcancel", reset, { passive: true });
 }
 
+// Android: ปุ่ม/ท่าปัดย้อนของระบบ = history.back() ของเบราว์เซอร์ — ปกติจะพาออกจากเว็บทันที
+// วางหน้า "กันชน" ไว้ 1 หน้าใน history: กดย้อนแล้วเบราว์เซอร์ถอยมาหน้าเดิม (popstate) → ปิดชั้นบนสุดด้วย
+// goBack แล้ววางกันชนใหม่ ถ้าไม่มีอะไรให้ปิดแล้ว (หน้าหลักเปล่า ๆ) ถอยต่ออีกหน้าให้เอง = ออกจากเว็บในการกดครั้งเดียว
+function initAndroidBack(force = false) {
+  if (!force && !isAndroid) return;
+  const guard = () => history.pushState({ meemangaGuard: true }, "", location.href);
+  guard();
+  window.addEventListener("popstate", () => {
+    if (goBack()) guard();
+    else history.back();
+  });
+}
+
 function init() {
   applyAdminGating();
   renderGrid();
@@ -3091,6 +3104,7 @@ function init() {
   initAdminPanels();
   initAppShell();
   initEdgeSwipe();
+  initAndroidBack();
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkForUpdate();
   });
