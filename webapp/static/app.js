@@ -78,7 +78,11 @@ function applyAdminGating() {
 
 // ---------- Tabs (เมนูล่าง) ----------
 // วาดจากข้อมูลที่มีอยู่ทันที แล้วค่อยดึงของใหม่มาอัปเดตทีหลัง (ไม่ปล่อยจอว่างรอเน็ต)
-function showTab(tab) {
+const tabHistory = []; // แท็บที่เคยอยู่ก่อนหน้า — ปัดขอบซ้ายย้อนกลับไปทีละแท็บ
+
+function showTab(tab, fromBack = false) {
+  if (!fromBack && state.tab && state.tab !== tab) tabHistory.push(state.tab);
+  if (tabHistory.length > 20) tabHistory.shift();
   state.tab = tab;
   document.body.dataset.tab = tab;
   els(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
@@ -2986,6 +2990,77 @@ function initAppShell() {
   update();
 }
 
+// ---------- ปัดจากขอบซ้ายเพื่อย้อนกลับ ----------
+// เว็บแอปจากหน้าจอโฮมของ iPhone ไม่มีปุ่ม/ท่าย้อนกลับของ Safari — ทำเองเฉพาะกรณีนั้น
+// (Safari ปกติมีท่าปัดย้อนของตัวเอง, Android ใช้ขอบจอเป็นปุ่มย้อนของระบบ ทำซ้อนจะชนกัน)
+// ย้อนทีละชั้น: แผงแจ้งเตือน → คอมเมนต์ → ฟอร์ม → ตัวอ่าน → ตัวเล่น → รายชื่อตอน → แท็บก่อนหน้า
+function goBack() {
+  if (!el("#notifPanel").hidden) return toggleNotifPanel(false), true;
+  if (!el("#commentSheet").hidden) return closeComments(), true;
+  if (!el("#videoFormModal").hidden) return showVideoForm(false), true;
+  if (!el("#mangaFormModal").hidden) return closeMangaModal(), true;
+  if (!el("#reader").hidden) return closeReader(), true;
+  if (!el("#videoPlayer").hidden) return closeVideo(), true;
+  if (!el("#chapterListView").hidden) return closeChapterList(), true;
+  if (state.tab === "list" && state.homeMode === "history") return setHomeMode("grid"), true;
+  const prev = tabHistory.pop();
+  if (prev) return showTab(prev, true), true;
+  return false;
+}
+
+// แตะในแถวที่เลื่อนแนวนอนอยู่แล้ว (เลื่อนไปทางขวาแล้ว) = ผู้ใช้จะเลื่อนแถวกลับ ไม่ใช่ย้อนหน้า
+function inScrolledRow(target) {
+  for (let n = target; n && n !== document.body; n = n.parentElement) {
+    if (n.scrollLeft > 0 && n.scrollWidth > n.clientWidth) return true;
+  }
+  return false;
+}
+
+function initEdgeSwipe(force = false) {
+  if (!force && !(isIOS && isStandalone)) return;
+  const EDGE = 24;     // ต้องเริ่มแตะห่างขอบซ้ายไม่เกินนี้ (px)
+  const TRIGGER = 70;  // ลากไปทางขวาเกินนี้แล้วปล่อย = ย้อนกลับ
+  const arrow = document.createElement("div");
+  arrow.className = "edge-back";
+  arrow.textContent = "‹";
+  document.body.appendChild(arrow);
+  let startX = null, startY = 0, dx = 0, dragging = false;
+  const reset = () => {
+    startX = null;
+    dragging = false;
+    arrow.classList.remove("show", "ready");
+    arrow.style.transform = "";
+  };
+  document.addEventListener("touchstart", (e) => {
+    const t = e.touches[0];
+    if (e.touches.length !== 1 || t.clientX > EDGE || inScrolledRow(e.target)) return reset();
+    startX = t.clientX;
+    startY = t.clientY;
+    dx = 0;
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (startX === null) return;
+    const t = e.touches[0];
+    dx = t.clientX - startX;
+    const dy = Math.abs(t.clientY - startY);
+    if (!dragging) {
+      if (dy > 24 && dy > dx) return reset(); // เลื่อนขึ้นลง ไม่ใช่ปัดย้อน
+      if (dx < 12) return;
+      dragging = true;
+    }
+    arrow.style.top = `${startY}px`;
+    arrow.style.transform = `translate(${Math.min(dx, TRIGGER + 16) * 0.6}px, -50%)`;
+    arrow.classList.add("show");
+    arrow.classList.toggle("ready", dx >= TRIGGER);
+  }, { passive: true });
+  const finish = () => {
+    if (dragging && dx >= TRIGGER) goBack();
+    reset();
+  };
+  document.addEventListener("touchend", finish, { passive: true });
+  document.addEventListener("touchcancel", reset, { passive: true });
+}
+
 function init() {
   applyAdminGating();
   renderGrid();
@@ -3015,6 +3090,7 @@ function init() {
   initContinue();
   initAdminPanels();
   initAppShell();
+  initEdgeSwipe();
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkForUpdate();
   });
