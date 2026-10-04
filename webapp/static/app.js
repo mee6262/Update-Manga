@@ -512,6 +512,8 @@ function initNativeExtras(v) {
 // จอลอย (Picture-in-Picture): ดูคลิปต่อในหน้าต่างเล็กขณะใช้แอปอื่น — ทำได้เพราะเป็นตัวเล่นของเว็บเอง
 // (ตัวเล่น Facebook แบบฝังสั่งไม่ได้) Chrome/Android/เดสก์ท็อปใช้ API มาตรฐาน, Safari/iPhone ใช้ webkitSetPresentationMode
 function pipState(v) {
+  // iPhone เว็บแอปจากหน้าจอโฮม: iOS ไม่ยอมเปิดจอลอย (ลองแล้ว: Safari ได้ / ไอคอนหน้าจอโฮมไม่ได้) → ซ่อนปุ่ม
+  if (isIOS && isStandalone) return { supported: false, active: false };
   if (document.pictureInPictureEnabled && !v.disablePictureInPicture) {
     return { supported: true, active: document.pictureInPictureElement === v };
   }
