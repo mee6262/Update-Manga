@@ -534,16 +534,20 @@ function initPictureInPicture(v) {
   v.setAttribute("autopictureinpicture", ""); // Safari: ออกไปหน้าโฮมระหว่างเล่นเต็มจอ = ย่อเป็นจอลอยเอง
   el("#pipBtn").addEventListener("click", async () => {
     const { active } = pipState(v);
+    // iPhone มีทั้งสองแบบ แต่แบบมาตรฐานใช้ไม่ได้ในบางโหมด → ลองแบบ webkit ของ Safari ก่อน แล้วค่อยแบบมาตรฐาน
+    const webkit = typeof v.webkitSetPresentationMode === "function" && v.webkitSupportsPresentationMode?.("picture-in-picture");
     try {
-      if (document.pictureInPictureEnabled && !v.disablePictureInPicture) {
-        if (active) await document.exitPictureInPicture();
-        else await v.requestPictureInPicture();
-      } else {
+      if (webkit) {
         v.webkitSetPresentationMode(active ? "inline" : "picture-in-picture");
-      }
+      } else if (active) await document.exitPictureInPicture();
+      else await v.requestPictureInPicture();
     } catch (e) {
-      alert("เปิดจอลอยไม่ได้: " + (e.message || e));
+      alert(`เปิดจอลอยไม่ได้: ${e.name || ""} ${e.message || e}`);
     }
+    // สั่งแล้วไม่เข้าจอลอย (ระบบเงียบ ๆ ไม่ยอม) → บอกผู้ใช้ แทนที่ปุ่มจะดูเหมือนไม่ทำงาน
+    setTimeout(() => {
+      if (!active && !pipState(v).active) alert("เครื่องนี้ไม่ยอมเปิดจอลอยจากเว็บนี้ — บน iPhone ลองเปิดเว็บผ่าน Safari (ไม่ใช่ไอคอนหน้าจอโฮม) แล้วกดอีกครั้ง");
+    }, 1200);
   });
   ["enterpictureinpicture", "leavepictureinpicture", "webkitpresentationmodechanged", "loadedmetadata"].forEach((name) =>
     v.addEventListener(name, () => renderPipButton(v)));
