@@ -2276,6 +2276,42 @@ async function pushRegistration() {
   return navigator.serviceWorker.register("/sw.js", { scope: "/" });
 }
 
+// ---------- ปุ่มเพิ่มไปยังหน้าจอโฮม (ข้างกระดิ่ง) ----------
+// Android/Chrome: ใช้หน้าต่างติดตั้งของเบราว์เซอร์ (beforeinstallprompt)
+// iPhone: ไม่มี API ให้สั่งติดตั้ง → บอกขั้นตอนผ่านปุ่มแชร์ของ Safari; เปิดจากไอคอนอยู่แล้ว = ซ่อนปุ่ม
+let installPromptEvent = null;
+const isAndroid = /Android/i.test(navigator.userAgent);
+
+function updateInstallButton() {
+  el("#installBtn").hidden = isStandalone || !(isIOS || isAndroid || installPromptEvent);
+}
+
+function initInstallButton() {
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault(); // เก็บไว้เปิดตอนกดปุ่มเอง ไม่ให้แถบติดตั้งเด้งขึ้นมาเอง
+    installPromptEvent = event;
+    updateInstallButton();
+  });
+  window.addEventListener("appinstalled", () => {
+    installPromptEvent = null;
+    el("#installBtn").hidden = true;
+  });
+  el("#installBtn").addEventListener("click", async () => {
+    if (installPromptEvent) {
+      const event = installPromptEvent;
+      installPromptEvent = null; // ใช้ได้ครั้งเดียว
+      event.prompt();
+      const choice = await event.userChoice.catch(() => null);
+      if (choice?.outcome === "accepted") el("#installBtn").hidden = true;
+      return;
+    }
+    alert(isIOS
+      ? "เพิ่ม MeeManga ไปยังหน้าจอโฮม\n\n1. กดปุ่มแชร์ (สี่เหลี่ยมมีลูกศรขึ้น) ที่แถบล่างของ Safari\n2. เลื่อนลงแล้วเลือก \"เพิ่มไปยังหน้าจอโฮม\"\n3. กด \"เพิ่ม\" มุมขวาบน\n\n(ถ้าเปิดจากแอปอื่น เช่น LINE/Facebook ให้เปิดลิงก์ใน Safari ก่อน)"
+      : "เพิ่ม MeeManga ไปยังหน้าจอหลัก\n\n1. กดเมนู ⋮ มุมขวาบนของ Chrome\n2. เลือก \"เพิ่มลงในหน้าจอหลัก\" หรือ \"ติดตั้งแอป\"\n3. กด \"เพิ่ม\"");
+  });
+  updateInstallButton();
+}
+
 async function initPush() {
   const btn = el("#pushBtn");
   if (!BOOT.push_key || !state.currentUser.username) return; // เซิร์ฟเวอร์ไม่ได้เปิดระบบนี้ / ไม่ได้ login
@@ -2367,6 +2403,7 @@ function openFromUrl(url) {
 function init() {
   applyAdminGating();
   renderGrid();
+  initInstallButton();
   initPush();
   openFromUrl(new URL(location.href));
 

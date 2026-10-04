@@ -658,7 +658,7 @@ body { padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom)); }
 .topbar-row .topbar-title { margin: 0 auto 0 0; font-size: 1.2rem; }
 .topbar-title[hidden] { display: none !important; }
 /* กระดิ่งแจ้งเตือนอยู่เฉพาะหน้าหลัก */
-body:not([data-tab="list"]) #pushBtn { display: none; }
+body:not([data-tab="list"]) #pushBtn, body:not([data-tab="list"]) #installBtn { display: none; }
 
 /* "เรื่องทั้งหมด | หมวดหมู่" แบบตัวหนังสือใหญ่ ตัวที่ไม่ได้เลือกเป็นสีจาง */
 .seg-tabs { display: flex; align-items: center; gap: 14px; }
