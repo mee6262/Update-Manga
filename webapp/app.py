@@ -132,7 +132,7 @@ def push_test():
         return jsonify({"error": "unauthorized"}), 401
     sent = webpush.send_to_user(
         current_username(),
-        {"title": "Update Manga", "body": "เปิดแจ้งเตือนเรียบร้อย จะแจ้งเมื่อเรื่องที่ติดตามมีตอนใหม่", "tag": "test", "url": "/"},
+        {"title": "MeeManga", "body": "เปิดแจ้งเตือนเรียบร้อย จะแจ้งเมื่อเรื่องที่ติดตามมีตอนใหม่หรือมีคนตอบคอมเมนต์", "tag": "test", "url": "/"},
         wait=True,
     )
     return jsonify({"sent": sent})
@@ -1493,8 +1493,13 @@ def add_comment():
     }
     with storage.state_lock:
         comments = storage.load_comments(fresh=True)
+        thread = list(comments.get(target, []))
+        parent = next((c for c in thread if c["id"] == body.get("reply_to")), None)
+        if parent:
+            comment["reply_to"] = parent["id"]
         comments.setdefault(target, []).append(comment)
         storage.save_comments(comments)
+    _notify_comment(comment, parent, thread, body)
     return jsonify(_public_comment(comment)), 201
 
 
@@ -1514,6 +1519,90 @@ def delete_comment(comment_id):
             storage.save_comments(comments)
             return jsonify({"ok": True})
     return jsonify({"error": "ไม่พบคอมเมนต์"}), 404
+
+
+# ---------- แจ้งเตือนในเว็บ (แผงกระดิ่ง) + push ----------
+MAX_NOTIFICATIONS = 100
+THREAD_NOTIFY_GAP = timedelta(minutes=10)
+_MENTION_RE = re.compile(r"@([A-Za-z0-9][A-Za-z0-9_.-]{2,19})")
+
+
+def _add_notification(username: str, item: dict) -> bool:
+    """เพิ่มแจ้งเตือนให้ผู้ใช้ คืน False ถ้าถูกกันไว้
+    - chapter: ตอนใหม่ของเรื่องเดิมแทนที่อันเก่าที่ยังไม่อ่าน (เหมือน tag ของ push) ไม่กองซ้อน
+    - thread: คอมเมนต์ใหม่ในที่ที่เคยคุย แจ้งไม่เกิน 1 ครั้งต่อ 10 นาทีต่อที่ (ถ้ามีอันที่ยังไม่อ่านอยู่)"""
+    now = datetime.now(timezone.utc)
+    with storage.state_lock:
+        items = storage.load_notifications(username, fresh=True)
+        same = [n for n in items if n.get("target") == item.get("target") and not n.get("read")]
+        # thread: มีแจ้งเตือนอะไรก็ตามของที่เดียวกันที่ยังไม่อ่านภายใน 10 นาที (รวม ตอบ/พูดถึง) = รู้อยู่แล้ว ไม่ต้องซ้ำ
+        if item["type"] == "thread" and any(now - datetime.fromisoformat(n["created_at"]) < THREAD_NOTIFY_GAP for n in same):
+            return False
+        if item["type"] == "chapter":
+            items = [n for n in items if not (n in same and n.get("type") == "chapter")]
+        items.insert(0, {**item, "id": secrets.token_hex(6), "created_at": now.isoformat(), "read": False})
+        storage.save_notifications(username, items[:MAX_NOTIFICATIONS])
+    return True
+
+
+def _comment_link(body: dict) -> str:
+    if body.get("kind") == "video":
+        return "/?" + urlencode({"comments": "video", "id": body.get("id", "")})
+    return "/?" + urlencode({"comments": "chapter", "manga_id": body.get("manga_id", ""), "url": body.get("url", "")})
+
+
+def _notify_comment(comment: dict, parent: dict | None, thread: list[dict], body: dict):
+    """ใครได้แจ้งเตือนเมื่อมีคอมเมนต์ใหม่ (คนพิมพ์เองไม่ได้ / คนละหลายเงื่อนไขได้อันเดียว ลำดับความสำคัญตามนี้):
+    1. reply   — เจ้าของคอมเมนต์ที่ถูกกด "ตอบ"
+    2. mention — สมาชิกที่ถูก @ชื่อ (ต้องเป็นชื่อที่มีอยู่จริง)
+    3. thread  — คนที่เคยคอมเมนต์ในตอน/คลิปเดียวกัน (กันรัวไม่เกิน 1 ครั้ง/10 นาที)"""
+    users = storage.load_users()
+    if not users:
+        return  # dev mode ไม่มีบัญชี
+    author = comment["user"]
+    recipients: dict[str, str] = {}
+    if parent and parent["user"] in users:
+        recipients[parent["user"]] = "reply"
+    for name in _MENTION_RE.findall(comment["text"]):
+        if name in users:
+            recipients.setdefault(name, "mention")
+    for c in thread:
+        if c["user"] in users:
+            recipients.setdefault(c["user"], "thread")
+    recipients.pop(author, None)
+    snippet = comment["text"] if len(comment["text"]) <= 80 else comment["text"][:80] + "…"
+    verbs = {"reply": "ตอบความคิดเห็นของคุณ", "mention": "พูดถึงคุณ", "thread": "แสดงความคิดเห็น"}
+    url = _comment_link(body)
+    for username, kind in recipients.items():
+        text = f"{author} {verbs[kind]}ใน {comment['label']}: {snippet}"
+        if _add_notification(username, {"type": kind, "target": comment["target"], "text": text, "url": url}):
+            webpush.send_to_user(username, {"title": "MeeManga", "body": text, "tag": f"comment-{comment['target']}", "url": url})
+
+
+@app.route("/api/notifications", methods=["GET"])
+def list_notifications():
+    username = current_username()
+    if not username:
+        return jsonify({"items": [], "unread": 0})
+    items = storage.load_notifications(username)
+    return jsonify({"items": items[:50], "unread": sum(1 for n in items if not n.get("read"))})
+
+
+@app.route("/api/notifications/read", methods=["POST"])
+def read_notifications():
+    """{"ids": [...]} อ่านบางอัน / {"all": true} อ่านทั้งหมด"""
+    username = current_username()
+    if not username:
+        return jsonify({"ok": True})
+    body = request.get_json(force=True, silent=True) or {}
+    ids = set(body.get("ids") or [])
+    with storage.state_lock:
+        items = storage.load_notifications(username, fresh=True)
+        for n in items:
+            if body.get("all") or n["id"] in ids:
+                n["read"] = True
+        storage.save_notifications(username, items)
+    return jsonify({"ok": True, "unread": sum(1 for n in items if not n.get("read"))})
 
 
 # ---------- หมวดคลิป + แก้คลิป (แอดมินเท่านั้น) ----------
@@ -2022,6 +2111,12 @@ def _commit_refreshes(results: dict[str, dict]) -> list[str]:
         if prev_chapter:
             notify_subscribed_admins(manga["id"], manga["name"], manga["latest_chapter"], manga.get("cover_url"))
             webpush.notify_new_chapter(manga["id"], manga["name"], manga["latest_chapter"])
+            for username in storage.all_usernames():
+                if manga["id"] in storage.load_subscriptions(username):
+                    _add_notification(username, {
+                        "type": "chapter", "target": f"manga:{manga['id']}",
+                        "text": f"{manga['name']} {manga['latest_chapter']} มาแล้ว", "url": f"/?manga={manga['id']}",
+                    })
     return [manga["id"] for manga, _ in changed]
 
 

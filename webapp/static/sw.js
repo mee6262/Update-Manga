@@ -59,7 +59,7 @@ self.addEventListener("push", (event) => {
   }
   // iOS บังคับว่าทุก push ต้องแสดงแจ้งเตือนเสมอ ถ้าไม่แสดงหลายครั้งระบบจะตัดสิทธิ์ push ของเว็บทิ้ง
   event.waitUntil(
-    self.registration.showNotification(data.title || "Update Manga", {
+    self.registration.showNotification(data.title || "MeeManga", {
       body: data.body || "มีตอนใหม่",
       tag: data.tag || undefined,
       renotify: Boolean(data.tag),

@@ -30,11 +30,12 @@ async function getJSON(url) {
   return res.json();
 }
 
-function timeAgo(iso) {
+// justNow: ข้อความตอนไม่ถึงนาที — ค่าเริ่มต้นสำหรับเวลาเช็คตอนใหม่, คอมเมนต์/แจ้งเตือน/คลิปใช้ "เมื่อสักครู่"
+function timeAgo(iso, justNow = "เพิ่งตรวจสอบ") {
   if (!iso) return "ยังไม่เคยตรวจสอบ";
   const diffMs = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diffMs / 60000);
-  if (mins < 1) return "เพิ่งตรวจสอบ";
+  if (mins < 1) return justNow;
   if (mins < 60) return `${mins} นาทีที่แล้ว`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours} ชั่วโมงที่แล้ว`;
@@ -143,7 +144,7 @@ function videoCardHtml(video) {
   const at = pos > 0 ? `${Math.floor(pos / 60)}.${String(Math.floor(pos % 60)).padStart(2, "0")}` : "";
   const total = dur > 0 ? `${Math.max(1, Math.round(dur / 60))} นาที` : "";
   const timeLabel = at || total ? `<span class="video-time">${at && total ? `${at}/${total}` : at ? `${at} นาที` : total}</span>` : "";
-  const info = `<span class="video-card-info"><span class="video-card-title">${escapeHtml(video.title)}</span><span class="video-card-meta">เพิ่มโดย ${escapeHtml(video.added_by)} · ${timeAgo(video.created_at)}</span></span>`;
+  const info = `<span class="video-card-info"><span class="video-card-title">${escapeHtml(video.title)}</span><span class="video-card-meta">เพิ่มโดย ${escapeHtml(video.added_by)} · ${timeAgo(video.created_at, "เมื่อสักครู่")}</span></span>`;
   // คลิปที่ Facebook ไม่ให้เล่นแบบฝัง (ไม่สาธารณะ/ปิดการฝัง): เป็นลิงก์จริงให้ iPhone เปิดในแอป Facebook ที่ล็อกอินอยู่
   // (universal link ทำงานกับการแตะ <a> เท่านั้น window.open จาก JS จะไปเปิดในเบราว์เซอร์แทน) ไม่มีจำจุดดูค้าง
   if (video.external) {
@@ -2401,10 +2402,108 @@ function urlBase64ToUint8Array(base64) {
   return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
 }
 
+// การ์ดสถานะแจ้งเตือนแบบพุชในแผงกระดิ่ง — แสดงตลอด (ไม่มีปุ่มปัดทิ้ง) บอกสถานะเครื่องนี้ + ปุ่มเปิด/ปิด
+let pushOn = false;
+
 function setPushButton(on) {
-  const btn = el("#pushBtn");
-  btn.classList.toggle("push-on", on);
-  btn.title = on ? "แจ้งเตือนเปิดอยู่ (แตะเพื่อปิด)" : "เปิดแจ้งเตือนตอนใหม่";
+  pushOn = on;
+  renderPushCard();
+}
+
+function renderPushCard() {
+  const btn = el("#pushCardBtn");
+  let title, desc, label = null, primary = false;
+  if (!BOOT.push_key) {
+    [title, desc] = ["แจ้งเตือนแบบพุชยังไม่พร้อม", "เซิร์ฟเวอร์ยังไม่ได้เปิดระบบนี้ — ยังดูแจ้งเตือนในแผงนี้ได้ตามปกติ"];
+  } else if (!pushSupported && isIOS && !isStandalone) {
+    [title, desc, label] = ["การแจ้งเตือนแบบพุชปิดอยู่", "iPhone ต้องเปิดเว็บจากไอคอนบนหน้าจอโฮมก่อน ถึงจะเด้งแจ้งเตือนได้", "วิธีเปิด"];
+  } else if (!pushSupported) {
+    [title, desc] = ["เบราว์เซอร์นี้ไม่รองรับแจ้งเตือนแบบพุช", "ลองเปิดด้วย Chrome หรือ Safari เวอร์ชันล่าสุด"];
+  } else if (pushOn) {
+    [title, desc, label] = ["การแจ้งเตือนแบบพุชเปิดอยู่ ✓", "เครื่องนี้จะเด้งเตือนเมื่อเรื่องที่ติดตามมีตอนใหม่ หรือมีคนตอบคอมเมนต์", "ปิด"];
+  } else {
+    [title, desc, label, primary] = ["การแจ้งเตือนแบบพุชปิดอยู่", "เปิดเพื่อไม่พลาดตอนใหม่และคนตอบคอมเมนต์ของคุณ", "เปิด", true];
+  }
+  el("#pushCard").classList.toggle("on", pushOn);
+  el("#pushCardTitle").textContent = title;
+  el("#pushCardDesc").textContent = desc;
+  btn.hidden = !label;
+  btn.textContent = label || "";
+  btn.classList.toggle("primary", primary);
+}
+
+// ---------- แผงการแจ้งเตือน (กดกระดิ่ง) ----------
+let notifItems = [];
+let notifFilter = "all";
+const NOTIF_ICON = { chapter: "📚", reply: "💬", mention: "📣", thread: "🗨️" };
+
+function setNotifBadge(unread) {
+  const badge = el("#notifBadge");
+  badge.hidden = !unread;
+  badge.textContent = unread > 99 ? "99+" : String(unread);
+}
+
+async function loadNotifications() {
+  if (!state.currentUser.username) return;
+  try {
+    const data = await getJSON("/api/notifications");
+    notifItems = data.items;
+    setNotifBadge(data.unread);
+    if (!el("#notifPanel").hidden) renderNotifications();
+  } catch (e) { /* ใช้ของเดิม */ }
+}
+
+function renderNotifications() {
+  els("[data-notif-filter]").forEach((b) => b.classList.toggle("active", b.dataset.notifFilter === notifFilter));
+  const items = notifFilter === "unread" ? notifItems.filter((n) => !n.read) : notifItems;
+  el("#notifList").innerHTML = items.length
+    ? items.map((n) => `<li class="notif-item${n.read ? "" : " unread"}" data-notif-id="${escapeHtml(n.id)}">
+        <span class="notif-icon">${NOTIF_ICON[n.type] || "🔔"}</span>
+        <span class="grow"><span class="notif-text">${escapeHtml(n.text)}</span><span class="notif-time">${timeAgo(n.created_at, "เมื่อสักครู่")}</span></span>
+        ${n.read ? "" : '<span class="notif-dot"></span>'}</li>`).join("")
+    : `<li class="notif-empty">${notifFilter === "unread" ? "อ่านครบหมดแล้ว 🎉" : "ยังไม่มีการแจ้งเตือน"}</li>`;
+}
+
+function toggleNotifPanel(show = el("#notifPanel").hidden) {
+  el("#notifPanel").hidden = !show;
+  el("#notifBackdrop").hidden = !show;
+  if (show) {
+    renderPushCard();
+    renderNotifications();
+    loadNotifications();
+  }
+}
+
+async function markNotificationsRead(body) {
+  try {
+    const res = await sendJSON("POST", "/api/notifications/read", body);
+    setNotifBadge(res.unread);
+  } catch (e) { /* ไม่เป็นไร รอบหน้าค่อยมาร์คใหม่ */ }
+}
+
+function initNotifications() {
+  el("#notifBackdrop").addEventListener("click", () => toggleNotifPanel(false));
+  el("#pushCardBtn").addEventListener("click", togglePush);
+  els("[data-notif-filter]").forEach((b) => b.addEventListener("click", () => { notifFilter = b.dataset.notifFilter; renderNotifications(); }));
+  el("#notifReadAll").addEventListener("click", () => {
+    notifItems.forEach((n) => { n.read = true; });
+    renderNotifications();
+    markNotificationsRead({ all: true });
+  });
+  el("#notifList").addEventListener("click", (event) => {
+    const row = event.target.closest("[data-notif-id]");
+    const item = row && notifItems.find((n) => n.id === row.dataset.notifId);
+    if (!item) return;
+    if (!item.read) {
+      item.read = true;
+      markNotificationsRead({ ids: [item.id] });
+    }
+    toggleNotifPanel(false);
+    openFromUrl(new URL(item.url, location.origin));
+  });
+  loadNotifications();
+  setInterval(() => { if (!document.hidden) loadNotifications(); }, 60000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) loadNotifications(); });
 }
 
 async function pushRegistration() {
@@ -2449,10 +2548,13 @@ function initInstallButton() {
 
 async function initPush() {
   const btn = el("#pushBtn");
-  if (!BOOT.push_key || !state.currentUser.username) return; // เซิร์ฟเวอร์ไม่ได้เปิดระบบนี้ / ไม่ได้ login
-  if (!pushSupported && !isIOS) return; // เบราว์เซอร์ไม่รองรับเลย ซ่อนปุ่มไป
+  if (!state.currentUser.username) return; // ไม่ได้ login = ไม่มีแจ้งเตือนส่วนตัว
+  // กระดิ่ง = เปิดแผงการแจ้งเตือน (การเปิด/ปิดแจ้งเตือนแบบพุชย้ายไปอยู่ในแผง)
   btn.hidden = false;
-  btn.addEventListener("click", togglePush);
+  btn.addEventListener("click", () => toggleNotifPanel());
+  initNotifications();
+  renderPushCard();
+  if (!BOOT.push_key) return;
 
   // เปิดจากการแตะแจ้งเตือนขณะหน้าเว็บเปิดค้างอยู่
   if (pushSupported) {
@@ -2481,12 +2583,12 @@ async function togglePush() {
   if (!pushSupported) {
     alert(
       isIOS && !isStandalone
-        ? "iPhone/iPad รับแจ้งเตือนได้เฉพาะตอนเปิดจากไอคอนบนหน้าจอโฮม\n\n1. กดปุ่มแชร์ (สี่เหลี่ยมมีลูกศรขึ้น)\n2. เลือก \"เพิ่มไปยังหน้าจอโฮม\"\n3. เปิดเว็บจากไอคอนนั้น แล้วกดกระดิ่งอีกครั้ง\n\n(ต้องเป็น iOS 16.4 ขึ้นไป)"
+        ? "iPhone/iPad รับแจ้งเตือนได้เฉพาะตอนเปิดจากไอคอนบนหน้าจอโฮม\n\n1. กดปุ่มแชร์ (สี่เหลี่ยมมีลูกศรขึ้น)\n2. เลือก \"เพิ่มไปยังหน้าจอโฮม\"\n3. เปิดเว็บจากไอคอนนั้น แล้วกดกระดิ่ง → \"เปิด\"\n\n(ต้องเป็น iOS 16.4 ขึ้นไป)"
         : "เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน ลองเปิดด้วย Chrome หรือ Safari เวอร์ชันล่าสุด"
     );
     return;
   }
-  const btn = el("#pushBtn");
+  const btn = el("#pushCardBtn");
   btn.disabled = true;
   try {
     const reg = await pushRegistration();
@@ -2525,7 +2627,35 @@ async function togglePush() {
 }
 
 // เปิดเรื่องจากลิงก์ในแจ้งเตือน (/?manga=<id>) ตรงไปหน้าเลือกตอนของเรื่องนั้นเลย
+// ลิงก์จากแจ้งเตือนคอมเมนต์: /?comments=video&id=… หรือ /?comments=chapter&manga_id=…&url=…
+async function openCommentsFromUrl(params) {
+  const w = (ms) => new Promise((r) => setTimeout(r, ms));
+  if (params.get("comments") === "video") {
+    if (!state.videos.length) await loadVideos();
+    const video = state.videos.find((v) => v.id === params.get("id"));
+    if (!video) return;
+    openVideo(video);
+    el("#videoCommentsBtn").click();
+    return;
+  }
+  const mangaId = params.get("manga_id");
+  const chapterUrl = params.get("url");
+  if (!mangaId || !chapterUrl) return;
+  let manga = mangaById(mangaId);
+  if (!manga) { await loadCatalog(); manga = (state.catalog || []).find((m) => m.id === mangaId); }
+  if (!manga) return;
+  resumeReading({ id: manga.id, name: manga.name, latest_chapter_url: manga.latest_chapter_url, chapter_url: chapterUrl });
+  // รอตอนโหลดเสร็จก่อน ปุ่ม 💬 ถึงจะรู้ว่าเป็นตอนไหน
+  for (let i = 0; i < 40 && currentChapterData?.url !== chapterUrl; i++) await w(250);
+  el("#readerComments").click();
+}
+
 function openFromUrl(url) {
+  if (url.searchParams.get("comments")) {
+    history.replaceState(null, "", "/");
+    openCommentsFromUrl(url.searchParams);
+    return;
+  }
   const id = url.searchParams.get("manga");
   if (!id) return;
   history.replaceState(null, "", "/");
@@ -2538,6 +2668,7 @@ function openFromUrl(url) {
 // ---------- คอมเมนต์ (หน้าต่างเดียวใช้ทั้งตอนมังงะและคลิป) ----------
 let commentTarget = null; // {kind:"chapter", manga_id, url} | {kind:"video", id}
 let commentCountEl = null;
+let commentReplyTo = null; // id คอมเมนต์ที่กด "ตอบ" — เจ้าของจะได้แจ้งเตือน
 
 function commentQuery(target) {
   return new URLSearchParams(target).toString();
@@ -2545,7 +2676,7 @@ function commentQuery(target) {
 
 function commentItemHtml(c, withLabel = false) {
   return `<li class="comment-item" data-comment-id="${escapeHtml(c.id)}">
-    <div class="comment-meta"><b>${escapeHtml(c.user)}</b> · ${timeAgo(c.created_at)}${c.can_delete ? ' · <button class="link-btn" data-delete-comment>ลบ</button>' : ""}</div>
+    <div class="comment-meta"><b>${escapeHtml(c.user)}</b> · ${timeAgo(c.created_at, "เมื่อสักครู่")}${withLabel ? "" : ` · <button class="link-btn" data-reply-comment data-user="${escapeHtml(c.user)}">ตอบ</button>`}${c.can_delete ? ' · <button class="link-btn" data-delete-comment>ลบ</button>' : ""}</div>
     ${withLabel ? `<div class="comment-label">${escapeHtml(c.label || "")}</div>` : ""}
     <div class="comment-text">${escapeHtml(c.text)}</div>
   </li>`;
@@ -2590,6 +2721,7 @@ function renderCommentList(items) {
 function closeComments() {
   el("#commentSheet").hidden = true;
   commentTarget = null;
+  commentReplyTo = null;
 }
 
 async function deleteCommentById(id) {
@@ -2608,14 +2740,23 @@ function initComments() {
     const btn = event.currentTarget.querySelector("button");
     btn.disabled = true;
     try {
-      await sendJSON("POST", "/api/comments", { ...commentTarget, text });
+      await sendJSON("POST", "/api/comments", { ...commentTarget, text, reply_to: commentReplyTo });
       input.value = "";
+      commentReplyTo = null;
       const data = await getJSON(`/api/comments?${commentQuery(commentTarget)}`);
       renderCommentList(data.items);
     } catch (e) { alert(e.message || "ส่งไม่สำเร็จ"); }
     finally { btn.disabled = false; }
   });
   el("#commentList").addEventListener("click", async (event) => {
+    const reply = event.target.closest("[data-reply-comment]");
+    if (reply) {
+      commentReplyTo = reply.closest("[data-comment-id]").dataset.commentId;
+      const input = el("#commentInput");
+      input.value = `@${reply.dataset.user} `;
+      input.focus();
+      return;
+    }
     const btn = event.target.closest("[data-delete-comment]");
     if (!btn) return;
     const id = btn.closest("[data-comment-id]").dataset.commentId;

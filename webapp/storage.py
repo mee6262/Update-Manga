@@ -252,6 +252,15 @@ def save_video_saved(username: str, saved: dict):
     _save_user_file(username, "video_saved.json", saved)
 
 
+def load_notifications(username: str, fresh: bool = False) -> list[dict]:
+    """แจ้งเตือนในเว็บ (แผงกระดิ่ง) ใหม่→เก่า"""
+    return _load_json(_user_file(username, "notifications.json"), [], fresh)
+
+
+def save_notifications(username: str, items: list[dict]):
+    _save_user_file(username, "notifications.json", items)
+
+
 def load_video_categories(fresh: bool = False) -> list[dict]:
     """หมวดคลิป (แอดมินตั้ง): [{"id", "name"}] ลำดับในรายการ = ลำดับที่แสดง"""
     return _load_json(VIDEO_CATEGORIES_FILE, [], fresh)
