@@ -871,3 +871,93 @@ a.video-card { display: block; text-decoration: none; }
   .video-item { gap: 6px; }
   .video-save-btn { font-size: 0.76rem; padding: 5px 8px; }
 }
+
+/* ---------- ดูต่อ / อ่านต่อ (หน้าหลัก) ---------- */
+.continue-section { margin-bottom: 18px; }
+.continue-section .section-title { margin-top: 0; }
+.continue-row { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+.continue-tile { flex: 0 0 auto; display: flex; flex-direction: column; gap: 3px; background: none; border: 0; padding: 0; color: var(--text); text-align: left; cursor: pointer; scroll-snap-align: start; font: inherit; }
+.continue-tile.manga { width: 96px; }
+.continue-tile.manga img { width: 96px; height: 128px; object-fit: cover; border-radius: 8px; background: var(--img-bg); }
+.continue-tile.video { width: 200px; }
+.continue-media { position: relative; display: block; width: 200px; height: 112px; border-radius: 8px; overflow: hidden; background: var(--img-bg); }
+.continue-media img, .continue-media .video-placeholder { width: 100%; height: 100%; object-fit: cover; aspect-ratio: auto; }
+.continue-name { font-size: 0.8rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.continue-meta { font-size: 0.7rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- ตัวเล่น: แตะสองครั้งข้าม / ความเร็ว / ตั้งเวลาปิด ---------- */
+.native-wrap { position: relative; width: 100%; max-width: 900px; justify-self: center; }
+.native-wrap .native-video { display: block; }
+.tap-zone { position: absolute; top: 0; bottom: 56px; width: 32%; -webkit-tap-highlight-color: transparent; }
+.tap-zone.left { left: 0; }
+.tap-zone.right { right: 0; }
+.seek-bubble { position: absolute; top: 40%; padding: 6px 12px; border-radius: 999px; background: rgba(0, 0, 0, 0.65); color: #fff; font-size: 0.85rem; font-weight: 700; pointer-events: none; }
+.seek-bubble.left { left: 12%; }
+.seek-bubble.right { right: 12%; }
+.seek-bubble[hidden] { display: none; }
+.video-quality-btn.active { border-color: var(--accent); color: var(--accent); }
+
+/* ---------- คอมเมนต์ ---------- */
+.comment-btn { position: relative; font-size: 1.05rem; }
+.comment-count { position: absolute; top: -6px; right: -6px; min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: #0a0f0c; font-size: 0.65rem; font-weight: 700; line-height: 18px; }
+.comment-count:empty { display: none; }
+.comment-sheet { position: fixed; inset: 0; z-index: 300; }
+.comment-sheet[hidden] { display: none; }
+.comment-sheet-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.55); }
+.comment-sheet-panel { position: absolute; left: 0; right: 0; bottom: 0; max-height: 75vh; display: flex; flex-direction: column; background: var(--bg-elevated); border-radius: 16px 16px 0 0; padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); animation: slide-up 0.18s ease-out; }
+.comment-sheet-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.comment-sheet-title { flex: 1; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comment-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; min-height: 80px; }
+.comment-item { padding: 9px 2px; border-bottom: 1px solid var(--border); }
+.comment-meta { font-size: 0.75rem; color: var(--text-dim); }
+.comment-label { font-size: 0.75rem; color: var(--accent); margin-top: 2px; }
+.comment-text { margin-top: 3px; white-space: pre-wrap; word-break: break-word; }
+.comment-empty { padding: 18px 0; color: var(--text-dim); text-align: center; }
+.comment-form { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; }
+.comment-form textarea { flex: 1; resize: none; font: inherit; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); }
+.link-btn { background: none; border: 0; padding: 0; color: var(--text-dim); text-decoration: underline; font: inherit; font-size: inherit; cursor: pointer; }
+.danger-text { color: #ff8a8a; }
+
+/* ---------- หมวดคลิป ---------- */
+.video-chips { display: flex; gap: 6px; overflow-x: auto; margin: -6px 0 14px; padding-bottom: 2px; }
+.video-chips[hidden] { display: none; }
+.video-chip { flex: 0 0 auto; background: var(--bg-card); color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; font: inherit; font-size: 0.8rem; cursor: pointer; }
+.video-chip.active { color: var(--accent); border-color: var(--accent); }
+
+/* ---------- หน้าแอดมิน: คลิป / ระบบ ---------- */
+.chip-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; font-size: 0.85rem; }
+.video-manage-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--border); list-style: none; }
+.video-manage-row img, .video-manage-row .video-placeholder { width: 96px; height: 54px; object-fit: cover; border-radius: 6px; flex: 0 0 auto; font-size: 1rem; }
+.video-title-input { width: 100%; font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); }
+.video-manage-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; color: var(--text-dim); }
+.video-manage-meta select { font: inherit; font-size: 0.85rem; padding: 4px 6px; border-radius: 8px; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 8px; }
+.stat-tile { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.stat-value { font-size: 1.15rem; font-weight: 700; }
+.stat-label { font-size: 0.75rem; color: var(--text-dim); margin-top: 2px; }
+.daily-bars { grid-column: 1 / -1; display: flex; gap: 6px; align-items: flex-end; height: 70px; padding: 6px 4px 0; }
+.daily-bar { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 3px; }
+.daily-bar span { width: 100%; min-height: 2px; background: var(--accent); border-radius: 4px 4px 0 0; }
+.daily-bar em { font-style: normal; font-size: 0.65rem; color: var(--text-dim); }
+.host-row { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); list-style: none; }
+.host-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+.host-dot.ok { background: #3ecf8e; }
+.host-dot.stalled { background: #f5a524; }
+.host-dot.down { background: #f31260; }
+.top-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.top-list ol { margin: 6px 0 0; padding-left: 20px; }
+.log-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 0.7rem; max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+
+/* ---------- ทำงานแบบแอป ---------- */
+.offline-banner { position: fixed; left: 12px; right: 12px; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 10px); z-index: 60; background: #f5a524; color: #1a1300; border-radius: 10px; padding: 8px 12px; font-size: 0.85rem; font-weight: 600; text-align: center; }
+.offline-banner[hidden] { display: none; }
+html { -webkit-tap-highlight-color: transparent; }
+body { overscroll-behavior-y: none; }
+button, .nav-item, .home-tab, .video-tab, .continue-tile { -webkit-user-select: none; user-select: none; touch-action: manipulation; }
+/* แท็บย่อยแอดมินมี 6 อัน: เลื่อนแนวนอนแทนการบีบจนตัวหนังสือหัก */
+.sub-tabs { overflow-x: auto; scrollbar-width: none; }
+.sub-tabs::-webkit-scrollbar, .continue-row::-webkit-scrollbar, .video-chips::-webkit-scrollbar { display: none; }
+.sub-tab-btn { flex: 0 0 auto; white-space: nowrap; }
+.continue-row, .video-chips { scrollbar-width: none; }
+.host-row .grow, .video-manage-row .grow { flex: 1; min-width: 0; }

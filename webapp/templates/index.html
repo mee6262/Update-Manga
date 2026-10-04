@@ -60,6 +60,10 @@
   <main>
     <section id="listView" class="view active">
       <button id="homePwNotice" class="notice-card notice-btn" hidden>รหัสผ่านของคุณถูกรีเซ็ต แตะเพื่อไปตั้งรหัสผ่านใหม่ ›</button>
+      <div id="continueSection" class="continue-section" hidden>
+        <h2 class="section-title">ดูต่อ / อ่านต่อ</h2>
+        <div id="continueRow" class="continue-row"></div>
+      </div>
       <div id="mangaGrid" class="manga-grid"></div>
       <div id="emptyState" class="empty-state" hidden>
         ยังไม่ได้ติดตามเรื่องไหนเลย ไปที่แท็บ "ทั้งหมด" เพื่อเลือกเรื่องที่อยากติดตาม
@@ -108,6 +112,7 @@
         <button class="video-tab" data-video-tab="saved">คลังวิดีโอ</button>
         <button class="video-tab" data-video-tab="history">ประวัติการดู</button>
       </div>
+      <div id="videoCategoryChips" class="video-chips" hidden></div>
       <div id="videoToolbar" class="video-toolbar">
         <p>คลิป Facebook ที่สมาชิกเพิ่มไว้</p>
         <button id="addVideoBtn" class="btn primary">+ เพิ่มคลิป</button>
@@ -175,6 +180,9 @@
           <button class="sub-tab-btn active" data-subtab="mangaManage">เรื่อง</button>
           <button class="sub-tab-btn" data-subtab="categoryManage">หมวดหมู่</button>
           <button class="sub-tab-btn" data-subtab="userManage">สมาชิก</button>
+          <button class="sub-tab-btn" data-subtab="videoManage">คลิป</button>
+          <button class="sub-tab-btn" data-subtab="commentManage">คอมเมนต์</button>
+          <button class="sub-tab-btn" data-subtab="systemManage">ระบบ</button>
         </nav>
 
         <div id="mangaManageSubview" class="subview active">
@@ -218,6 +226,40 @@
         </form>
         <div id="addUserMsg" class="form-msg"></div>
         <ul id="userList" class="settings-list"></ul>
+        </div>
+
+        <div id="videoManageSubview" class="subview">
+          <form id="addVideoCategoryForm" class="add-form">
+            <input type="text" id="newVideoCategoryName" placeholder="ชื่อหมวดคลิปใหม่ เช่น พากย์ไทย" maxlength="40" required />
+            <button type="submit" class="btn primary">+ เพิ่มหมวดคลิป</button>
+          </form>
+          <div id="videoCategoryMsg" class="form-msg"></div>
+          <div id="videoCategoryList" class="chip-list"></div>
+          <div class="manage-actions">
+            <button id="checkVideosBtn" class="btn">ตรวจไฟล์คลิปทั้งหมด</button>
+          </div>
+          <div id="checkVideosMsg" class="form-msg"></div>
+          <ul id="videoManageList" class="settings-list"></ul>
+        </div>
+
+        <div id="commentManageSubview" class="subview">
+          <p class="hint">คอมเมนต์ล่าสุด 100 รายการจากทุกตอนและทุกคลิป</p>
+          <ul id="commentManageList" class="comment-list"></ul>
+        </div>
+
+        <div id="systemManageSubview" class="subview">
+          <div class="manage-actions"><button id="systemRefreshBtn" class="btn">โหลดใหม่</button></div>
+          <div id="systemStats" class="stat-grid"></div>
+          <h3 class="section-title">สุขภาพเซิร์ฟเวอร์</h3>
+          <div id="systemHealth" class="stat-grid"></div>
+          <h3 class="section-title">เว็บต้นทาง</h3>
+          <ul id="systemHosts" class="settings-list"></ul>
+          <h3 class="section-title">ยอดนิยม 7 วัน</h3>
+          <div id="systemTop" class="top-lists"></div>
+          <h3 class="section-title">ข้อผิดพลาดล่าสุด (webapp.log)</h3>
+          <pre id="systemErrors" class="log-box"></pre>
+          <h3 class="section-title">ตัวคุมเซิร์ฟเวอร์ (supervisor.log)</h3>
+          <pre id="systemSupervisor" class="log-box"></pre>
         </div>
       </div>
     </section>
@@ -264,7 +306,7 @@
   </div>
 
   <div id="videoPlayer" class="reader video-player" hidden>
-    <div class="reader-topbar"><button id="videoPlayerClose" class="btn">✕ ปิด</button><div class="reader-title"><span id="videoPlayerTitle"></span></div><button id="videoDeleteBtn" class="btn danger" hidden>🗑 ลบคลิป</button></div>
+    <div class="reader-topbar"><button id="videoPlayerClose" class="btn">✕ ปิด</button><div class="reader-title"><span id="videoPlayerTitle"></span></div><button id="videoCommentsBtn" class="icon-btn comment-btn" title="ความคิดเห็นของคลิปนี้">💬<span id="videoCommentCount" class="comment-count"></span></button><button id="videoDeleteBtn" class="btn danger" hidden>🗑 ลบคลิป</button></div>
     <div id="videoPlayerBody" class="video-player-body"><div class="reader-msg">กำลังโหลด...</div></div>
   </div>
 
@@ -294,6 +336,7 @@
     <div id="readerBottombar" class="reader-bottombar">
       <span id="readerChapterName" class="reader-chapter"></span>
       <div class="reader-nav">
+        <button id="readerComments" class="icon-btn comment-btn" title="ความคิดเห็นของตอนนี้">💬<span id="readerCommentCount" class="comment-count"></span></button>
         <button id="readerPrev" class="icon-btn" disabled title="ตอนก่อนหน้า">
           <svg viewBox="0 0 24 24" width="20" height="20"><path d="M15 5 L8 12 L15 19" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
@@ -304,5 +347,20 @@
     </div>
   </div>
 
+  <div id="commentSheet" class="comment-sheet" hidden>
+    <div class="comment-sheet-backdrop" data-close-comments></div>
+    <div class="comment-sheet-panel" role="dialog" aria-label="ความคิดเห็น">
+      <div class="comment-sheet-head">
+        <div id="commentSheetTitle" class="comment-sheet-title">ความคิดเห็น</div>
+        <button class="icon-btn" data-close-comments title="ปิด">✕</button>
+      </div>
+      <ul id="commentList" class="comment-list"></ul>
+      <form id="commentForm" class="comment-form">
+        <textarea id="commentInput" maxlength="1000" rows="2" placeholder="พิมพ์ความคิดเห็น… (ระวังสปอยล์นะ)" required></textarea>
+        <button type="submit" class="btn primary">ส่ง</button>
+      </form>
+    </div>
+  </div>
+  <div id="offlineBanner" class="offline-banner" hidden>ออฟไลน์อยู่ — แสดงข้อมูลล่าสุดที่มีในเครื่อง</div>
 </body>
 </html>

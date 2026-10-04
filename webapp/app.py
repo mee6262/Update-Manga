@@ -294,6 +294,7 @@ def require_login():
         # ทุกเครื่องที่ค้างอยู่ ไม่งั้นคนที่รู้รหัสเก่าก็ยังใช้บัญชีต่อได้เรื่อย ๆ
         user = storage.load_users().get(current_username())
         if user and user.get("pw_ver", 0) == session.get("pw_ver", 0):
+            _record_activity(current_username())
             return None
         session.clear()
     if request.path.startswith("/api/"):
@@ -1184,6 +1185,7 @@ def _public_video(video: dict, progress: dict | None = None, saved: dict | None 
         "facebook_url": video["facebook_url"],
         "thumbnail_url": video.get("thumbnail_url") or None,
         "external": bool(video.get("external")),
+        "category_id": video.get("category_id"),
         "added_by": video["added_by"],
         "created_at": video["created_at"],
         "can_delete": _can_delete_video(video),
@@ -1200,7 +1202,11 @@ def list_videos():
     saved = storage.load_video_saved(username)
     if any(not v.get("duration_seconds") and v["id"] not in _duration_backfill_tried for v in videos):
         threading.Thread(target=_backfill_video_durations, daemon=True).start()
-    return jsonify({"items": [_public_video(video, progress, saved) for video in videos], "next_cursor": None})
+    return jsonify({
+        "items": [_public_video(video, progress, saved) for video in videos],
+        "categories": storage.load_video_categories(),
+        "next_cursor": None,
+    })
 
 
 @app.route("/api/videos", methods=["POST"])
@@ -1285,6 +1291,9 @@ def delete_video(video_id):
             if video_id in progress:
                 del progress[video_id]
                 storage.save_video_progress(u, progress)
+        comments = storage.load_comments(fresh=True)
+        if comments.pop(f"video:{video_id}", None) is not None:
+            storage.save_comments(comments)
     return jsonify({"ok": True})
 
 @app.route("/api/videos/<video_id>/thumb")
@@ -1322,6 +1331,7 @@ def get_video_sources(video_id):
         return jsonify({"error": "ไม่พบวิดีโอ"}), 404
     if video.get("external"):
         return jsonify({})
+    _record_activity(username or "local", "plays", video_id)  # เปิดตัวเล่น 1 ครั้ง = ดู 1 ครั้ง
     return jsonify(_facebook_video_sources(video["facebook_url"]))
 
 
@@ -1394,6 +1404,298 @@ def save_video_bookmark(video_id):
         storage.save_video_saved(username or "local", saved)
         saved_at = saved.get(video_id)
     return jsonify({"saved_at": saved_at})
+
+
+# ---------- สถิติการใช้งานรายวัน (หน้าแอดมิน) ----------
+_SERVER_STARTED = time.time()
+_activity_seen: set[tuple[str, str]] = set()  # (วัน, ผู้ใช้) ที่บันทึกแล้ว — ไม่เขียนไฟล์ทุก request
+ACTIVITY_KEEP_DAYS = 60
+
+
+def _record_activity(username: str, kind: str | None = None, item_id: str | None = None):
+    """นับผู้ใช้ที่เข้าเว็บรายวัน + จำนวนครั้งที่อ่านตอน (reads) / เปิดคลิป (plays) ต่อเรื่อง/คลิป
+    เขียนไฟล์เฉพาะตอนเจอผู้ใช้ใหม่ของวัน หรือมีการอ่าน/เปิดคลิป (ไม่ใช่ทุก request)"""
+    day = datetime.now().strftime("%Y-%m-%d")
+    if kind is None and (day, username) in _activity_seen:
+        return
+    try:
+        with storage.state_lock:
+            activity = storage.load_activity(fresh=True)
+            entry = activity.setdefault(day, {"users": [], "reads": {}, "plays": {}})
+            if username not in entry["users"]:
+                entry["users"].append(username)
+            if kind and item_id:
+                bucket = entry.setdefault(kind, {})
+                bucket[item_id] = bucket.get(item_id, 0) + 1
+            for old in sorted(activity)[:-ACTIVITY_KEEP_DAYS]:
+                del activity[old]
+            storage.save_activity(activity)
+        _activity_seen.add((day, username))
+    except Exception as e:  # สถิติพังต้องไม่ทำให้หน้าเว็บพัง
+        print(f"⚠️ บันทึกสถิติไม่สำเร็จ: {e}")
+
+
+# ---------- คอมเมนต์ (มังงะรายตอน / วิดีโอรายคลิป) ----------
+MAX_COMMENT_LENGTH = 1000
+
+
+def _comment_target(args) -> tuple[str | None, str | None, str | None]:
+    """อ่านเป้าหมายคอมเมนต์จาก query/body → (target, ป้ายบอกว่าคอมเมนต์อะไร, error)
+    ตอนมังงะอ้างด้วยเลขตอน (_chapter_key) ไม่ใช่ URL — ลิงก์เปลี่ยน/สลับแหล่งแล้วคอมเมนต์ยังอยู่ที่ตอนเดิม"""
+    kind = args.get("kind")
+    if kind == "video":
+        video = next((v for v in storage.load_videos() if v.get("id") == args.get("id")), None)
+        if not video:
+            return None, None, "ไม่พบวิดีโอ"
+        return f"video:{video['id']}", f"🎬 {_clean_video_title(video['title'])}", None
+    if kind == "chapter":
+        manga = storage.get_manga(str(args.get("manga_id") or ""))
+        url = args.get("url") or ""
+        if not manga or not url:
+            return None, None, "ไม่พบตอนนี้"
+        chapter = next((c for c in manga.get("chapters") or [] if c["url"] == url or url in (c.get("alts") or [])), None)
+        if not chapter:
+            return None, None, "ไม่พบตอนนี้"
+        return f"chapter:{manga['id']}:{_chapter_key(chapter['text'], url)}", f"📚 {manga['name']} · {chapter['text']}", None
+    return None, None, "ประเภทคอมเมนต์ไม่ถูกต้อง"
+
+
+def _public_comment(comment: dict) -> dict:
+    username = current_username()
+    can_delete = not storage.load_users() or is_admin() or comment["user"] == username
+    return {**comment, "can_delete": can_delete}
+
+
+@app.route("/api/comments", methods=["GET"])
+def list_comments():
+    target, _, error = _comment_target(request.args)
+    if error:
+        return jsonify({"error": error}), 404
+    return jsonify({"items": [_public_comment(c) for c in storage.load_comments().get(target, [])]})
+
+
+@app.route("/api/comments", methods=["POST"])
+def add_comment():
+    body = request.get_json(force=True, silent=True) or {}
+    target, label, error = _comment_target(body)
+    if error:
+        return jsonify({"error": error}), 404
+    text = str(body.get("text") or "").strip()
+    if not text or len(text) > MAX_COMMENT_LENGTH:
+        return jsonify({"error": f"ข้อความต้องมี 1-{MAX_COMMENT_LENGTH} ตัวอักษร"}), 400
+    comment = {
+        "id": secrets.token_hex(8),
+        "user": current_username() or "local",
+        "text": text,
+        "created_at": now_iso(),
+        "target": target,
+        "label": label,
+    }
+    with storage.state_lock:
+        comments = storage.load_comments(fresh=True)
+        comments.setdefault(target, []).append(comment)
+        storage.save_comments(comments)
+    return jsonify(_public_comment(comment)), 201
+
+
+@app.route("/api/comments/<comment_id>", methods=["DELETE"])
+def delete_comment(comment_id):
+    with storage.state_lock:
+        comments = storage.load_comments(fresh=True)
+        for target, items in comments.items():
+            comment = next((c for c in items if c["id"] == comment_id), None)
+            if not comment:
+                continue
+            if not _public_comment(comment)["can_delete"]:
+                return jsonify({"error": "ลบได้เฉพาะคอมเมนต์ของตัวเอง"}), 403
+            items.remove(comment)
+            if not items:
+                del comments[target]
+            storage.save_comments(comments)
+            return jsonify({"ok": True})
+    return jsonify({"error": "ไม่พบคอมเมนต์"}), 404
+
+
+# ---------- หมวดคลิป + แก้คลิป (แอดมินเท่านั้น) ----------
+@app.route("/api/video-categories", methods=["POST"])
+@require_admin
+def add_video_category():
+    name = " ".join(str((request.get_json(force=True, silent=True) or {}).get("name") or "").split())
+    if not name or len(name) > 40:
+        return jsonify({"error": "ชื่อหมวดต้องมี 1-40 ตัวอักษร"}), 400
+    with storage.state_lock:
+        categories = storage.load_video_categories(fresh=True)
+        if any(c["name"] == name for c in categories):
+            return jsonify({"error": "มีหมวดนี้อยู่แล้ว"}), 400
+        category = {"id": secrets.token_hex(4), "name": name}
+        categories.append(category)
+        storage.save_video_categories(categories)
+    return jsonify(category), 201
+
+
+@app.route("/api/video-categories/<category_id>", methods=["DELETE"])
+@require_admin
+def delete_video_category(category_id):
+    with storage.state_lock:
+        categories = storage.load_video_categories(fresh=True)
+        storage.save_video_categories([c for c in categories if c["id"] != category_id])
+        videos = storage.load_videos(fresh=True)
+        changed = False
+        for video in videos:
+            if video.get("category_id") == category_id:
+                video["category_id"] = None  # คลิปในหมวดที่ลบ กลับไปไม่มีหมวด
+                changed = True
+        if changed:
+            storage.save_videos(videos)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/videos/<video_id>", methods=["PATCH"])
+@require_admin
+def update_video(video_id):
+    body = request.get_json(force=True, silent=True) or {}
+    with storage.state_lock:
+        videos = storage.load_videos(fresh=True)
+        video = next((v for v in videos if v.get("id") == video_id), None)
+        if not video:
+            return jsonify({"error": "ไม่พบวิดีโอ"}), 404
+        if "title" in body:
+            title = " ".join(str(body.get("title") or "").split())
+            if not title or len(title) > MAX_VIDEO_TITLE:
+                return jsonify({"error": f"ชื่อคลิปต้องมี 1-{MAX_VIDEO_TITLE} ตัวอักษร"}), 400
+            video["title"] = title
+        if "category_id" in body:
+            category_id = body.get("category_id") or None
+            if category_id and not any(c["id"] == category_id for c in storage.load_video_categories()):
+                return jsonify({"error": "ไม่พบหมวดนี้"}), 400
+            video["category_id"] = category_id
+        storage.save_videos(videos)
+    return jsonify(_public_video(video))
+
+
+# ---------- หน้าแอดมิน: สถานะระบบ / สถิติ / จัดการเนื้อหา ----------
+_LOG_ERROR_RE = re.compile(r"ERROR|Traceback|⚠️|Exception")
+_dir_size_cache: dict[str, tuple[float, int, int]] = {}
+
+
+def _dir_size(path: Path) -> tuple[int, int]:
+    """(ไบต์, จำนวนไฟล์) ของโฟลเดอร์แคช — เดินทั้งโฟลเดอร์ช้า จำผลไว้ 10 นาที"""
+    cached = _dir_size_cache.get(str(path))
+    if cached and cached[0] > time.time():
+        return cached[1], cached[2]
+    total = count = 0
+    for root, _, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+                count += 1
+            except OSError:
+                pass
+    _dir_size_cache[str(path)] = (time.time() + 600, total, count)
+    return total, count
+
+
+def _tail_lines(path: Path, max_bytes: int = 300_000) -> list[str]:
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - max_bytes))
+            return f.read().decode("utf-8", "replace").splitlines()[1:]
+    except OSError:
+        return []
+
+
+@app.route("/api/admin/status", methods=["GET"])
+@require_admin
+def admin_status():
+    """สุขภาพเซิร์ฟเวอร์ + สถานะเว็บต้นทาง + error ล่าสุดจาก log (อ่านไฟล์ในเครื่องอย่างเดียว ไม่ยิงเน็ต)"""
+    disk = shutil.disk_usage(storage.DATA_DIR)
+    caches = {}
+    for name, path in (("chapters", storage.CHAPTERS_DIR), ("covers", storage.COVERS_DIR), ("video_thumbs", storage.VIDEO_THUMBS_DIR)):
+        size, files = _dir_size(path)
+        caches[name] = {"bytes": size, "files": files}
+
+    hosts: dict[str, dict] = {}
+    for manga in storage.load_manga():
+        urls = [manga.get("url")] + [s.get("url") for s in manga.get("sources") or []]
+        for url in dict.fromkeys(u for u in urls if u):
+            host = urlparse(url).netloc.lower()
+            info = hosts.setdefault(host, {"host": host, "manga": 0, "last_checked_at": None, "down": False, "stalled": False})
+            info["manga"] += 1
+            checked = manga.get("last_checked_at")
+            if checked and (not info["last_checked_at"] or checked > info["last_checked_at"]):
+                info["last_checked_at"] = checked
+            info["down"] = info["down"] or scraper.host_is_down(url)
+            info["stalled"] = info["stalled"] or scraper.host_is_stalled(url)
+
+    log_dir = storage.DATA_DIR / "logs"
+    errors = [line for line in _tail_lines(log_dir / "webapp.log") if _LOG_ERROR_RE.search(line)][-30:]
+    restarts = [line for line in _tail_lines(log_dir / "supervisor.log", 100_000) if line.strip()][-8:]
+    return jsonify({
+        "started_at": datetime.fromtimestamp(_SERVER_STARTED, timezone.utc).isoformat(),
+        "uptime_seconds": int(time.time() - _SERVER_STARTED),
+        "disk": {"total": disk.total, "used": disk.used, "free": disk.free},
+        "caches": caches,
+        "counts": {"manga": len(storage.load_manga()), "videos": len(storage.load_videos()),
+                   "users": len(storage.load_users()), "comments": sum(len(v) for v in storage.load_comments().values())},
+        "hosts": sorted(hosts.values(), key=lambda h: (not h["down"], not h["stalled"], h["host"])),
+        "errors": errors,
+        "supervisor": restarts,
+        "has_logs": (log_dir / "webapp.log").exists(),
+    })
+
+
+@app.route("/api/admin/stats", methods=["GET"])
+@require_admin
+def admin_stats():
+    activity = storage.load_activity()
+    days = [(datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+    today = activity.get(days[0], {})
+    week_users, reads, plays = set(), {}, {}
+    for day in days:
+        entry = activity.get(day, {})
+        week_users.update(entry.get("users", []))
+        for key, bucket in (("reads", reads), ("plays", plays)):
+            for item_id, n in entry.get(key, {}).items():
+                bucket[item_id] = bucket.get(item_id, 0) + n
+    manga_names = {m["id"]: m["name"] for m in storage.load_manga()}
+    video_titles = {v["id"]: _clean_video_title(v["title"]) for v in storage.load_videos()}
+    top = lambda bucket, names: [{"name": names.get(k, "(ถูกลบแล้ว)"), "count": n}
+                                 for k, n in sorted(bucket.items(), key=lambda kv: -kv[1])[:5]]
+    return jsonify({
+        "today_users": len(today.get("users", [])),
+        "today_reads": sum(today.get("reads", {}).values()),
+        "today_plays": sum(today.get("plays", {}).values()),
+        "week_users": len(week_users),
+        "week_reads": sum(reads.values()),
+        "week_plays": sum(plays.values()),
+        "daily": [{"day": d, "users": len(activity.get(d, {}).get("users", [])),
+                   "reads": sum(activity.get(d, {}).get("reads", {}).values()),
+                   "plays": sum(activity.get(d, {}).get("plays", {}).values())} for d in reversed(days)],
+        "top_manga": top(reads, manga_names),
+        "top_videos": top(plays, video_titles),
+    })
+
+
+@app.route("/api/admin/comments", methods=["GET"])
+@require_admin
+def admin_comments():
+    items = [c for items in storage.load_comments().values() for c in items]
+    items.sort(key=lambda c: c["created_at"], reverse=True)
+    return jsonify({"items": [_public_comment(c) for c in items[:100]]})
+
+
+@app.route("/api/admin/videos/check", methods=["POST"])
+@require_admin
+def admin_check_videos():
+    """ไล่หาไฟล์ตรงของทุกคลิปที่เล่นในเว็บ — คืนรายการที่หาไม่ได้ (จะกลับไปใช้ตัวเล่น Facebook)
+    ยิงเน็ตนอก lock, ข้ามแคชเพื่อดูสถานะจริงตอนนี้"""
+    videos = [v for v in storage.load_videos() if not v.get("external")]
+    for video in videos:
+        _video_sources_cache.pop(video["facebook_url"], None)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda v: (v, bool(_facebook_video_sources(v["facebook_url"]))), videos))
+    return jsonify({"checked": len(videos), "failed": [{"id": v["id"], "title": _clean_video_title(v["title"])} for v, ok in results if not ok]})
 
 
 # ---------- หมวดหมู่ (admin จัดการ, ทุกคนใช้กรองในหน้าเรื่องทั้งหมด) ----------
@@ -1972,6 +2274,7 @@ def get_chapter(manga_id):
             read_state = storage.load_read_state(current_username(), fresh=True)
             mark_chapter_read(read_state, manga_id, key)
             storage.save_read_state(current_username(), read_state)
+        _record_activity(current_username(), "reads", manga_id)
 
     data["chapter_url"] = chapter_url
     data["manga_name"] = manga["name"]

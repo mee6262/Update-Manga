@@ -86,6 +86,10 @@ function showTab(tab) {
   updateCategoryBar();
   window.scrollTo(0, 0);
 
+  if (tab === "list") {
+    loadHistory();
+    loadVideos();
+  }
   if (tab === "catalog") {
     renderCatalog(filterCatalog());
     loadCatalog().then(() => renderCatalog(filterCatalog()));
@@ -158,7 +162,7 @@ function videosForTab() {
   const byDesc = (key) => (a, b) => String(b[key] || "").localeCompare(String(a[key] || ""));
   if (videoTab === "saved") return state.videos.filter((v) => v.saved_at).sort(byDesc("saved_at"));
   if (videoTab === "history") return state.videos.filter((v) => v.watched_at).sort(byDesc("watched_at"));
-  return state.videos;
+  return videoCategoryFilter ? state.videos.filter((v) => v.category_id === videoCategoryFilter) : state.videos;
 }
 
 const VIDEO_EMPTY_TEXT = {
@@ -176,6 +180,8 @@ function renderVideos() {
   els("[data-video-tab]").forEach((b) => b.classList.toggle("active", b.dataset.videoTab === videoTab));
   // ผลค้นหาในหน้าค้นหาใช้ข้อมูลคลิปชุดเดียวกัน — บันทึก/ลบ/ดูค้างแล้วต้องอัปเดตตามด้วย
   if (el("#searchInput").value.trim()) renderSearch();
+  renderVideoCategoryChips();
+  renderContinue();
   el("#videoToolbar").hidden = videoTab !== "home";
 }
 
@@ -186,6 +192,7 @@ async function loadVideos() {
     // เซิร์ฟเวอร์ส่งทั้งคลัง หน้าเว็บแบ่งแสดงทีละ VIDEO_PAGE_SIZE เอง
     const data = await getJSON("/api/videos");
     state.videos = data.items || [];
+    state.videoCategories = data.categories || [];
     renderVideos();
   } catch (e) {
     el("#videoGrid").innerHTML = `<div class="reader-msg">${escapeHtml(e.body?.error || "โหลดคลิปไม่สำเร็จ")}</div>`;
@@ -345,7 +352,11 @@ function setNativeQuality(quality, startAt) {
 
 function mountNativeVideo(video, position, sources) {
   const body = el("#videoPlayerBody");
-  body.innerHTML = '<video id="nativeVideo" class="native-video" controls playsinline preload="metadata"></video><div id="videoQuality" class="video-quality"></div>';
+  body.innerHTML = `<div class="native-wrap"><video id="nativeVideo" class="native-video" controls playsinline preload="metadata"></video>
+    <div class="tap-zone left" data-seek="-10"></div><div class="tap-zone right" data-seek="10"></div>
+    <div id="seekBubble" class="seek-bubble" hidden></div></div>
+    <div id="videoQuality" class="video-quality"></div>
+    <div class="video-quality"><span id="videoSpeed" class="video-quality"></span><button id="sleepBtn" class="video-quality-btn">⏾ ตั้งเวลาปิด</button></div>`;
   const v = el("#nativeVideo");
   nativeVideo = v;
   nativeSources = sources;
@@ -369,6 +380,7 @@ function mountNativeVideo(video, position, sources) {
     v.addEventListener("pause", () => { if (!v.ended) saveActiveVideoProgress(true); });
     v.addEventListener("ended", clearActiveVideoProgress);
     v.addEventListener("webkitendfullscreen", nudgeViewport);
+    initNativeExtras(v);
     // อัตโนมัติ: กระตุก (waiting) 2 ครั้งใน 60 วิ ขณะเล่น 720p → ลดเป็น 360p
     v.addEventListener("waiting", () => {
       if (nativeQualityPref !== "auto" || nativeCurrentQuality !== "hd" || !nativeSources.sd || v.seeking) return;
@@ -397,9 +409,101 @@ function nudgeViewport() {
   }, ms));
 }
 
+// ---------- ความเร็ว / แตะสองครั้งข้าม 10 วิ / ตั้งเวลาปิด (เฉพาะตัวเล่นของเว็บเอง) ----------
+const VIDEO_SPEED_KEY = "videoSpeed";
+const VIDEO_SPEEDS = [1, 1.25, 1.5, 2];
+const SLEEP_OPTIONS = [0, 15, 30, 60, 90]; // นาที, 0 = ปิด
+let sleepChoice = 0;
+let sleepTimer = null;
+let sleepEndsAt = 0;
+let sleepTicker = null;
+
+function readVideoSpeed() {
+  try { const v = Number(localStorage.getItem(VIDEO_SPEED_KEY)); return VIDEO_SPEEDS.includes(v) ? v : 1; } catch (e) { return 1; }
+}
+
+function renderSpeedButtons(v) {
+  el("#videoSpeed").innerHTML = VIDEO_SPEEDS.map((sp) =>
+    `<button class="video-quality-btn${v.playbackRate === sp ? " active" : ""}" data-speed="${sp}">${sp}x</button>`).join("");
+}
+
+function showSeekBubble(text, side) {
+  const bubble = el("#seekBubble");
+  if (!bubble) return;
+  bubble.textContent = text;
+  bubble.className = `seek-bubble ${side}`;
+  bubble.hidden = false;
+  clearTimeout(showSeekBubble.timer);
+  showSeekBubble.timer = setTimeout(() => { bubble.hidden = true; }, 650);
+}
+
+function clearSleepTimer() {
+  clearTimeout(sleepTimer);
+  clearInterval(sleepTicker);
+  sleepTimer = sleepTicker = null;
+  sleepChoice = 0;
+}
+
+function renderSleepButton() {
+  const btn = el("#sleepBtn");
+  if (!btn) return;
+  btn.classList.toggle("active", sleepChoice !== 0);
+  btn.textContent = sleepChoice === 0 ? "⏾ ตั้งเวลาปิด"
+    : `⏾ ปิดใน ${Math.max(1, Math.ceil((sleepEndsAt - Date.now()) / 60000))} นาที`;
+}
+
+function initNativeExtras(v) {
+  v.playbackRate = readVideoSpeed();
+  // เปลี่ยนไฟล์ (สลับความละเอียด) แล้วเบราว์เซอร์รีเซ็ตความเร็วเป็น 1x → ตั้งกลับทุกครั้งที่โหลดไฟล์ใหม่
+  v.addEventListener("loadedmetadata", () => { v.playbackRate = readVideoSpeed(); renderSpeedButtons(v); });
+  renderSpeedButtons(v);
+  el("#videoSpeed").addEventListener("click", (event) => {
+    const sp = Number(event.target.closest("[data-speed]")?.dataset.speed);
+    if (!sp) return;
+    v.playbackRate = sp;
+    try { localStorage.setItem(VIDEO_SPEED_KEY, String(sp)); } catch (e) { /* ไม่จำก็ได้ */ }
+    renderSpeedButtons(v);
+  });
+
+  // แตะสองครั้งฝั่งซ้าย/ขวาของภาพ = ย้อน/ข้าม 10 วิ, แตะครั้งเดียว = เล่น/หยุด
+  // (เว้นแถบควบคุมด้านล่างของตัวเล่นไว้ให้กดได้ตามปกติ)
+  els(".tap-zone").forEach((zone) => {
+    let lastTap = 0;
+    let singleTimer = null;
+    zone.addEventListener("click", () => {
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        clearTimeout(singleTimer);
+        const step = Number(zone.dataset.seek);
+        v.currentTime = Math.min(Math.max(0, v.currentTime + step), v.duration || Infinity);
+        showSeekBubble(step < 0 ? "⏪ 10 วิ" : "10 วิ ⏩", step < 0 ? "left" : "right");
+        lastTap = 0;
+        return;
+      }
+      lastTap = now;
+      singleTimer = setTimeout(() => { if (v.paused) v.play().catch(() => {}); else v.pause(); }, 300);
+    });
+  });
+
+  // ตั้งเวลาปิด: แตะวนตัวเลือก ปิด → 15 → 30 → 60 → 90 นาที → ปิด
+  el("#sleepBtn").addEventListener("click", () => {
+    const next = SLEEP_OPTIONS[(SLEEP_OPTIONS.indexOf(sleepChoice) + 1) % SLEEP_OPTIONS.length];
+    clearSleepTimer();
+    sleepChoice = next;
+    if (next > 0) {
+      sleepEndsAt = Date.now() + next * 60000;
+      sleepTimer = setTimeout(() => { v.pause(); clearSleepTimer(); renderSleepButton(); }, next * 60000);
+      sleepTicker = setInterval(renderSleepButton, 30000);
+    }
+    renderSleepButton();
+  });
+  renderSleepButton();
+}
+
 function unmountNativeVideo() {
   if (!nativeVideo) return;
   // หยุดโหลดทันที ไม่ให้เบราว์เซอร์โหลดคลิปต่อเบื้องหลังจนเปลืองเน็ต
+  clearSleepTimer();
   nativeVideo.pause();
   nativeVideo.removeAttribute("src");
   nativeVideo.load();
@@ -418,6 +522,7 @@ async function openVideo(video) {
   videoClockBase = 0;
   videoClockStartedAt = null;
   el("#videoPlayerTitle").textContent = video.title;
+  refreshCommentCount({ kind: "video", id: video.id }, el("#videoCommentCount"));
   el("#videoDeleteBtn").hidden = !video.can_delete;
   el("#videoPlayer").hidden = false;
   document.body.style.overflow = "hidden";
@@ -510,6 +615,7 @@ function clearActiveVideoProgress() {
 }
 
 function closeVideo() {
+  closeComments();
   stopVideoClock();
   saveActiveVideoProgress(true);
   unmountNativeVideo();
@@ -582,6 +688,13 @@ function initVideos() {
   el("#videoGrid").addEventListener("click", onVideoGridClick);
   el("#searchVideoGrid").addEventListener("click", onVideoGridClick);
   el("#videoMoreBtn").addEventListener("click", () => { videoShown += VIDEO_PAGE_SIZE; renderVideos(); });
+  el("#videoCategoryChips").addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-video-category]");
+    if (!chip) return;
+    videoCategoryFilter = chip.dataset.videoCategory || null;
+    videoShown = VIDEO_PAGE_SIZE;
+    renderVideos();
+  });
   els("[data-video-tab]").forEach((button) => button.addEventListener("click", () => {
     videoTab = button.dataset.videoTab;
     videoShown = VIDEO_PAGE_SIZE;
@@ -648,6 +761,7 @@ function setHomeMode(mode) {
   el("#mangaGrid").hidden = mode !== "grid";
   el("#emptyState").hidden = mode !== "grid" || state.manga.length > 0;
   el("#historyView").hidden = mode !== "history";
+  renderContinue();
   if (mode === "history") {
     renderHistory();
     loadHistory();
@@ -670,6 +784,7 @@ async function loadHistory() {
   try {
     state.history = (await getJSON("/api/history")).items;
     renderHistory();
+    renderContinue();
   } catch (e) {
     // ใช้ของเดิมต่อ
   }
@@ -2047,6 +2162,7 @@ function renderChapter(data, chapterUrl, restoreFraction) {
     body.appendChild(hint);
   }
   initNextChapterConfirm();
+  refreshCommentCount({ kind: "chapter", manga_id: readerMangaId, url: currentChapterData.url }, el("#readerCommentCount"));
 
   // อ่านตอนนี้แล้ว: อัปเดตสถานะในรายชื่อตอนที่ถืออยู่ในมือเลย ไม่ต้องรอโหลดใหม่จากเซิร์ฟเวอร์
   const row = currentChapters.find((c) => c.url === currentChapterData.url);
@@ -2245,6 +2361,7 @@ async function closeReader() {
   // สองคำขอวิ่งชนกันและได้ค่าเก่ากลับมา
   const saved = saveScrollPosition();
   cancelRestore();
+  closeComments();
   el("#reader").hidden = true;
   prefetchedChapters.clear();
   document.body.style.overflow = "";
@@ -2418,6 +2535,316 @@ function openFromUrl(url) {
   else loadManga().then(() => mangaById(id) && openChapterList(mangaById(id)));
 }
 
+// ---------- คอมเมนต์ (หน้าต่างเดียวใช้ทั้งตอนมังงะและคลิป) ----------
+let commentTarget = null; // {kind:"chapter", manga_id, url} | {kind:"video", id}
+let commentCountEl = null;
+
+function commentQuery(target) {
+  return new URLSearchParams(target).toString();
+}
+
+function commentItemHtml(c, withLabel = false) {
+  return `<li class="comment-item" data-comment-id="${escapeHtml(c.id)}">
+    <div class="comment-meta"><b>${escapeHtml(c.user)}</b> · ${timeAgo(c.created_at)}${c.can_delete ? ' · <button class="link-btn" data-delete-comment>ลบ</button>' : ""}</div>
+    ${withLabel ? `<div class="comment-label">${escapeHtml(c.label || "")}</div>` : ""}
+    <div class="comment-text">${escapeHtml(c.text)}</div>
+  </li>`;
+}
+
+function setCommentCount(countEl, n) {
+  if (countEl) countEl.textContent = n ? String(n) : "";
+}
+
+// ตัวเลขบนปุ่ม 💬 — โหลดเงียบ ๆ ตอนเปิดตอน/คลิป ไม่ขวางการอ่าน
+async function refreshCommentCount(target, countEl) {
+  setCommentCount(countEl, 0);
+  try {
+    const data = await getJSON(`/api/comments?${commentQuery(target)}`);
+    setCommentCount(countEl, data.items.length);
+  } catch (e) { /* ไม่มีตัวเลขก็ได้ */ }
+}
+
+async function openComments(target, title, countEl) {
+  commentTarget = target;
+  commentCountEl = countEl;
+  el("#commentSheetTitle").textContent = title;
+  el("#commentList").innerHTML = '<li class="comment-empty">กำลังโหลด...</li>';
+  el("#commentSheet").hidden = false;
+  try {
+    const data = await getJSON(`/api/comments?${commentQuery(target)}`);
+    renderCommentList(data.items);
+  } catch (e) {
+    el("#commentList").innerHTML = `<li class="comment-empty">${escapeHtml(e.body?.error || "โหลดคอมเมนต์ไม่สำเร็จ")}</li>`;
+  }
+}
+
+function renderCommentList(items) {
+  el("#commentList").innerHTML = items.length
+    ? items.map((c) => commentItemHtml(c)).join("")
+    : '<li class="comment-empty">ยังไม่มีความคิดเห็น เริ่มคุยคนแรกเลย</li>';
+  setCommentCount(commentCountEl, items.length);
+  const list = el("#commentList");
+  list.scrollTop = list.scrollHeight;
+}
+
+function closeComments() {
+  el("#commentSheet").hidden = true;
+  commentTarget = null;
+}
+
+async function deleteCommentById(id) {
+  if (!confirm("ลบความคิดเห็นนี้?")) return false;
+  try { await sendJSON("DELETE", `/api/comments/${encodeURIComponent(id)}`); return true; }
+  catch (e) { alert(e.message || "ลบไม่สำเร็จ"); return false; }
+}
+
+function initComments() {
+  els("[data-close-comments]").forEach((b) => b.addEventListener("click", closeComments));
+  el("#commentForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const input = el("#commentInput");
+    const text = input.value.trim();
+    if (!text || !commentTarget) return;
+    const btn = event.currentTarget.querySelector("button");
+    btn.disabled = true;
+    try {
+      await sendJSON("POST", "/api/comments", { ...commentTarget, text });
+      input.value = "";
+      const data = await getJSON(`/api/comments?${commentQuery(commentTarget)}`);
+      renderCommentList(data.items);
+    } catch (e) { alert(e.message || "ส่งไม่สำเร็จ"); }
+    finally { btn.disabled = false; }
+  });
+  el("#commentList").addEventListener("click", async (event) => {
+    const btn = event.target.closest("[data-delete-comment]");
+    if (!btn) return;
+    const id = btn.closest("[data-comment-id]").dataset.commentId;
+    if (!(await deleteCommentById(id)) || !commentTarget) return;
+    const data = await getJSON(`/api/comments?${commentQuery(commentTarget)}`);
+    renderCommentList(data.items);
+  });
+  el("#readerComments").addEventListener("click", () => {
+    if (!readerMangaId || !currentChapterData?.url) return;
+    openComments({ kind: "chapter", manga_id: readerMangaId, url: currentChapterData.url },
+      `💬 ${el("#readerChapterName").textContent || "ตอนนี้"}`, el("#readerCommentCount"));
+  });
+  el("#videoCommentsBtn").addEventListener("click", () => {
+    if (!activeVideo) return;
+    openComments({ kind: "video", id: activeVideo.id }, `💬 ${activeVideo.title}`, el("#videoCommentCount"));
+  });
+}
+
+// ---------- หน้าหลัก: แถว "ดูต่อ / อ่านต่อ" (มังงะที่อ่านล่าสุด + คลิปที่ดูค้าง เรียงตามเวลาล่าสุด) ----------
+function continueItems() {
+  const manga = withoutSpecial(state.history).filter((h) => h.chapter_url)
+    .map((h) => ({ kind: "manga", at: h.last_read_at || "", item: h }));
+  const videos = state.videos.filter((v) => !v.external && Number(v.position_seconds) > 0)
+    .map((v) => ({ kind: "video", at: v.watched_at || "", item: v }));
+  return manga.concat(videos).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 12);
+}
+
+function continueTileHtml({ kind, item }) {
+  if (kind === "manga") {
+    const pct = item.fraction ? ` · ${Math.round(item.fraction * 100)}%` : "";
+    return `<button class="continue-tile manga" data-kind="manga" data-id="${escapeHtml(item.id)}">
+      <img src="${proxied(item.cover_url, COVER_WIDTH)}" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0" />
+      <span class="continue-name">${escapeHtml(item.name)}</span>
+      <span class="continue-meta">📚 ${escapeHtml(item.chapter_text || "")}${pct}</span></button>`;
+  }
+  const pos = Number(item.position_seconds) || 0;
+  const dur = Number(item.duration_seconds) || 0;
+  const pct = dur ? Math.min(100, Math.max(3, (pos / dur) * 100)) : 0;
+  const at = `${Math.floor(pos / 60)}.${String(Math.floor(pos % 60)).padStart(2, "0")}`;
+  const image = item.thumbnail_url ? `<img src="${escapeHtml(item.thumbnail_url)}" alt="" loading="lazy" />` : '<span class="video-placeholder">▶</span>';
+  return `<button class="continue-tile video" data-kind="video" data-id="${escapeHtml(item.id)}">
+    <span class="continue-media">${image}${pct ? `<span class="video-progress"><span style="width:${pct.toFixed(1)}%"></span></span>` : ""}</span>
+    <span class="continue-name">${escapeHtml(item.title)}</span>
+    <span class="continue-meta">🎬 ${at}${dur ? `/${Math.max(1, Math.round(dur / 60))}` : ""} นาที</span></button>`;
+}
+
+function renderContinue() {
+  const items = continueItems();
+  el("#continueSection").hidden = !items.length || state.homeMode !== "grid";
+  el("#continueRow").innerHTML = items.map(continueTileHtml).join("");
+}
+
+function initContinue() {
+  el("#continueRow").addEventListener("click", (event) => {
+    const tile = event.target.closest(".continue-tile");
+    if (!tile) return;
+    if (tile.dataset.kind === "manga") {
+      const item = state.history.find((h) => h.id === tile.dataset.id);
+      if (item) resumeReading(item);
+    } else {
+      const video = state.videos.find((v) => v.id === tile.dataset.id);
+      if (video) openVideo(video);
+    }
+  });
+  loadHistory();
+  loadVideos();
+}
+
+// ---------- หมวดคลิป (แอดมินตั้ง) — ชิปกรองในแท็บหน้าหลักของ MeeMovie ----------
+let videoCategoryFilter = null;
+
+function renderVideoCategoryChips() {
+  const cats = state.videoCategories || [];
+  const box = el("#videoCategoryChips");
+  box.hidden = !cats.length || videoTab !== "home";
+  if (videoCategoryFilter && !cats.some((c) => c.id === videoCategoryFilter)) videoCategoryFilter = null;
+  box.innerHTML = [{ id: "", name: "ทั้งหมด" }, ...cats].map((c) =>
+    `<button class="video-chip${(videoCategoryFilter || "") === c.id ? " active" : ""}" data-video-category="${escapeHtml(c.id)}">${escapeHtml(c.name)}</button>`).join("");
+}
+
+// ---------- หน้าแอดมิน: คลิป / คอมเมนต์ / ระบบ ----------
+function fmtBytes(n) {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+
+function fmtUptime(sec) {
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  return d ? `${d} วัน ${h} ชม.` : h ? `${h} ชม. ${m} นาที` : `${m} นาที`;
+}
+
+function statTile(label, value) {
+  return `<div class="stat-tile"><div class="stat-value">${escapeHtml(String(value))}</div><div class="stat-label">${escapeHtml(label)}</div></div>`;
+}
+
+async function loadSystemStatus() {
+  el("#systemStats").innerHTML = el("#systemHealth").innerHTML = '<div class="hint">กำลังโหลด...</div>';
+  try {
+    const [st, stats] = await Promise.all([getJSON("/api/admin/status"), getJSON("/api/admin/stats")]);
+    el("#systemStats").innerHTML = [
+      statTile("ผู้ใช้วันนี้", stats.today_users), statTile("อ่านวันนี้ (ตอน)", stats.today_reads), statTile("ดูคลิปวันนี้", stats.today_plays),
+      statTile("ผู้ใช้ 7 วัน", stats.week_users), statTile("อ่าน 7 วัน", stats.week_reads), statTile("ดูคลิป 7 วัน", stats.week_plays),
+    ].join("") + `<div class="daily-bars">${stats.daily.map((d) => {
+      const max = Math.max(1, ...stats.daily.map((x) => x.users));
+      return `<div class="daily-bar" title="${d.day}: ผู้ใช้ ${d.users} · อ่าน ${d.reads} · ดูคลิป ${d.plays}"><span style="height:${(d.users / max) * 100}%"></span><em>${d.day.slice(8)}</em></div>`;
+    }).join("")}</div>`;
+    el("#systemHealth").innerHTML = [
+      statTile("เปิดมาแล้ว", fmtUptime(st.uptime_seconds)),
+      statTile("ดิสก์ว่าง", `${fmtBytes(st.disk.free)} / ${fmtBytes(st.disk.total)}`),
+      statTile("แคชตอน", `${fmtBytes(st.caches.chapters.bytes)} (${st.caches.chapters.files})`),
+      statTile("แคชปก", fmtBytes(st.caches.covers.bytes + st.caches.video_thumbs.bytes)),
+      statTile("เรื่อง / คลิป", `${st.counts.manga} / ${st.counts.videos}`),
+      statTile("สมาชิก / คอมเมนต์", `${st.counts.users} / ${st.counts.comments}`),
+    ].join("");
+    el("#systemHosts").innerHTML = st.hosts.map((h) => `<li class="host-row">
+      <span class="host-dot ${h.down ? "down" : h.stalled ? "stalled" : "ok"}"></span>
+      <span class="grow"><b>${escapeHtml(h.host)}</b><br><small>${h.manga} เรื่อง · เช็คล่าสุด ${h.last_checked_at ? timeAgo(h.last_checked_at) : "-"}</small></span>
+      <small>${h.down ? "ล่ม (พัก 10 นาที)" : h.stalled ? "ตอบช้า" : "ปกติ"}</small></li>`).join("");
+    const top = (title, rows) => `<div class="top-list"><b>${title}</b><ol>${rows.length ? rows.map((r) => `<li>${escapeHtml(r.name)} <small>(${r.count})</small></li>`).join("") : "<li><small>ยังไม่มีข้อมูล</small></li>"}</ol></div>`;
+    el("#systemTop").innerHTML = top("📚 มังงะ (ครั้งที่อ่าน)", stats.top_manga) + top("🎬 คลิป (ครั้งที่เปิด)", stats.top_videos);
+    el("#systemErrors").textContent = st.has_logs ? (st.errors.join("\n") || "ไม่มีข้อผิดพลาด 🎉") : "ไม่มีไฟล์ log (ไม่ได้รันผ่าน run_windows.py)";
+    el("#systemSupervisor").textContent = st.supervisor.join("\n") || "-";
+  } catch (e) {
+    el("#systemStats").innerHTML = `<div class="hint">${escapeHtml(e.body?.error || "โหลดสถานะไม่สำเร็จ")}</div>`;
+  }
+}
+
+async function loadCommentManage() {
+  try {
+    const data = await getJSON("/api/admin/comments");
+    el("#commentManageList").innerHTML = data.items.length ? data.items.map((c) => commentItemHtml(c, true)).join("") : '<li class="comment-empty">ยังไม่มีคอมเมนต์</li>';
+  } catch (e) { el("#commentManageList").innerHTML = '<li class="comment-empty">โหลดไม่สำเร็จ</li>'; }
+}
+
+function renderVideoManage() {
+  const cats = state.videoCategories || [];
+  el("#videoCategoryList").innerHTML = cats.length
+    ? cats.map((c) => `<span class="chip">${escapeHtml(c.name)} <button class="link-btn" data-delete-video-category="${escapeHtml(c.id)}">✕</button></span>`).join("")
+    : '<span class="hint">ยังไม่มีหมวดคลิป</span>';
+  const options = (selected) => [`<option value="">— ไม่มีหมวด —</option>`, ...cats.map((c) =>
+    `<option value="${escapeHtml(c.id)}"${c.id === selected ? " selected" : ""}>${escapeHtml(c.name)}</option>`)].join("");
+  el("#videoManageList").innerHTML = state.videos.map((v) => `<li class="video-manage-row" data-video-id="${escapeHtml(v.id)}">
+    ${v.thumbnail_url ? `<img src="${escapeHtml(v.thumbnail_url)}" alt="" loading="lazy" />` : '<span class="video-placeholder">▶</span>'}
+    <div class="grow">
+      <input class="video-title-input" value="${escapeHtml(v.title)}" maxlength="160" />
+      <div class="video-manage-meta"><select class="video-category-select">${options(v.category_id)}</select>
+      <small>${v.external ? "เปิดใน Facebook · " : ""}เพิ่มโดย ${escapeHtml(v.added_by)}</small>
+      <button class="link-btn danger-text" data-admin-delete-video>ลบ</button></div>
+    </div></li>`).join("");
+}
+
+async function patchVideo(id, body) {
+  try {
+    const updated = await sendJSON("PATCH", `/api/videos/${encodeURIComponent(id)}`, body);
+    const v = state.videos.find((x) => x.id === id);
+    if (v) Object.assign(v, { title: updated.title, category_id: updated.category_id });
+    renderVideos();
+  } catch (e) { alert(e.message || "บันทึกไม่สำเร็จ"); renderVideoManage(); }
+}
+
+function initAdminPanels() {
+  els(".sub-tab-btn").forEach((btn) => btn.addEventListener("click", () => {
+    if (btn.dataset.subtab === "systemManage") loadSystemStatus();
+    if (btn.dataset.subtab === "commentManage") loadCommentManage();
+    if (btn.dataset.subtab === "videoManage") loadVideos().then(renderVideoManage);
+  }));
+  el("#systemRefreshBtn").addEventListener("click", loadSystemStatus);
+  el("#commentManageList").addEventListener("click", async (event) => {
+    const btn = event.target.closest("[data-delete-comment]");
+    if (btn && (await deleteCommentById(btn.closest("[data-comment-id]").dataset.commentId))) loadCommentManage();
+  });
+  el("#addVideoCategoryForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const name = el("#newVideoCategoryName").value.trim();
+    try {
+      await sendJSON("POST", "/api/video-categories", { name });
+      el("#newVideoCategoryName").value = "";
+      el("#videoCategoryMsg").textContent = "";
+      await loadVideos();
+      renderVideoManage();
+    } catch (e) { el("#videoCategoryMsg").textContent = e.message; }
+  });
+  el("#videoCategoryList").addEventListener("click", async (event) => {
+    const id = event.target.closest("[data-delete-video-category]")?.dataset.deleteVideoCategory;
+    if (!id || !confirm("ลบหมวดนี้? (คลิปในหมวดจะกลายเป็นไม่มีหมวด)")) return;
+    try { await sendJSON("DELETE", `/api/video-categories/${encodeURIComponent(id)}`); } catch (e) { alert(e.message); }
+    await loadVideos();
+    renderVideoManage();
+  });
+  el("#videoManageList").addEventListener("change", (event) => {
+    const row = event.target.closest("[data-video-id]");
+    if (!row) return;
+    if (event.target.matches(".video-category-select")) patchVideo(row.dataset.videoId, { category_id: event.target.value || null });
+    if (event.target.matches(".video-title-input")) patchVideo(row.dataset.videoId, { title: event.target.value });
+  });
+  el("#videoManageList").addEventListener("click", async (event) => {
+    if (!event.target.closest("[data-admin-delete-video]")) return;
+    const row = event.target.closest("[data-video-id]");
+    const v = state.videos.find((x) => x.id === row.dataset.videoId);
+    if (!v || !confirm(`ลบคลิป "${v.title}"?`)) return;
+    try { await sendJSON("DELETE", `/api/videos/${encodeURIComponent(v.id)}`); } catch (e) { alert(e.message); return; }
+    await loadVideos();
+    renderVideoManage();
+  });
+  el("#checkVideosBtn").addEventListener("click", async (event) => {
+    const btn = event.currentTarget;
+    btn.disabled = true;
+    el("#checkVideosMsg").textContent = "กำลังตรวจ… (คลิปละประมาณ 1-2 วิ)";
+    try {
+      const res = await sendJSON("POST", "/api/admin/videos/check", {});
+      el("#checkVideosMsg").textContent = res.failed.length
+        ? `ตรวจ ${res.checked} คลิป · หาไฟล์ตรงไม่ได้ ${res.failed.length} คลิป (จะใช้ตัวเล่น Facebook แทน): ${res.failed.map((f) => f.title).join(", ")}`
+        : `ตรวจ ${res.checked} คลิป · หาไฟล์ตรงได้ทุกคลิป ✓`;
+    } catch (e) { el("#checkVideosMsg").textContent = e.message || "ตรวจไม่สำเร็จ"; }
+    finally { btn.disabled = false; }
+  });
+}
+
+// ---------- ทำงานแบบแอป: แคชไฟล์ผ่าน service worker + แถบแจ้งออฟไลน์ ----------
+function initAppShell() {
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+  const update = () => { el("#offlineBanner").hidden = navigator.onLine; };
+  window.addEventListener("online", update);
+  window.addEventListener("offline", update);
+  update();
+}
+
 function init() {
   applyAdminGating();
   renderGrid();
@@ -2443,6 +2870,10 @@ function init() {
   initTheme();
   initAddUserForm();
   initVideos();
+  initComments();
+  initContinue();
+  initAdminPanels();
+  initAppShell();
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkForUpdate();
   });

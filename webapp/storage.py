@@ -15,6 +15,9 @@ CATEGORIES_FILE = DATA_DIR / "categories.json"
 SITE_SETTINGS_FILE = DATA_DIR / "site_settings.json"
 VIDEOS_FILE = DATA_DIR / "videos.json"
 VIDEO_THUMBS_DIR = DATA_DIR / "video_thumbs"
+VIDEO_CATEGORIES_FILE = DATA_DIR / "video_categories.json"
+COMMENTS_FILE = DATA_DIR / "comments.json"
+ACTIVITY_FILE = DATA_DIR / "activity.json"
 USERS_FILE = DATA_DIR / "users.json"
 USERS_DIR = DATA_DIR / "users"
 
@@ -247,6 +250,33 @@ def load_video_saved(username: str, fresh: bool = False) -> dict:
 
 def save_video_saved(username: str, saved: dict):
     _save_user_file(username, "video_saved.json", saved)
+
+
+def load_video_categories(fresh: bool = False) -> list[dict]:
+    """หมวดคลิป (แอดมินตั้ง): [{"id", "name"}] ลำดับในรายการ = ลำดับที่แสดง"""
+    return _load_json(VIDEO_CATEGORIES_FILE, [], fresh)
+
+
+def save_video_categories(categories: list[dict]):
+    _save_json(VIDEO_CATEGORIES_FILE, categories)
+
+
+def load_comments(fresh: bool = False) -> dict:
+    """คอมเมนต์ทั้งเว็บ: target ("chapter:<manga_id>:<เลขตอน>" / "video:<video_id>") -> [คอมเมนต์ เก่า→ใหม่]"""
+    return _load_json(COMMENTS_FILE, {}, fresh)
+
+
+def save_comments(comments: dict):
+    _save_json(COMMENTS_FILE, comments)
+
+
+def load_activity(fresh: bool = False) -> dict:
+    """สถิติรายวัน (หน้าแอดมิน): "YYYY-MM-DD" -> {"users": [...], "reads": {manga_id: n}, "plays": {video_id: n}}"""
+    return _load_json(ACTIVITY_FILE, {}, fresh)
+
+
+def save_activity(activity: dict):
+    _save_json(ACTIVITY_FILE, activity, compact=True)
 
 
 def load_image_domains() -> set[str]:
