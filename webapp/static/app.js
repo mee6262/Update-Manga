@@ -320,14 +320,16 @@ function renderPlaylistRow() {
   el("#playlistRow").className = limited ? "playlist-row" : "playlist-grid";
   el("#playlistMoreBtn").hidden = true;
   const more = limited ? `<button class="video-card playlist-card playlist-more" data-playlist-more><span>ดูทั้งหมด<br>${lists.length} เรื่อง ›</span></button>` : "";
-  el("#playlistRow").innerHTML = lists.slice(0, limited ? PLAYLIST_PREVIEW : playlistShown).map((p) => {
-    const image = p.thumbnail_url
-      ? `<img class="video-thumb" src="${escapeHtml(p.thumbnail_url)}" alt="" loading="lazy" />`
-      : '<span class="video-placeholder" aria-hidden="true">▶</span>';
-    const eps = playlistEpisodes(p.id);
-    const resume = eps.some((v) => v.watched_at) ? playlistResume(eps) : null;
-    return `<div class="video-item playlist-item"><button class="video-card playlist-card" data-playlist-id="${escapeHtml(p.id)}"><span class="video-media">${image}<span class="video-time">${p.count} ตอน</span></span><span class="video-card-info"><span class="video-card-title">${escapeHtml(p.name)}</span><span class="video-card-meta">${resume ? `ดูต่อ ${episodeLabel(resume)}` : "ยังไม่เคยดู"}</span></span></button>${playlistSaveButton(p)}</div>`;
-  }).join("") + more;
+  el("#playlistRow").innerHTML = lists.slice(0, limited ? PLAYLIST_PREVIEW : playlistShown).map(playlistCardHtml).join("") + more;
+}
+
+function playlistCardHtml(p) {
+  const image = p.thumbnail_url
+    ? `<img class="video-thumb" src="${escapeHtml(p.thumbnail_url)}" alt="" loading="lazy" />`
+    : '<span class="video-placeholder" aria-hidden="true">▶</span>';
+  const eps = playlistEpisodes(p.id);
+  const resume = eps.some((v) => v.watched_at) ? playlistResume(eps) : null;
+  return `<div class="video-item playlist-item"><button class="video-card playlist-card" data-playlist-id="${escapeHtml(p.id)}"><span class="video-media">${image}<span class="video-time">${p.count} ตอน</span></span><span class="video-card-info"><span class="video-card-title">${escapeHtml(p.name)}</span><span class="video-card-meta">${resume ? `ดูต่อ ${episodeLabel(resume)}` : "ยังไม่เคยดู"}</span></span></button>${playlistSaveButton(p)}</div>`;
 }
 
 function openPlaylist(playlistId) {
@@ -954,6 +956,11 @@ function initVideos() {
     }
   });
   const onVideoGridClick = async (event) => {
+    // การ์ดเรื่อง (playlist) ในผลค้นหา
+    const savePlaylistBtn = event.target.closest("[data-save-playlist]");
+    if (savePlaylistBtn) return togglePlaylistSave(savePlaylistBtn.dataset.savePlaylist, savePlaylistBtn);
+    const playlistCard = event.target.closest("[data-playlist-id]");
+    if (playlistCard) return openPlaylist(playlistCard.dataset.playlistId);
     const saveBtn = event.target.closest("[data-save-video]");
     if (saveBtn) {
       const item = state.videos.find((v) => v.id === saveBtn.closest(".video-item")?.dataset.videoId);
@@ -1382,11 +1389,19 @@ function renderSearch() {
 // คลิป MeeMovie ที่ชื่อตรงกับคำค้น — ใช้การ์ด/ปุ่มบันทึกชุดเดียวกับหน้าวิดีโอ คืนจำนวนที่เจอ
 function renderSearchVideos(q) {
   const needle = q.toLowerCase();
-  const videos = state.videos.filter((v) => v.title.toLowerCase().includes(needle));
-  el("#searchVideoTitle").hidden = !videos.length;
-  el("#searchVideoTitle").textContent = `🎬 คลิปวิดีโอ (${videos.length})`;
-  el("#searchVideoGrid").innerHTML = videos.map(videoCardHtml).join("");
-  return videos.length;
+  // ตอนของ playlist รวมเป็นการ์ดเรื่องเดียว (ค้น "ep" เดิมได้การ์ดตอนเป็นพันใบ)
+  const hitPlaylists = new Set();
+  const videos = state.videos.filter((v) => {
+    if (!v.title.toLowerCase().includes(needle)) return false;
+    if (v.playlist_id) hitPlaylists.add(v.playlist_id);
+    return !v.playlist_id;
+  });
+  const playlists = (state.videoPlaylists || []).filter((p) => hitPlaylists.has(p.id) || p.name.toLowerCase().includes(needle));
+  const total = videos.length + playlists.length;
+  el("#searchVideoTitle").hidden = !total;
+  el("#searchVideoTitle").textContent = `🎬 วิดีโอ (${playlists.length ? `${playlists.length} เรื่อง · ` : ""}${videos.length} คลิป)`;
+  el("#searchVideoGrid").innerHTML = playlists.map(playlistCardHtml).join("") + videos.map(videoCardHtml).join("");
+  return total;
 }
 
 function initSearch() {
