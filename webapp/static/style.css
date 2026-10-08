@@ -1289,3 +1289,17 @@ button, .nav-item, .home-tab, .video-tab, .continue-tile { -webkit-user-select: 
 .sheet-eps input.saved { border-color: var(--accent); }
 .sheet-eps span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
 .vm-seg button { white-space: nowrap; font-size: 0.82rem; padding: 7px 4px; }
+
+/* แถบแนะนำเพิ่มไปหน้าจอโฮม + แผ่นวิธีทำ */
+.install-banner { display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 12px; margin-bottom: 14px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.install-banner[hidden] { display: none; }
+.install-banner-ic { flex: none; width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; background: var(--bg-card); font-size: 1.1rem; }
+.install-banner .grow { flex: 1; min-width: 0; }
+.install-banner-title { font-weight: 700; font-size: 0.9rem; }
+.install-banner-desc { font-size: 0.75rem; color: var(--text-dim); }
+.install-banner .btn { flex: none; font-size: 0.8rem; padding: 6px 10px; }
+.install-banner-close { flex: none; background: none; border: 0; color: var(--text-dim); font-size: 1rem; padding: 6px; margin: -6px -4px -6px 0; cursor: pointer; }
+.install-sheet-title { margin: 0 0 10px; font-size: 1rem; }
+.install-steps { margin: 0 0 12px; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; font-size: 0.92rem; line-height: 1.5; }
+.install-sheet-actions { display: flex; gap: 8px; }
+.install-sheet-actions .btn { flex: 1; justify-content: center; }

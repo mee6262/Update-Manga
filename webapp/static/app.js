@@ -3777,6 +3777,63 @@ const isAndroid = /Android/i.test(navigator.userAgent);
 function updateInstallButton() {
   el("#installBtn").hidden = isStandalone || !(isIOS || isAndroid || installPromptEvent);
   el("#setInstallRow").hidden = el("#installBtn").hidden;
+  renderInstallBanner();
+}
+
+// ---------- แถบแนะนำเพิ่มไปหน้าจอโฮม (หน้าแรก) ----------
+// ✕ = ซ่อน 14 วัน, "ไม่ต้องเตือนอีก" = ซ่อนถาวร — จำต่อเครื่อง (การติดตั้งเป็นเรื่องของเครื่อง ไม่ใช่บัญชี)
+const INSTALL_BANNER_KEY = "installBannerUntil";
+const isInAppBrowser = /FBAN|FBAV|Instagram|Line\//i.test(navigator.userAgent);
+
+function installBannerDismissed() {
+  try {
+    const v = localStorage.getItem(INSTALL_BANNER_KEY);
+    return v === "never" || (v && Number(v) > Date.now());
+  } catch (e) { return false; }
+}
+
+function dismissInstallBanner(forever) {
+  try { localStorage.setItem(INSTALL_BANNER_KEY, forever ? "never" : String(Date.now() + 14 * 86400000)); } catch (e) { /* ไม่จำก็ได้ */ }
+  el("#installBanner").hidden = true;
+}
+
+function renderInstallBanner() {
+  const banner = el("#installBanner");
+  banner.hidden = el("#installBtn").hidden || installBannerDismissed();
+  if (banner.hidden) return;
+  const direct = !!installPromptEvent; // Android/Chrome ติดตั้งได้ทันที
+  el("#installBannerTitle").textContent = direct ? "ติดตั้ง MeeManga" : "เพิ่มไปหน้าจอโฮม";
+  el("#installBannerDesc").textContent = direct ? "ไม่ต้องเปิดเบราว์เซอร์ทุกครั้ง" : "เปิดเร็วเหมือนแอป + แจ้งเตือนตอนใหม่";
+  el("#installBannerBtn").textContent = direct ? "ติดตั้ง" : "วิธีเพิ่ม";
+}
+
+function showInstallSheet() {
+  el("#installSheetTitle").textContent = isIOS ? "เพิ่มไปหน้าจอโฮม (3 ขั้น)" : "เพิ่มไปหน้าจอหลัก (3 ขั้น)";
+  const steps = isIOS
+    ? ["แตะปุ่ม <b>แชร์</b> (สี่เหลี่ยมมีลูกศรขึ้น) ที่แถบล่างของ Safari", "เลื่อนลง เลือก <b>เพิ่มไปยังหน้าจอโฮม</b>", "แตะ <b>เพิ่ม</b> มุมขวาบน แล้วเปิดจากไอคอนใหม่"]
+    : ["แตะเมนู <b>⋮</b> มุมขวาบนของ Chrome", "เลือก <b>เพิ่มลงในหน้าจอหลัก</b> หรือ <b>ติดตั้งแอป</b>", "แตะ <b>เพิ่ม</b> แล้วเปิดจากไอคอนใหม่"];
+  el("#installSheetSteps").innerHTML = steps.map((t) => `<li>${t}</li>`).join("");
+  el("#installSheetNote").hidden = !isInAppBrowser;
+  el("#installSheetNote").textContent = isIOS ? 'เปิดจาก LINE/Facebook อยู่? แตะ ⋯ แล้วเลือก "เปิดใน Safari" ก่อน' : 'เปิดจาก LINE/Facebook อยู่? แตะ ⋮ แล้วเลือก "เปิดในเบราว์เซอร์" ก่อน';
+  el("#installSheet").hidden = false;
+}
+
+function closeInstallSheet() {
+  el("#installSheet").hidden = true;
+}
+
+// ปุ่มเพิ่มไปหน้าจอโฮม (หัวเว็บ / ตั้งค่า / แถบแนะนำ): Android มีหน้าต่างติดตั้งของระบบ, ที่เหลือเปิดแผ่นวิธีทำ
+async function runInstall() {
+  if (installPromptEvent) {
+    const event = installPromptEvent;
+    installPromptEvent = null; // ใช้ได้ครั้งเดียว
+    event.prompt();
+    const choice = await event.userChoice.catch(() => null);
+    if (choice?.outcome === "accepted") el("#installBtn").hidden = true;
+    updateInstallButton();
+    return;
+  }
+  showInstallSheet();
 }
 
 function initInstallButton() {
@@ -3789,19 +3846,12 @@ function initInstallButton() {
     installPromptEvent = null;
     el("#installBtn").hidden = true;
   });
-  el("#installBtn").addEventListener("click", async () => {
-    if (installPromptEvent) {
-      const event = installPromptEvent;
-      installPromptEvent = null; // ใช้ได้ครั้งเดียว
-      event.prompt();
-      const choice = await event.userChoice.catch(() => null);
-      if (choice?.outcome === "accepted") el("#installBtn").hidden = true;
-      return;
-    }
-    alert(isIOS
-      ? "เพิ่ม MeeManga ไปยังหน้าจอโฮม\n\n1. กดปุ่มแชร์ (สี่เหลี่ยมมีลูกศรขึ้น) ที่แถบล่างของ Safari\n2. เลื่อนลงแล้วเลือก \"เพิ่มไปยังหน้าจอโฮม\"\n3. กด \"เพิ่ม\" มุมขวาบน\n\n(ถ้าเปิดจากแอปอื่น เช่น LINE/Facebook ให้เปิดลิงก์ใน Safari ก่อน)"
-      : "เพิ่ม MeeManga ไปยังหน้าจอหลัก\n\n1. กดเมนู ⋮ มุมขวาบนของ Chrome\n2. เลือก \"เพิ่มลงในหน้าจอหลัก\" หรือ \"ติดตั้งแอป\"\n3. กด \"เพิ่ม\"");
-  });
+  el("#installBtn").addEventListener("click", runInstall);
+  el("#installBannerBtn").addEventListener("click", runInstall);
+  el("#installBannerClose").addEventListener("click", () => dismissInstallBanner(false));
+  el("#installSheetOk").addEventListener("click", closeInstallSheet);
+  el("#installSheetNever").addEventListener("click", () => { dismissInstallBanner(true); closeInstallSheet(); });
+  el("#installSheet").addEventListener("click", (e) => { if (e.target === el("#installSheet")) closeInstallSheet(); });
   updateInstallButton();
 }
 
@@ -4587,6 +4637,7 @@ function goBack() {
   if (!el("#notifPanel").hidden) return toggleNotifPanel(false), true;
   if (!el("#commentSheet").hidden) return closeComments(), true;
   if (!el("#vmSheet").hidden) return closeVmSheet(), true;
+  if (!el("#installSheet").hidden) return closeInstallSheet(), true;
   if (!el("#videoFormModal").hidden) return showVideoForm(false), true;
   if (!el("#mangaFormModal").hidden) return closeMangaModal(), true;
   if (!el("#chapterListView").hidden && el("#chapterListView").classList.contains("over-reader")) return closeChapterList(), true;

@@ -56,6 +56,12 @@
 
   <main>
     <section id="listView" class="view active">
+      <div id="installBanner" class="install-banner" hidden>
+        <span class="install-banner-ic" aria-hidden="true">📲</span>
+        <div class="grow"><div id="installBannerTitle" class="install-banner-title"></div><div id="installBannerDesc" class="install-banner-desc"></div></div>
+        <button id="installBannerBtn" class="btn primary"></button>
+        <button id="installBannerClose" class="install-banner-close" aria-label="ปิด">✕</button>
+      </div>
       <button id="homePwNotice" class="notice-card notice-btn" hidden>รหัสผ่านของคุณถูกรีเซ็ต แตะเพื่อไปตั้งรหัสผ่านใหม่ ›</button>
       <div id="mangaHome"></div>
       <div id="continueSection" class="continue-section" hidden>
@@ -477,6 +483,15 @@
           <svg viewBox="0 0 24 24" width="20" height="20"><path d="M9 5 L16 12 L9 19" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
+    </div>
+  </div>
+
+  <div id="installSheet" class="sheet-backdrop" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="installSheetTitle"><div class="sheet-grip" aria-hidden="true"></div>
+      <h3 id="installSheetTitle" class="install-sheet-title"></h3>
+      <ol id="installSheetSteps" class="install-steps"></ol>
+      <p id="installSheetNote" class="hint" hidden></p>
+      <div class="install-sheet-actions"><button id="installSheetOk" class="btn primary">เข้าใจแล้ว</button><button id="installSheetNever" class="btn">ไม่ต้องเตือนอีก</button></div>
     </div>
   </div>
 
