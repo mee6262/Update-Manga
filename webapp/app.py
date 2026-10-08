@@ -1214,7 +1214,7 @@ def list_videos():
     return jsonify({
         "items": [_public_video(video, progress, saved) for video in videos],
         "categories": storage.load_video_categories(),
-        "playlists": _public_playlists(videos),
+        "playlists": _public_playlists(videos, saved),
         "next_cursor": None,
     })
 
@@ -1685,7 +1685,7 @@ MAX_PLAYLIST_IMPORT = 10000
 _playlist_thumb_lock = threading.Lock()
 
 
-def _public_playlists(videos: list[dict]) -> list[dict]:
+def _public_playlists(videos: list[dict], saved: dict | None = None) -> list[dict]:
     episodes: dict[str, list[dict]] = {}
     for video in videos:
         if video.get("playlist_id"):
@@ -1700,6 +1700,7 @@ def _public_playlists(videos: list[dict]) -> list[dict]:
             "id": playlist["id"],
             "name": playlist["name"],
             "category_id": playlist.get("category_id"),
+            "saved_at": (saved or {}).get(f"playlist:{playlist['id']}"),  # บันทึกทั้งเรื่องไว้ในคลังวิดีโอ
             "count": len(items),
             "thumbnail_url": cover,
             "updated_at": max(v.get("created_at", "") for v in items),
@@ -1836,6 +1837,26 @@ def import_video_playlists():
     return jsonify({"ok": True, "added": result["added"], "moved": result["moved"], "thumbs_queued": result["thumbs_queued"]})
 
 
+@app.route("/api/video-playlists/<playlist_id>/save", methods=["POST"])
+def save_playlist_bookmark(playlist_id):
+    """ปุ่ม "บันทึก" ของทั้งเรื่อง — เก็บใน video_saved.json คีย์ "playlist:<id>" (ไม่ชนกับ id คลิป)"""
+    username = current_username()
+    if not username and storage.load_users():
+        return jsonify({"error": "unauthorized"}), 401
+    if not any(p["id"] == playlist_id for p in storage.load_video_playlists()):
+        return jsonify({"error": "ไม่พบ playlist"}), 404
+    want = bool((request.get_json(force=True, silent=True) or {}).get("saved"))
+    key = f"playlist:{playlist_id}"
+    with storage.state_lock:
+        saved = storage.load_video_saved(username or "local", fresh=True)
+        if want:
+            saved.setdefault(key, datetime.now(timezone.utc).isoformat())
+        else:
+            saved.pop(key, None)
+        storage.save_video_saved(username or "local", saved)
+    return jsonify({"saved_at": saved.get(key)})
+
+
 @app.route("/api/video-playlists/<playlist_id>", methods=["PATCH"])
 @require_admin
 def update_video_playlist(playlist_id):
@@ -1870,13 +1891,15 @@ def delete_video_playlist(playlist_id):
         storage.save_video_playlists([p for p in playlists if p["id"] != playlist_id])
         videos = storage.load_videos(fresh=True)
         gone = {v["id"] for v in videos if v.get("playlist_id") == playlist_id}
+        saved_key = f"playlist:{playlist_id}"
         storage.save_videos([v for v in videos if v["id"] not in gone])
         for u in [*storage.all_usernames(), "local"]:
             for load, save in ((storage.load_video_progress, storage.save_video_progress),
                                (storage.load_video_saved, storage.save_video_saved)):
                 data = load(u, fresh=True)
-                if gone & data.keys():
-                    save(u, {k: v for k, v in data.items() if k not in gone})
+                drop = gone | {saved_key}
+                if drop & data.keys():
+                    save(u, {k: v for k, v in data.items() if k not in drop})
         comments = storage.load_comments(fresh=True)
         removed = [comments.pop(f"video:{vid}") for vid in gone if f"video:{vid}" in comments]
         if removed:

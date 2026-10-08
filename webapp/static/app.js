@@ -188,7 +188,7 @@ function renderVideos() {
   const list = videosForTab();
   el("#videoGrid").innerHTML = list.slice(0, videoShown).map(videoCardHtml).join("");
   el("#videoEmpty").textContent = VIDEO_EMPTY_TEXT[videoTab];
-  el("#videoEmpty").hidden = list.length > 0 || (videoTab === "home" && (state.videoPlaylists || []).some((p) => !videoCategoryFilter || p.category_id === videoCategoryFilter));
+  el("#videoEmpty").hidden = list.length > 0 || visiblePlaylists().length > 0;
   el("#videoMoreBtn").hidden = list.length <= videoShown;
   els("[data-video-tab]").forEach((b) => b.classList.toggle("active", b.dataset.videoTab === videoTab));
   // ผลค้นหาในหน้าค้นหาใช้ข้อมูลคลิปชุดเดียวกัน — บันทึก/ลบ/ดูค้างแล้วต้องอัปเดตตามด้วย
@@ -224,12 +224,31 @@ const PLAYLIST_PREVIEW = 6; // หน้า "ทั้งหมด" โชว์
 const PLAYLIST_PAGE = 12;
 let playlistShown = PLAYLIST_PAGE;
 
+// หน้าหลัก: ทุกเรื่อง (ตามหมวด) / คลังวิดีโอ: เรื่องที่กดบันทึก ล่าสุดก่อน
 function visiblePlaylists() {
-  return videoTab === "home" ? (state.videoPlaylists || []).filter((p) => !videoCategoryFilter || p.category_id === videoCategoryFilter) : [];
+  const lists = (state.videoPlaylists || []).filter((p) => !videoCategoryFilter || p.category_id === videoCategoryFilter);
+  if (videoTab === "home") return lists;
+  if (videoTab === "saved") return lists.filter((p) => p.saved_at).sort((a, b) => b.saved_at.localeCompare(a.saved_at));
+  return [];
 }
 
 function playlistPreviewOnly(lists) {
-  return !videoCategoryFilter && !playlistShowAll && lists.length > PLAYLIST_PREVIEW;
+  return videoTab === "home" && !videoCategoryFilter && !playlistShowAll && lists.length > PLAYLIST_PREVIEW;
+}
+
+function playlistSaveButton(p) {
+  return `<button class="btn video-save-btn${p.saved_at ? " saved" : ""}" data-save-playlist="${escapeHtml(p.id)}">${p.saved_at ? "✓ บันทึกแล้ว" : "บันทึก"}</button>`;
+}
+
+async function togglePlaylistSave(id, btn) {
+  const p = (state.videoPlaylists || []).find((x) => x.id === id);
+  if (!p) return;
+  btn.disabled = true;
+  try {
+    const data = await sendJSON("POST", `/api/video-playlists/${encodeURIComponent(id)}/save`, { saved: !p.saved_at });
+    p.saved_at = data.saved_at || null;
+    renderVideos();
+  } catch (e) { alert(e.message || "บันทึกไม่สำเร็จ"); btn.disabled = false; }
 }
 
 // เลื่อนใกล้ท้ายหน้า: เติมการ์ดเรื่องก่อนจนครบ แล้วค่อยเติมคลิป (แบบหน้า Reels ของ Facebook)
@@ -295,6 +314,7 @@ function playlistResume(episodes) {
 function renderPlaylistRow() {
   const lists = visiblePlaylists();
   el("#playlistSection").hidden = !lists.length;
+  el("#playlistSectionTitle").textContent = videoTab === "saved" ? "เรื่องยาวที่บันทึกไว้" : "เรื่องยาว (Playlist)";
   const limited = playlistPreviewOnly(lists);
   // หน้า "ทั้งหมด": แถวเดียวเลื่อนข้าง ปิดท้ายด้วยการ์ด "ดูทั้งหมด" / เลือกหมวดหรือกดดูทั้งหมด: ตาราง + เลื่อนลงโหลดเพิ่ม
   el("#playlistRow").className = limited ? "playlist-row" : "playlist-grid";
@@ -306,7 +326,7 @@ function renderPlaylistRow() {
       : '<span class="video-placeholder" aria-hidden="true">▶</span>';
     const eps = playlistEpisodes(p.id);
     const resume = eps.some((v) => v.watched_at) ? playlistResume(eps) : null;
-    return `<button class="video-card playlist-card" data-playlist-id="${escapeHtml(p.id)}"><span class="video-media">${image}<span class="video-time">${p.count} ตอน</span></span><span class="video-card-info"><span class="video-card-title">${escapeHtml(p.name)}</span><span class="video-card-meta">${resume ? `ดูต่อ ${episodeLabel(resume)}` : "ยังไม่เคยดู"}</span></span></button>`;
+    return `<div class="video-item playlist-item"><button class="video-card playlist-card" data-playlist-id="${escapeHtml(p.id)}"><span class="video-media">${image}<span class="video-time">${p.count} ตอน</span></span><span class="video-card-info"><span class="video-card-title">${escapeHtml(p.name)}</span><span class="video-card-meta">${resume ? `ดูต่อ ${episodeLabel(resume)}` : "ยังไม่เคยดู"}</span></span></button>${playlistSaveButton(p)}</div>`;
   }).join("") + more;
 }
 
@@ -340,7 +360,7 @@ function renderPlaylistView() {
     const sub = episodeSubtitle(v, playlist.name);
     return `<button class="episode-row${v.id === resume.id && started ? " current" : ""}${v.watched_at && !pos ? " watched" : ""}" data-episode-id="${escapeHtml(v.id)}"><span class="episode-thumb">${image}${bar}</span><span class="episode-info"><strong>${episodeLabel(v)}</strong>${sub ? `<span class="episode-sub">${escapeHtml(sub)}</span>` : ""}<small>${status}</small></span></button>`;
   }).join("");
-  el("#playlistBody").innerHTML = `<div class="playlist-head"><p>${episodes.length} ตอน</p><button class="btn primary" data-episode-id="${escapeHtml(resume.id)}">▶ ${started ? "ดูต่อ" : "เริ่มดู"} ${episodeLabel(resume)}</button></div><div class="episode-list">${rows}</div>`;
+  el("#playlistBody").innerHTML = `<div class="playlist-head"><p>${episodes.length} ตอน</p><div class="playlist-head-actions">${playlistSaveButton(playlist)}<button class="btn primary" data-episode-id="${escapeHtml(resume.id)}">▶ ${started ? "ดูต่อ" : "เริ่มดู"} ${episodeLabel(resume)}</button></div></div><div class="episode-list">${rows}</div>`;
 }
 
 function neighborEpisode(video, step) {
@@ -961,6 +981,8 @@ function initVideos() {
   }));
   el("#videoPlayerClose").addEventListener("click", closeVideo);
   el("#playlistRow").addEventListener("click", (event) => {
+    const saveBtn = event.target.closest("[data-save-playlist]");
+    if (saveBtn) return togglePlaylistSave(saveBtn.dataset.savePlaylist, saveBtn);
     if (event.target.closest("[data-playlist-more]")) {
       playlistShowAll = true;
       playlistShown = PLAYLIST_PAGE * 2;
@@ -974,6 +996,8 @@ function initVideos() {
   el("#playlistMoreBtn").addEventListener("click", () => { playlistShowAll = true; playlistShown = PLAYLIST_PAGE * 2; renderPlaylistRow(); });
   initVideoInfiniteScroll();
   el("#playlistBody").addEventListener("click", (event) => {
+    const saveBtn = event.target.closest("[data-save-playlist]");
+    if (saveBtn) return togglePlaylistSave(saveBtn.dataset.savePlaylist, saveBtn);
     const id = event.target.closest("[data-episode-id]")?.dataset.episodeId;
     const video = id && state.videos.find((v) => v.id === id);
     if (video) openVideo(video);

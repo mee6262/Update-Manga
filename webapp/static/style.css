@@ -1031,5 +1031,8 @@ button, .nav-item, .home-tab, .video-tab, .continue-tile { -webkit-user-select: 
 .admin-only.searching .subview > :not(ul) { display: none; }
 .playlist-row { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
 .playlist-row::-webkit-scrollbar { display: none; }
-.playlist-row .playlist-card { flex: 0 0 160px; scroll-snap-align: start; }
+.playlist-row > * { flex: 0 0 160px; scroll-snap-align: start; }
 .playlist-more { display: grid; place-items: center; color: var(--accent); font-weight: 600; text-align: center; min-height: 140px; }
+.playlist-head-actions { display: flex; gap: 8px; align-items: center; }
+.playlist-head-actions .video-save-btn { align-self: auto; }
+.playlist-head { flex-wrap: wrap; }
