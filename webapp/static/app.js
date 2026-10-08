@@ -165,10 +165,17 @@ function videoItemHtml(video, card) {
 
 function videosForTab() {
   const byDesc = (key) => (a, b) => String(b[key] || "").localeCompare(String(a[key] || ""));
-  if (videoTab === "saved") return state.videos.filter((v) => v.saved_at).sort(byDesc("saved_at"));
+  const inCategory = (v) => !videoCategoryFilter || videoCategoryOf(v) === videoCategoryFilter;
+  if (videoTab === "saved") return state.videos.filter((v) => v.saved_at && inCategory(v)).sort(byDesc("saved_at"));
   if (videoTab === "history") return state.videos.filter((v) => v.watched_at).sort(byDesc("watched_at"));
   // ตอนของ playlist ไม่ขึ้นในหน้าหลัก (หลายร้อยตอนจะท่วม) — เข้าดูผ่านการ์ด playlist แทน
-  return state.videos.filter((v) => !v.playlist_id && (!videoCategoryFilter || v.category_id === videoCategoryFilter));
+  return state.videos.filter((v) => !v.playlist_id && inCategory(v));
+}
+
+// ตอนใน playlist ไม่มีหมวดของตัวเอง ใช้หมวดของ playlist
+function videoCategoryOf(video) {
+  if (!video.playlist_id) return video.category_id;
+  return (state.videoPlaylists || []).find((p) => p.id === video.playlist_id)?.category_id || null;
 }
 
 const VIDEO_EMPTY_TEXT = {
@@ -213,7 +220,54 @@ async function loadVideos() {
 // ---------- Playlist (เรื่องยาวหลายตอน) ----------
 let openPlaylistId = null;
 let playlistShowAll = false;
-const PLAYLIST_PREVIEW = 6; // หน้า "ทั้งหมด" โชว์แค่นี้ก่อน กดดูทั้งหมด / เลือกหมวดแล้วโชว์ครบ
+const PLAYLIST_PREVIEW = 6; // หน้า "ทั้งหมด" โชว์แค่นี้ก่อน กด "ดูทั้งหมด" / เลือกหมวด แล้วค่อยเลื่อนโหลดเพิ่ม
+const PLAYLIST_PAGE = 12;
+let playlistShown = PLAYLIST_PAGE;
+
+function visiblePlaylists() {
+  return videoTab === "home" ? (state.videoPlaylists || []).filter((p) => !videoCategoryFilter || p.category_id === videoCategoryFilter) : [];
+}
+
+function playlistPreviewOnly(lists) {
+  return !videoCategoryFilter && !playlistShowAll && lists.length > PLAYLIST_PREVIEW;
+}
+
+// เลื่อนใกล้ท้ายหน้า: เติมการ์ดเรื่องก่อนจนครบ แล้วค่อยเติมคลิป (แบบหน้า Reels ของ Facebook)
+function loadMoreVideoCards() {
+  if (state.tab !== "videos") return false;
+  const lists = visiblePlaylists();
+  if (!playlistPreviewOnly(lists) && playlistShown < lists.length) {
+    playlistShown += PLAYLIST_PAGE;
+    renderPlaylistRow();
+    return true;
+  }
+  if (videoShown < videosForTab().length) {
+    videoShown += VIDEO_PAGE_SIZE;
+    renderVideos();
+    return true;
+  }
+  return false;
+}
+
+function resetVideoPaging() {
+  videoShown = VIDEO_PAGE_SIZE;
+  playlistShown = PLAYLIST_PAGE;
+  playlistShowAll = false;
+}
+
+function initVideoInfiniteScroll() {
+  const sentinel = el("#videoSentinel");
+  const near = () => {
+    const rect = sentinel.getBoundingClientRect();
+    return rect.height >= 0 && rect.top < window.innerHeight + 800 && !el("#videosView").hidden && sentinel.offsetParent;
+  };
+  // เติมแล้วท้ายหน้ายังอยู่ในจอ (จอสูง/การ์ดน้อย) เติมต่อจนล้นจอ
+  const fill = () => { for (let i = 0; i < 20 && near() && loadMoreVideoCards(); i++); };
+  if ("IntersectionObserver" in window) {
+    new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) fill(); }, { rootMargin: "0px 0px 800px 0px" }).observe(sentinel);
+  }
+  window.addEventListener("scroll", () => { if (near()) fill(); }, { passive: true });
+}
 
 function playlistEpisodes(playlistId) {
   return state.videos.filter((v) => v.playlist_id === playlistId).sort((a, b) => (a.episode || 0) - (b.episode || 0));
@@ -239,12 +293,12 @@ function playlistResume(episodes) {
 }
 
 function renderPlaylistRow() {
-  const lists = videoTab === "home" ? (state.videoPlaylists || []).filter((p) => !videoCategoryFilter || p.category_id === videoCategoryFilter) : [];
+  const lists = visiblePlaylists();
   el("#playlistSection").hidden = !lists.length;
-  const limited = !videoCategoryFilter && !playlistShowAll && lists.length > PLAYLIST_PREVIEW;
+  const limited = playlistPreviewOnly(lists);
   el("#playlistMoreBtn").hidden = !limited;
   el("#playlistMoreBtn").textContent = `ดูทั้งหมด ${lists.length} เรื่อง`;
-  el("#playlistRow").innerHTML = (limited ? lists.slice(0, PLAYLIST_PREVIEW) : lists).map((p) => {
+  el("#playlistRow").innerHTML = lists.slice(0, limited ? PLAYLIST_PREVIEW : playlistShown).map((p) => {
     const image = p.thumbnail_url
       ? `<img class="video-thumb" src="${escapeHtml(p.thumbnail_url)}" alt="" loading="lazy" />`
       : '<span class="video-placeholder" aria-hidden="true">▶</span>';
@@ -894,12 +948,12 @@ function initVideos() {
     const chip = event.target.closest("[data-video-category]");
     if (!chip) return;
     videoCategoryFilter = chip.dataset.videoCategory || null;
-    videoShown = VIDEO_PAGE_SIZE;
+    resetVideoPaging();
     renderVideos();
   });
   els("[data-video-tab]").forEach((button) => button.addEventListener("click", () => {
     videoTab = button.dataset.videoTab;
-    videoShown = VIDEO_PAGE_SIZE;
+    resetVideoPaging();
     renderVideos();
     window.scrollTo(0, 0);
   }));
@@ -909,7 +963,8 @@ function initVideos() {
     if (card) openPlaylist(card.dataset.playlistId);
   });
   el("#playlistClose").addEventListener("click", closePlaylist);
-  el("#playlistMoreBtn").addEventListener("click", () => { playlistShowAll = true; renderPlaylistRow(); });
+  el("#playlistMoreBtn").addEventListener("click", () => { playlistShowAll = true; playlistShown = PLAYLIST_PAGE * 2; renderPlaylistRow(); });
+  initVideoInfiniteScroll();
   el("#playlistBody").addEventListener("click", (event) => {
     const id = event.target.closest("[data-episode-id]")?.dataset.episodeId;
     const video = id && state.videos.find((v) => v.id === id);
@@ -3045,7 +3100,7 @@ let videoCategoryFilter = null;
 function renderVideoCategoryChips() {
   const cats = state.videoCategories || [];
   const box = el("#videoCategoryChips");
-  box.hidden = !cats.length || videoTab !== "home";
+  box.hidden = !cats.length || videoTab === "history";
   if (videoCategoryFilter && !cats.some((c) => c.id === videoCategoryFilter)) videoCategoryFilter = null;
   box.innerHTML = [{ id: "", name: "ทั้งหมด" }, ...cats].map((c) =>
     `<button class="video-chip${(videoCategoryFilter || "") === c.id ? " active" : ""}" data-video-category="${escapeHtml(c.id)}">${escapeHtml(c.name)}</button>`).join("");

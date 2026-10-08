@@ -1000,7 +1000,8 @@ button, .nav-item, .home-tab, .video-tab, .continue-tile { -webkit-user-select: 
 .playlist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .playlist-card .video-card-info { padding: 8px 10px; }
 .playlist-card .video-card-meta { margin-top: 3px; }
-#playlistMoreBtn { display: block; margin: 12px auto 0; }
+#playlistMoreBtn:not([hidden]) { display: block; margin: 12px auto 0; }
+#videoSentinel { height: 1px; }
 .playlist-view { background: var(--bg); }
 .playlist-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 16px 16px calc(24px + env(safe-area-inset-bottom)); }
 .playlist-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
