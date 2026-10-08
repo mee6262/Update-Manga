@@ -46,6 +46,21 @@
   }
 }
 
+/* หน้าอ่านมังงะ: โทนมืดเสมอแม้เลือกธีมสว่าง (อ่านสบายตา) — ใช้สีชุดเดียวกับธีมมืด */
+#reader {
+  --bg: #0f1115;
+  --bg-elevated: #171a21;
+  --bg-card: #1c1f28;
+  --border: #2a2e38;
+  --text: #e8e9ec;
+  --text-dim: #9aa0ab;
+  --accent: #4bdd9e;
+  --accent-dark: #2f9e6e;
+  --img-bg: #0a0c10;
+  color-scheme: dark;
+  color: var(--text);
+}
+
 * { box-sizing: border-box; }
 
 body {

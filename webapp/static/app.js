@@ -1699,7 +1699,10 @@ function currentTheme() {
 
 // สีแถบสถานะ/แถบที่อยู่ของมือถือ ให้ตรงกับสีแถบด้านบนของเว็บในธีมที่ใช้อยู่จริง
 function syncThemeColor() {
-  const color = getComputedStyle(document.documentElement).getPropertyValue("--bg-elevated").trim();
+  // หน้าอ่านมังงะเป็นโทนมืดเสมอ — แถบสถานะของเครื่องต้องมืดตามด้วยตอนเปิดหน้าอ่าน
+  const reader = el("#reader");
+  const source = reader && !reader.hidden ? reader : document.documentElement;
+  const color = getComputedStyle(source).getPropertyValue("--bg-elevated").trim();
   els('meta[name="theme-color"]').forEach((m) => m.setAttribute("content", color));
 }
 
@@ -3272,6 +3275,7 @@ async function loadChapter(mangaId, chapterUrl, restoreFraction = null) {
   const topbar = el("#readerTopbar");
   const bottombar = el("#readerBottombar");
   reader.hidden = false;
+  syncThemeColor();
   document.body.style.overflow = "hidden";
   el("#readerPrev").disabled = true;
   el("#readerNext").disabled = true;
@@ -3486,6 +3490,7 @@ async function closeReader() {
   cancelRestore();
   closeComments();
   el("#reader").hidden = true;
+  syncThemeColor();
   prefetchedChapters.clear();
   document.body.style.overflow = "";
   if (readerFromHistory) {
