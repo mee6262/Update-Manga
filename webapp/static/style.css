@@ -1300,6 +1300,10 @@ button, .nav-item, .home-tab, .video-tab, .continue-tile { -webkit-user-select: 
 .install-banner .btn { flex: none; font-size: 0.8rem; padding: 6px 10px; }
 .install-banner-close { flex: none; background: none; border: 0; color: var(--text-dim); font-size: 1rem; padding: 6px; margin: -6px -4px -6px 0; cursor: pointer; }
 .install-sheet-title { margin: 0 0 10px; font-size: 1rem; }
-.install-steps { margin: 0 0 12px; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; font-size: 0.92rem; line-height: 1.5; }
+.install-steps { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 12px; font-size: 0.92rem; line-height: 1.45; }
+.install-steps li { display: flex; align-items: center; gap: 10px; }
+.install-step-num { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); font-weight: 700; font-size: 0.8rem; }
+.install-step-ic { flex: none; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--bg-card); border: 1px solid var(--border); color: #0a84ff; }
+.install-step-word { font-weight: 700; font-size: 0.85rem; color: #0a84ff; }
 .install-sheet-actions { display: flex; gap: 8px; }
 .install-sheet-actions .btn { flex: 1; justify-content: center; }

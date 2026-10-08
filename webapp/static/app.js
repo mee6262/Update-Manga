@@ -3809,10 +3809,20 @@ function renderInstallBanner() {
 
 function showInstallSheet() {
   el("#installSheetTitle").textContent = isIOS ? "เพิ่มไปหน้าจอโฮม (3 ขั้น)" : "เพิ่มไปหน้าจอหลัก (3 ขั้น)";
+  // ไอคอนหน้าตาเดียวกับปุ่มจริงในเบราว์เซอร์ — คนไม่ถนัดหาปุ่มจากรูปง่ายกว่าคำบรรยาย
+  const svg = (d) => `<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  const ICON = {
+    share: svg('<path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/>'),
+    addHome: svg('<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8M8 12h8"/>'),
+    add: '<span class="install-step-word">เพิ่ม</span>',
+    menu: svg('<circle cx="12" cy="5" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="19" r="1.4" fill="currentColor"/>'),
+    install: svg('<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v7M8.5 11.5L12 15l3.5-3.5"/>'),
+  };
   const steps = isIOS
-    ? ["แตะปุ่ม <b>แชร์</b> (สี่เหลี่ยมมีลูกศรขึ้น) ที่แถบล่างของ Safari", "เลื่อนลง เลือก <b>เพิ่มไปยังหน้าจอโฮม</b>", "แตะ <b>เพิ่ม</b> มุมขวาบน แล้วเปิดจากไอคอนใหม่"]
-    : ["แตะเมนู <b>⋮</b> มุมขวาบนของ Chrome", "เลือก <b>เพิ่มลงในหน้าจอหลัก</b> หรือ <b>ติดตั้งแอป</b>", "แตะ <b>เพิ่ม</b> แล้วเปิดจากไอคอนใหม่"];
-  el("#installSheetSteps").innerHTML = steps.map((t) => `<li>${t}</li>`).join("");
+    ? [[ICON.share, "แตะปุ่ม <b>แชร์</b> ที่แถบล่างของ Safari"], [ICON.addHome, "เลื่อนลง เลือก <b>เพิ่มไปยังหน้าจอโฮม</b>"], [ICON.add, "แตะ <b>เพิ่ม</b> มุมขวาบน แล้วเปิดจากไอคอนใหม่"]]
+    : [[ICON.menu, "แตะเมนู <b>⋮</b> มุมขวาบนของ Chrome"], [ICON.install, "เลือก <b>เพิ่มลงในหน้าจอหลัก</b> หรือ <b>ติดตั้งแอป</b>"], [ICON.add, "แตะ <b>เพิ่ม</b> แล้วเปิดจากไอคอนใหม่"]];
+  el("#installSheetSteps").innerHTML = steps.map(([icon, text], i) =>
+    `<li><span class="install-step-num">${i + 1}</span><span class="install-step-ic">${icon}</span><span>${text}</span></li>`).join("");
   el("#installSheetNote").hidden = !isInAppBrowser;
   el("#installSheetNote").textContent = isIOS ? 'เปิดจาก LINE/Facebook อยู่? แตะ ⋯ แล้วเลือก "เปิดใน Safari" ก่อน' : 'เปิดจาก LINE/Facebook อยู่? แตะ ⋮ แล้วเลือก "เปิดในเบราว์เซอร์" ก่อน';
   el("#installSheet").hidden = false;
