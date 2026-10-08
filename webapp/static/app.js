@@ -1523,7 +1523,7 @@ function mangaById(id) {
 function cardHtml(m, extra = "") {
   return `
     <div class="manga-card" data-id="${escapeHtml(m.id)}">
-      ${m.is_new ? '<span class="new-badge">NEW!</span>' : ""}
+      ${m.is_new ? '<span class="new-badge">NEW EP</span>' : ""}
       <img class="manga-cover" src="${proxied(m.cover_url, COVER_WIDTH)}" alt="${escapeHtml(m.name)}" loading="lazy" decoding="async" onerror="this.style.opacity=0" />
       <div class="manga-info">
         <div class="manga-name">${escapeHtml(m.name)}</div>
@@ -1541,14 +1541,16 @@ function renderGrid() {
   const empty = el("#emptyState");
   empty.hidden = state.manga.length > 0 || state.homeMode !== "grid";
 
-  const signature = JSON.stringify(
-    state.manga.map((m) => [m.id, m.is_new, m.latest_chapter, m.cover_url, m.last_checked_at])
+  const signature = JSON.stringify([
+    Math.floor(Date.now() / 600000), // "x ชั่วโมงที่แล้ว" ต้องขยับเองแม้ข้อมูลไม่เปลี่ยน
+    ...state.manga.map((m) => [m.id, m.is_new, m.latest_chapter, m.cover_url, m.last_updated_at])]
   );
   if (signature === lastGridSignature) return;
   lastGridSignature = signature;
 
   grid.innerHTML = state.manga
-    .map((m) => cardHtml(m, `<div class="manga-chapter">${timeAgo(m.last_checked_at)}</div>`))
+    // เวลาที่ตอนล่าสุดออก (last_updated_at เปลี่ยนเฉพาะตอนเจอตอนใหม่จริง) — เวลาเช็คดูได้ในหน้าแอดมิน
+    .map((m) => cardHtml(m, `<div class="manga-chapter">${m.last_updated_at ? timeAgo(m.last_updated_at, "เมื่อสักครู่") : "&nbsp;"}</div>`))
     .join("");
 }
 
