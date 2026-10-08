@@ -2777,7 +2777,7 @@ function openChapterList(manga) {
   el("#chapterListMangaName").textContent = manga.name;
   el("#chapterSearch").value = "";
   chapterRange = null;
-  chapterDesc = false;
+  chapterDesc = chapterSortDesc();
 
   lastChapterRowsSignature = null;
   const cached = chapterListCache.get(manga.id);
@@ -2844,7 +2844,12 @@ async function renderChapterList({ keepScroll = false } = {}) {
 // ---------- หน้าเรื่อง: หัวเรื่อง + ปุ่มอ่านต่อ/ติดตาม + ตารางเลขตอน ----------
 const CHAPTER_RANGE = 100;
 let chapterRange = null; // null = ช่วงที่มีตอนอ่านต่อ (คำนวณตอนวาด)
-let chapterDesc = false;
+// เรียงตอน: ค่าเริ่มต้น "ล่าสุดก่อน" จำต่อเครื่องและใช้กับทุกเรื่อง
+const CHAPTER_SORT_KEY = "chapterSort";
+function chapterSortDesc() {
+  try { return localStorage.getItem(CHAPTER_SORT_KEY) !== "asc"; } catch (e) { return true; }
+}
+let chapterDesc = chapterSortDesc();
 let lastChapterRowsSignature = null;
 
 // ตอนที่จะเปิดเมื่อกด "อ่านต่อ": ค้างกลางตอน = ตอนนั้น, อ่านจบ = ตอนถัดไป, ไม่เคยอ่าน = ตอนแรก
@@ -2929,7 +2934,12 @@ function initChapterListClicks() {
   el("#chapterListBody").addEventListener("click", async (e) => {
     const range = e.target.closest("[data-ch-range]")?.dataset.chRange;
     if (range !== undefined) { chapterRange = Number(range); return renderChapterRows(currentChapters); }
-    if (e.target.closest("[data-ch-sort]")) { chapterDesc = !chapterDesc; chapterRange = null; return renderChapterRows(currentChapters); }
+    if (e.target.closest("[data-ch-sort]")) {
+      chapterDesc = !chapterDesc;
+      try { localStorage.setItem(CHAPTER_SORT_KEY, chapterDesc ? "desc" : "asc"); } catch (err) { /* ไม่จำก็ได้ */ }
+      chapterRange = null;
+      return renderChapterRows(currentChapters);
+    }
     if (e.target.closest("[data-ch-follow]")) {
       if (!state.catalog.length) await loadCatalog();
       const item = state.catalog.find((m) => m.id === currentManga?.id);
