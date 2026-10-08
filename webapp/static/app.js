@@ -375,6 +375,7 @@ function renderEpisodeNav(video) {
   if (nav.hidden) return;
   const episodes = playlistEpisodes(video.playlist_id);
   el("#episodeLabel").textContent = `${episodeLabel(video)} / ${episodes.length}`;
+  renderAutoNext();
   el("#episodePrev").disabled = !neighborEpisode(video, -1);
   el("#episodeNext").disabled = !neighborEpisode(video, 1);
 }
@@ -391,7 +392,23 @@ function playEpisode(video) {
   openVideo(video, { autoplay: true });
 }
 
+// เล่นตอนถัดไปเองเมื่อจบตอน — เปิด/ปิดได้ จำต่อเครื่อง (ค่าเริ่มต้น: เปิด)
+const AUTO_NEXT_KEY = "videoAutoNext";
+function autoNextOn() {
+  try { return localStorage.getItem(AUTO_NEXT_KEY) !== "off"; } catch (e) { return true; }
+}
+
+function renderAutoNext() {
+  const on = autoNextOn();
+  const btn = el("#autoNextBtn");
+  btn.textContent = on ? "⏭ เล่นต่อ: เปิด" : "⏭ เล่นต่อ: ปิด";
+  btn.title = "เล่นตอนถัดไปอัตโนมัติเมื่อจบตอน";
+  btn.classList.toggle("active", on);
+  btn.setAttribute("aria-pressed", String(on));
+}
+
 function playNextEpisode() {
+  if (!autoNextOn()) return;
   const next = neighborEpisode(activeVideo, 1);
   if (next) playEpisode(next);
 }
@@ -1004,6 +1021,10 @@ function initVideos() {
   });
   el("#episodePrev").addEventListener("click", () => playEpisode(neighborEpisode(activeVideo, -1)));
   el("#episodeNext").addEventListener("click", () => playEpisode(neighborEpisode(activeVideo, 1)));
+  el("#autoNextBtn").addEventListener("click", () => {
+    try { localStorage.setItem(AUTO_NEXT_KEY, autoNextOn() ? "off" : "on"); } catch (e) { /* ไม่จำก็ได้ */ }
+    renderAutoNext();
+  });
   window.addEventListener("pagehide", () => { stopVideoClock(); saveActiveVideoProgress(true); });
   window.addEventListener("orientationchange", nudgeViewport);
   document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement) nudgeViewport(); });

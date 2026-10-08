@@ -1036,3 +1036,5 @@ button, .nav-item, .home-tab, .video-tab, .continue-tile { -webkit-user-select: 
 .playlist-head-actions { display: flex; gap: 8px; align-items: center; }
 .playlist-head-actions .video-save-btn { align-self: auto; }
 .playlist-head { flex-wrap: wrap; }
+.episode-mid { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.episode-nav .btn, #autoNextBtn { white-space: nowrap; }
