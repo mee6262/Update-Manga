@@ -3807,8 +3807,10 @@ function renderInstallBanner() {
   el("#installBannerBtn").textContent = direct ? "ติดตั้ง" : "วิธีเพิ่ม";
 }
 
-function showInstallSheet() {
-  el("#installSheetTitle").textContent = isIOS ? "เพิ่มไปหน้าจอโฮม (3 ขั้น)" : "เพิ่มไปหน้าจอหลัก (3 ขั้น)";
+// forPush = เปิดจากปุ่มเปิดแจ้งเตือน (iPhone ต้องเปิดจากไอคอนหน้าจอโฮมก่อนถึงจะรับแจ้งเตือนได้) — เพิ่มขั้นที่ 4
+function showInstallSheet({ forPush = false } = {}) {
+  el("#installSheetTitle").textContent = forPush ? "เปิดแจ้งเตือนบน iPhone (4 ขั้น)"
+    : isIOS ? "เพิ่มไปหน้าจอโฮม (3 ขั้น)" : "เพิ่มไปหน้าจอหลัก (3 ขั้น)";
   // ไอคอนหน้าตาเดียวกับปุ่มจริงในเบราว์เซอร์ — คนไม่ถนัดหาปุ่มจากรูปง่ายกว่าคำบรรยาย
   const svg = (d) => `<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const ICON = {
@@ -3817,14 +3819,20 @@ function showInstallSheet() {
     add: '<span class="install-step-word">เพิ่ม</span>',
     menu: svg('<circle cx="12" cy="5" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="19" r="1.4" fill="currentColor"/>'),
     install: svg('<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v7M8.5 11.5L12 15l3.5-3.5"/>'),
+    bell: svg('<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>'),
   };
   const steps = isIOS
     ? [[ICON.share, "แตะปุ่ม <b>แชร์</b> ที่แถบล่างของ Safari"], [ICON.addHome, "เลื่อนลง เลือก <b>เพิ่มไปยังหน้าจอโฮม</b>"], [ICON.add, "แตะ <b>เพิ่ม</b> มุมขวาบน แล้วเปิดจากไอคอนใหม่"]]
     : [[ICON.menu, "แตะเมนู <b>⋮</b> มุมขวาบนของ Chrome"], [ICON.install, "เลือก <b>เพิ่มลงในหน้าจอหลัก</b> หรือ <b>ติดตั้งแอป</b>"], [ICON.add, "แตะ <b>เพิ่ม</b> แล้วเปิดจากไอคอนใหม่"]];
+  if (forPush) steps[2] = [ICON.add, "แตะ <b>เพิ่ม</b> มุมขวาบน"], steps.push([ICON.bell, "เปิดเว็บจาก<b>ไอคอนใหม่</b> แล้วแตะกระดิ่ง → <b>เปิด</b>"]);
+  el("#installSheetNever").hidden = forPush; // "ไม่ต้องเตือนอีก" ใช้กับแถบแนะนำเท่านั้น
   el("#installSheetSteps").innerHTML = steps.map(([icon, text], i) =>
     `<li><span class="install-step-num">${i + 1}</span><span class="install-step-ic">${icon}</span><span>${text}</span></li>`).join("");
-  el("#installSheetNote").hidden = !isInAppBrowser;
-  el("#installSheetNote").textContent = isIOS ? 'เปิดจาก LINE/Facebook อยู่? แตะ ⋯ แล้วเลือก "เปิดใน Safari" ก่อน' : 'เปิดจาก LINE/Facebook อยู่? แตะ ⋮ แล้วเลือก "เปิดในเบราว์เซอร์" ก่อน';
+  const notes = [];
+  if (isInAppBrowser) notes.push(isIOS ? 'เปิดจาก LINE/Facebook อยู่? แตะ ⋯ แล้วเลือก "เปิดใน Safari" ก่อน' : 'เปิดจาก LINE/Facebook อยู่? แตะ ⋮ แล้วเลือก "เปิดในเบราว์เซอร์" ก่อน');
+  if (forPush) notes.push("ต้องเป็น iOS 16.4 ขึ้นไป");
+  el("#installSheetNote").hidden = !notes.length;
+  el("#installSheetNote").textContent = notes.join(" · ");
   el("#installSheet").hidden = false;
 }
 
@@ -3900,11 +3908,10 @@ function postJSON(url, body) {
 
 async function togglePush() {
   if (!pushSupported) {
-    alert(
-      isIOS && !isStandalone
-        ? "iPhone/iPad รับแจ้งเตือนได้เฉพาะตอนเปิดจากไอคอนบนหน้าจอโฮม\n\n1. กดปุ่มแชร์ (สี่เหลี่ยมมีลูกศรขึ้น)\n2. เลือก \"เพิ่มไปยังหน้าจอโฮม\"\n3. เปิดเว็บจากไอคอนนั้น แล้วกดกระดิ่ง → \"เปิด\"\n\n(ต้องเป็น iOS 16.4 ขึ้นไป)"
-        : "เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน ลองเปิดด้วย Chrome หรือ Safari เวอร์ชันล่าสุด"
-    );
+    if (isIOS && !isStandalone) {
+      toggleNotifPanel(false);
+      showInstallSheet({ forPush: true });
+    } else alert("เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน ลองเปิดด้วย Chrome หรือ Safari เวอร์ชันล่าสุด");
     return;
   }
   const btn = el("#pushCardBtn");
