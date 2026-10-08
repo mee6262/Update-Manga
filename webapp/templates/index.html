@@ -110,13 +110,24 @@
     <section id="videosView" class="view">
       <div class="video-tabs" role="tablist">
         <button class="video-tab active" data-video-tab="home">หน้าหลัก</button>
-        <button class="video-tab" data-video-tab="saved">คลังวิดีโอ</button>
-        <button class="video-tab" data-video-tab="history">ประวัติการดู</button>
+        <button class="video-tab" data-video-tab="library">คลังของฉัน</button>
+      </div>
+      <div id="librarySeg" class="seg" hidden>
+        <button data-video-tab="saved">บันทึกไว้</button>
+        <button data-video-tab="history">ประวัติการดู</button>
       </div>
       <div id="videoCategoryChips" class="video-chips" hidden></div>
       <div id="videoToolbar" class="video-toolbar">
         <p>คลิป Facebook ที่สมาชิกเพิ่มไว้</p>
         <button id="addVideoBtn" class="btn primary">+ เพิ่มคลิป</button>
+      </div>
+      <div id="videoHome" hidden></div>
+      <div id="libraryView" hidden>
+        <div class="library-tools">
+          <input type="search" id="historySearch" placeholder="ค้นหาในประวัติการดู" autocomplete="off" />
+          <button id="libraryEditBtn" class="btn">แก้ไข</button>
+        </div>
+        <div id="libraryBody"></div>
       </div>
       <div id="playlistSection" class="playlist-section" hidden>
         <h2 id="playlistSectionTitle" class="section-title">เรื่องยาว (Playlist)</h2>
@@ -341,8 +352,11 @@
   </div>
 
   <div id="videoPlayer" class="reader video-player" hidden>
-    <div class="reader-topbar"><button id="videoPlayerClose" class="btn">✕ ปิด</button><div class="reader-title"><span id="videoPlayerTitle"></span></div><button id="videoCommentsBtn" class="icon-btn comment-btn" title="ความคิดเห็นของคลิปนี้">💬<span id="videoCommentCount" class="comment-count"></span></button><button id="videoDeleteBtn" class="btn danger" hidden>🗑 ลบคลิป</button></div>
+    <div class="reader-topbar"><button id="videoPlayerClose" class="btn" aria-label="ปิด" title="ปิด">✕</button><button id="videoMinBtn" class="btn" aria-label="ย่อจอ" title="ย่อจอ: เล่นต่อขณะเลือกเรื่องอื่น">⌄</button><div class="reader-title"><span id="videoPlayerTitle"></span></div><button id="videoCommentsBtn" class="icon-btn comment-btn" title="ความคิดเห็นของคลิปนี้">💬<span id="videoCommentCount" class="comment-count"></span></button><button id="videoDeleteBtn" class="btn danger" aria-label="ลบคลิป" title="ลบคลิป" hidden>🗑</button></div>
     <div id="videoPlayerBody" class="video-player-body"><div class="reader-msg">กำลังโหลด...</div></div>
+    <div id="nextOverlay" class="next-overlay" hidden><div id="nextOverlayText"></div><div class="next-overlay-actions"><button id="nextCancelBtn" class="btn">ยกเลิก</button><button id="nextNowBtn" class="btn primary">เล่นเลย</button></div></div>
+    <div id="playerEpisodes" class="player-episodes" hidden></div>
+    <div id="miniBar" class="mini-bar" hidden><button id="miniExpand" class="mini-title"></button><button id="miniPlay" class="icon-btn" aria-label="เล่น/หยุด">⏯</button><button id="miniClose" class="icon-btn" aria-label="ปิด">✕</button></div>
     <div id="episodeNav" class="episode-nav" hidden><button id="episodePrev" class="btn">‹ ตอนก่อน</button><span class="episode-mid"><span id="episodeLabel"></span><button id="autoNextBtn" class="video-quality-btn" aria-pressed="true"></button></span><button id="episodeNext" class="btn">ตอนถัดไป ›</button></div>
   </div>
 
