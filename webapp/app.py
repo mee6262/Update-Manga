@@ -797,9 +797,22 @@ def public_manga(manga: dict) -> dict:
     return {k: v for k, v in manga.items() if k != "chapters"}
 
 
+def unread_count(manga: dict, entry: dict | None) -> int:
+    """จำนวนตอน (นับเลขตอนไม่ซ้ำ) ที่ใหม่กว่าตอนเลขสูงสุดที่อ่านแล้ว — ป้าย "+N" บนหน้าหลัก; ไม่เคยอ่าน = 0"""
+    def num(k):
+        return isinstance(k, (int, float)) and not isinstance(k, bool)
+    read_nums = [k for k in (entry or {}).get("read_keys") or [] if num(k)]
+    if not read_nums:
+        return 0
+    top = max(read_nums)
+    keys = (_chapter_key(c.get("text")) for c in manga.get("chapters") or [])
+    return len({k for k in keys if num(k) and k > top})
+
+
 def serialize(manga: dict, read_state: dict) -> dict:
     out = public_manga(manga)
     out["is_new"] = is_new(manga, read_state)
+    out["unread_count"] = unread_count(manga, read_state.get(manga["id"]))
     return out
 
 
@@ -2835,7 +2848,11 @@ def reading_history():
         if not manga or not read_keys:
             continue
         last_key = read_keys[-1]
-        chapter = next((c for c in manga.get("chapters") or [] if _chapter_key(c["text"]) == last_key), None)
+        chapters = manga.get("chapters") or []
+        idx = next((i for i, c in enumerate(chapters) if _chapter_key(c["text"]) == last_key), None)
+        chapter = chapters[idx] if idx is not None else None
+        # ตอนถัดไป (รายชื่อเรียงใหม่→เก่า = ตัวก่อนหน้าในลิสต์) ให้ปุ่ม "ต.ถัดไป ›" ในประวัติการอ่าน
+        nxt = next((c for c in reversed(chapters[:idx]) if _chapter_key(c["text"]) != last_key), None) if idx else None
         if not chapter:
             # ตอนที่อ่านไม่อยู่ในรายชื่อแล้ว (เช่นเว็บลบ/เปลี่ยนลิงก์) ยังแสดงเรื่องได้ แต่อ่านต่อจากลิงก์เดิมไม่ได้
             text = f"ตอนที่ {last_key:g}" if isinstance(last_key, float) else None
@@ -2854,6 +2871,9 @@ def reading_history():
             "fraction": scroll.get("fraction") if scroll.get("key") == last_key else None,
             "last_read_at": entry.get("last_read_at"),
             "is_new": is_new(manga, read_state),
+            "unread_count": unread_count(manga, entry),
+            "next_chapter_text": nxt["text"] if nxt else None,
+            "next_chapter_url": nxt["url"] if nxt else None,
         })
     items.sort(key=lambda i: i["last_read_at"] or "", reverse=True)
     return jsonify({"items": items})
@@ -2870,7 +2890,8 @@ def list_chapters(manga_id):
     chapters = manga.get("chapters") or []
     keys = [_chapter_key(c["text"]) for c in chapters]
     is_read = ReadChecker(entry)
-    items = [{**c, "is_read": is_read(k)} for c, k in zip(chapters, keys)]
+    # num = เลขตอน (ช่องตารางเลขตอนในหน้าเรื่อง) ตอนพิเศษที่ไม่มีเลข = None
+    items = [{**c, "is_read": is_read(k), "num": k if isinstance(k, float) else None} for c, k in zip(chapters, keys)]
     url_by_key = {}
     for c, k in zip(chapters, keys):
         url_by_key.setdefault(k, c["url"])

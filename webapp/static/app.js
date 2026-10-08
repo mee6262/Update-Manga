@@ -295,8 +295,8 @@ function heroHtml(p) {
     </div></div>`;
 }
 
-function homeRowHtml(title, tiles, more = "") {
-  return `<section class="mm-section"><div class="mm-row-head"><h2 class="section-title">${title}</h2>${more}</div><div class="mm-row">${tiles}</div></section>`;
+function homeRowHtml(title, tiles, more = "", rowClass = "mm-row") {
+  return `<section class="mm-section"><div class="mm-row-head"><h2 class="section-title">${title}</h2>${more}</div><div class="${rowClass}">${tiles}</div></section>`;
 }
 
 // การ์ดเล็กของคลิป/ตอน ในแถวหน้าหลัก
@@ -1541,6 +1541,8 @@ function setHomeMode(mode) {
   el("#mangaGrid").hidden = mode !== "grid";
   el("#emptyState").hidden = mode !== "grid" || state.manga.length > 0;
   el("#historyView").hidden = mode !== "history";
+  el("#followHead").hidden = mode !== "grid" || !state.manga.length;
+  renderMangaHome();
   renderContinue();
   if (mode === "history") {
     renderHistory();
@@ -1555,8 +1557,25 @@ function initHomeTabs() {
     if (!row) return;
     const item = state.history.find((h) => h.id === row.dataset.id);
     if (!item) return;
-    if (e.target.closest('[data-action="resume"]')) resumeReading(item);
-    else openChapterList(item);
+    const act = e.target.closest("[data-action]")?.dataset.action;
+    if (act) runHistoryAction(item, act);
+    else openChapterList(mangaById(item.id) || item);
+  });
+  el("#readHistorySearch").addEventListener("input", debounce(renderHistory, 150));
+  try { el("#followSort").value = localStorage.getItem("followSort") || "updated"; } catch (e) { /* ค่าเริ่มต้น */ }
+  el("#followSort").addEventListener("change", () => {
+    try { localStorage.setItem("followSort", el("#followSort").value); } catch (e) { /* ไม่จำก็ได้ */ }
+    renderGrid();
+  });
+  el("#mangaHome").addEventListener("click", (e) => {
+    const card = e.target.closest("[data-id]");
+    if (!card) return;
+    const id = card.dataset.id;
+    const h = state.history.find((x) => x.id === id);
+    const heroAct = e.target.closest("[data-hero-action]")?.dataset.heroAction;
+    if (heroAct && heroAct !== "open" && h) return runHistoryAction(h, heroAct);
+    if (card.classList.contains("reading") && h) return resumeReading(h);
+    openChapterList(mangaById(id) || h);
   });
 }
 
@@ -1564,6 +1583,7 @@ async function loadHistory() {
   try {
     state.history = (await getJSON("/api/history")).items;
     renderHistory();
+    renderMangaHome();
     renderContinue();
   } catch (e) {
     // ใช้ของเดิมต่อ
@@ -1581,27 +1601,34 @@ function readAgo(iso) {
   return `อ่านล่าสุด ${new Date(iso).toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "numeric" })}`;
 }
 
+// ประวัติการอ่าน: แถวละเรื่อง แบ่งตามวัน — ปุ่มขวา อ่านต่อ / ต.ถัดไป › / ✓ (ทันตอนล่าสุด)
 function renderHistory() {
-  const items = withoutSpecial(state.history);
-  const unread = items.filter((h) => h.is_new).length;
-  el("#historyStats").innerHTML = items.length
-    ? `<span class="history-count">${items.length} เรื่อง</span><span class="history-unread">${unread} เรื่องที่มีตอนใหม่ยังไม่อ่าน</span>`
-    : "";
+  const q = el("#readHistorySearch").value.trim().toLowerCase();
+  const all = withoutSpecial(state.history);
+  const items = q ? all.filter((h) => h.name.toLowerCase().includes(q)) : all;
   el("#historyEmpty").hidden = items.length > 0;
-  el("#historyList").innerHTML = items
-    .map(
-      (h) => `
-      <li class="history-row" data-id="${escapeHtml(h.id)}">
+  el("#historyEmpty").textContent = q ? "ไม่พบในประวัติการอ่าน" : "ยังไม่มีประวัติการอ่าน เปิดอ่านเรื่องไหนก็ตามจะขึ้นที่นี่";
+  let label = "";
+  el("#historyList").innerHTML = items.map((h) => {
+    const day = h.last_read_at ? historyDayLabel(h.last_read_at) : "เก่ากว่านั้น";
+    const head = day !== label ? `<li class="hist-day">${day}</li>` : "";
+    label = day;
+    const action = historyAction(h);
+    const reading = action && action.kind === "resume";
+    const meta = reading ? `${h.chapter_text || ""} · ค้าง ${Math.round(h.fraction * 100)}%`
+      : action ? `จบ ${h.chapter_text || ""}` : `${h.chapter_text || ""}${h.chapter_url ? " · ล่าสุดแล้ว" : ""}`;
+    const button = reading ? '<button class="btn hist-action" data-action="resume">อ่านต่อ</button>'
+      : action ? `<button class="btn hist-action" data-action="next">${escapeHtml(shortChapter(h.next_chapter_text) || "ถัดไป")} ›</button>`
+      : h.chapter_url ? '<span class="hist-done" aria-label="ทันตอนล่าสุดแล้ว">✓</span>' : "";
+    return `${head}<li class="history-row" data-id="${escapeHtml(h.id)}">
         <img class="history-cover" src="${proxied(h.cover_url, COVER_WIDTH)}" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0" />
         <div class="history-info">
-          <div class="history-name">${h.is_new ? '<span class="badge-up" title="มีตอนใหม่ที่ยังไม่อ่าน">ใหม่</span>' : ""}<span>${escapeHtml(h.name)}</span></div>
-          <div class="history-chapter">${escapeHtml(h.chapter_text || "")}${h.fraction ? ` · ค้างไว้ ${Math.round(h.fraction * 100)}%` : ""}</div>
-          <div class="history-time">${readAgo(h.last_read_at)}</div>
-        </div>
-        <button class="btn resume-btn" data-action="resume"${h.chapter_url ? "" : " disabled"}>อ่านต่อ</button>
-      </li>`
-    )
-    .join("");
+          <div class="history-name">${h.is_new ? `<span class="badge-up" title="มีตอนใหม่ที่ยังไม่อ่าน">${h.unread_count > 0 ? `+${h.unread_count}` : "ใหม่"}</span>` : ""}<span>${escapeHtml(h.name)}</span></div>
+          <div class="history-chapter">${escapeHtml(meta)}</div>
+          ${reading ? `<span class="lib-bar"><span style="width:${(h.fraction * 100).toFixed(1)}%"></span></span>` : ""}
+        </div>${button}
+      </li>`;
+  }).join("");
 }
 
 // เปิดตอนที่อ่านล่าสุดตรง ๆ และเลื่อนไปจุดที่อ่านค้างไว้ (ใช้กลไกกู้ตำแหน่งเดียวกับหน้าเลือกตอน)
@@ -1625,11 +1652,13 @@ function resumeReading(item) {
 
 // ---------- หมวดหมู่ในหน้า "ทั้งหมด" ----------
 state.categories = BOOT.categories || [];
-state.catalogMode = "all"; // "all" = เรื่องทั้งหมด, "category" = กรองตามหมวด
+// activeCategory: null = "ทั้งหมด" (แถวตามหัวข้อ + ตารางทุกเรื่อง), "__none" = อื่น ๆ (ไม่มีหมวด), อื่น ๆ = id หมวด
+const NO_CATEGORY = "__none";
 state.activeCategory = null;
+state.catalogFollow = "all"; // ตัวกรองตาราง: all / yes (ติดตามอยู่) / no (ยังไม่ติดตาม)
 
 function updateCategoryBar() {
-  const show = state.tab === "catalog" && state.catalogMode === "category";
+  const show = state.tab === "catalog";
   el("#categoryBar").hidden = !show;
   if (!show) setCategoryPanel(false);
 }
@@ -1745,17 +1774,20 @@ function initPrefs() {
   });
 }
 
+// เรื่องที่ไม่มีหมวด — มีชิป/แถว "อื่น ๆ" เฉพาะเมื่อบางเรื่องมีหมวดแล้ว (ไม่มีหมวดเลยทั้งระบบ = ซ้ำกับ "ทุกเรื่อง")
+function uncategorized() {
+  const visible = catalogVisible();
+  const none = visible.filter((m) => !(m.categories || []).length);
+  return none.length && none.length < visible.length ? none : [];
+}
+
 function renderCategoryChips() {
   const cats = visibleCategories();
-  if (!cats.some((c) => c.id === state.activeCategory)) state.activeCategory = cats[0] ? cats[0].id : null;
-  const html = cats.length
-    ? cats
-        .map(
-          (c) =>
-            `<button class="chip${c.id === state.activeCategory ? " active" : ""}" data-cat="${escapeHtml(c.id)}" role="tab">${escapeHtml(c.name)}</button>`
-        )
-        .join("")
-    : `<span class="chip-empty">ยังไม่มีหมวดหมู่${state.currentUser.is_admin ? " — เพิ่มได้ที่ ตั้งค่า → หมวดหมู่" : ""}</span>`;
+  if (state.activeCategory && state.activeCategory !== NO_CATEGORY && !cats.some((c) => c.id === state.activeCategory)) state.activeCategory = null;
+  const chips = [{ id: "", name: "ทั้งหมด" }, ...cats, ...(uncategorized().length ? [{ id: NO_CATEGORY, name: "อื่น ๆ" }] : [])];
+  const html = chips
+    .map((c) => `<button class="chip${c.id === (state.activeCategory || "") ? " active" : ""}" data-cat="${escapeHtml(c.id)}" role="tab">${escapeHtml(c.name)}</button>`)
+    .join("");
   el("#categoryChips").innerHTML = html;
   el("#categoryPanel").innerHTML = html;
   el("#categoryExpand").hidden = cats.length === 0;
@@ -1770,19 +1802,11 @@ function setCategoryPanel(open) {
 }
 
 function initCatalogModes() {
-  els(".seg-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      state.catalogMode = btn.dataset.catmode;
-      els(".seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
-      renderCategoryChips();
-      updateCategoryBar();
-      renderCatalog(filterCatalog());
-    });
-  });
   const pick = (e) => {
     const chip = e.target.closest(".chip[data-cat]");
     if (!chip) return;
-    state.activeCategory = chip.dataset.cat;
+    state.activeCategory = chip.dataset.cat || null;
+    state.catalogFollow = "all";
     setCategoryPanel(false);
     renderCategoryChips();
     renderCatalog(filterCatalog());
@@ -1970,17 +1994,99 @@ function renderGrid() {
   const empty = el("#emptyState");
   empty.hidden = state.manga.length > 0 || state.homeMode !== "grid";
 
+  el("#followHead").hidden = state.homeMode !== "grid" || !state.manga.length;
+  el("#followTitle").textContent = `ติดตาม · ${state.manga.length}`;
+  renderMangaHome();
+  const sort = el("#followSort").value;
   const signature = JSON.stringify([
+    sort,
     Math.floor(Date.now() / 600000), // "x ชั่วโมงที่แล้ว" ต้องขยับเองแม้ข้อมูลไม่เปลี่ยน
-    ...state.manga.map((m) => [m.id, m.is_new, m.latest_chapter, m.cover_url, m.last_updated_at])]
+    ...state.manga.map((m) => [m.id, m.is_new, m.latest_chapter, m.cover_url, mangaDate(m)])]
   );
   if (signature === lastGridSignature) return;
   lastGridSignature = signature;
 
-  grid.innerHTML = state.manga
-    // เวลาที่ตอนล่าสุดออก (last_updated_at เปลี่ยนเฉพาะตอนเจอตอนใหม่จริง) — เวลาเช็คดูได้ในหน้าแอดมิน
-    .map((m) => cardHtml(m, `<div class="manga-chapter">${m.last_updated_at ? timeAgo(m.last_updated_at, "เมื่อสักครู่") : "&nbsp;"}</div>`))
+  const items = [...state.manga];
+  if (sort === "name") items.sort((a, b) => a.name.localeCompare(b.name, "th"));
+  else items.sort((a, b) => String(mangaDate(b) || "").localeCompare(String(mangaDate(a) || "")));
+  grid.innerHTML = items
+    // เวลาที่ตอนล่าสุดออก — เวลาเช็คดูได้ในหน้าแอดมิน
+    .map((m) => cardHtml(m, `<div class="manga-chapter">${mangaDate(m) ? timeAgo(mangaDate(m), "เมื่อสักครู่") : "&nbsp;"}</div>`))
     .join("");
+}
+
+// เวลาที่ตอนล่าสุดออก: วันที่จากเว็บต้นทางก่อน ไม่มีค่อยใช้เวลาที่ระบบเจอตอนใหม่
+function mangaDate(m) {
+  return m.latest_chapter_date || m.last_updated_at || null;
+}
+
+// "ตอนที่ 175" → "ต.175" (ไม่มีเลข = ข้อความเดิม)
+function shortChapter(text) {
+  const n = String(text || "").match(/(\d+(?:\.\d+)?)/);
+  return n ? `ต.${n[1]}` : String(text || "");
+}
+
+// การ์ดปกแนวตั้งในแถวเลื่อนข้าง (หน้าหลัก/ทั้งหมด)
+function coverRowTileHtml(m, { meta = "", badge = "", bar = 0, follow = false } = {}) {
+  return `<div class="cover-tile mm-ctile" data-id="${escapeHtml(m.id)}"><span class="mm-cthumb"><img src="${proxied(m.cover_url, COVER_WIDTH)}" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0" />${badge}${follow ? followDotHtml(m) : ""}${bar ? `<span class="video-progress"><span style="width:${Math.min(100, Math.max(3, bar * 100)).toFixed(1)}%"></span></span>` : ""}</span>
+    <div class="cover-tile-name">${escapeHtml(m.name)}</div>${meta ? `<div class="mm-meta">${escapeHtml(meta)}</div>` : ""}</div>`;
+}
+
+function followDotHtml(m) {
+  return `<button class="follow-dot${m.is_subscribed ? " on" : ""}" data-action="toggle-follow" aria-label="${m.is_subscribed ? "เลิกติดตาม" : "ติดตาม"}">${m.is_subscribed ? "✓" : "+"}</button>`;
+}
+
+// ปุ่มหลักของเรื่องจากประวัติ: ค้างกลางตอน = อ่านต่อ, อ่านจบตอน = ตอนถัดไป, ทันตอนล่าสุด = ไม่มี
+function historyAction(h) {
+  if (!h || !h.chapter_url) return null;
+  if (h.fraction > 0 && h.fraction < 0.95) return { kind: "resume", label: `อ่านต่อ ${h.chapter_text || ""}`.trim() };
+  if (h.next_chapter_url) return { kind: "next", label: `อ่าน ${h.next_chapter_text || "ตอนถัดไป"}` };
+  return null;
+}
+
+function runHistoryAction(h, kind) {
+  if (kind === "resume") return resumeReading(h);
+  if (kind === "next" && h.next_chapter_url) return resumeReading({ ...h, chapter_url: h.next_chapter_url, chapter_text: h.next_chapter_text, fraction: null });
+}
+
+// ---------- หน้าหลักมังงะ: การ์ดอ่านต่อ + มีตอนใหม่ + อ่านค้างไว้ ----------
+function renderMangaHome() {
+  const box = el("#mangaHome");
+  box.hidden = state.homeMode !== "grid";
+  if (box.hidden) return;
+  const byDate = (a, b) => String(mangaDate(b) || "").localeCompare(String(mangaDate(a) || ""));
+  const fresh = state.manga.filter((m) => m.is_new).sort(byDate);
+  const history = withoutSpecial(state.history);
+  const reading = history.filter((h) => h.chapter_url && h.fraction > 0 && h.fraction < 0.95).slice(0, 12);
+  const parts = [];
+  // การ์ดอ่านต่อ: เรื่องที่กำลังตามอ่านและมีตอนใหม่ → เรื่องที่อ่านค้างกลางตอน → เรื่องที่มีตอนใหม่ → อ่านล่าสุด
+  const pick = fresh.find((m) => history.some((h) => h.id === m.id)) || reading[0] || fresh[0] || history[0];
+  const heroManga = pick && (mangaById(pick.id) || pick);
+  if (heroManga) {
+    const h = history.find((x) => x.id === heroManga.id);
+    const action = historyAction(h);
+    const date = mangaDate(heroManga);
+    const meta = heroManga.is_new
+      ? `${heroManga.latest_chapter || "ตอนใหม่"} มาแล้ว${date ? ` · ${timeAgo(date, "เมื่อสักครู่")}` : ""}`
+      : h ? `${h.chapter_text || ""} · ${readAgo(h.last_read_at)}` : "";
+    parts.push(`<div class="mh-hero" data-id="${escapeHtml(heroManga.id)}">
+      <span class="mh-cover"><img src="${proxied(heroManga.cover_url, COVER_WIDTH)}" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0" />${heroManga.is_new ? '<span class="new-badge">NEW EP</span>' : ""}</span>
+      <span class="mh-info"><span class="mh-name">${escapeHtml(heroManga.name)}</span><span class="mm-meta">${escapeHtml(meta)}</span>
+        ${h && h.fraction ? `<span class="lib-bar"><span style="width:${(h.fraction * 100).toFixed(1)}%"></span></span>` : ""}
+        <button class="btn primary" data-hero-action="${action ? action.kind : "open"}">${escapeHtml(action ? action.label : "เปิดเรื่อง")}</button></span></div>`);
+  }
+  if (fresh.length) {
+    parts.push(homeRowHtml(`มีตอนใหม่ · ${fresh.length}`, fresh.map((m) => coverRowTileHtml(m, {
+      badge: `<span class="new-badge">${m.unread_count > 0 ? `+${m.unread_count}` : "NEW EP"}</span>`,
+      meta: `${shortChapter(m.latest_chapter)}${mangaDate(m) ? ` · ${timeAgo(mangaDate(m), "เมื่อสักครู่")}` : ""}`,
+    })).join(""), "", "mm-row covers"));
+  }
+  if (reading.length) {
+    parts.push(homeRowHtml("อ่านค้างไว้", reading.map((h) => coverRowTileHtml(h, {
+      bar: h.fraction, meta: `${shortChapter(h.chapter_text)} · ${Math.round(h.fraction * 100)}%`,
+    }).replace("mm-ctile", "mm-ctile reading")).join(""), "", "mm-row covers"));
+  }
+  box.innerHTML = parts.join("");
 }
 
 // ใช้ event delegation ตัวเดียวต่อกริด แทนการผูก listener ทีละใบ (เร็วกว่าและไม่ค้างหลังวาดใหม่)
@@ -2002,7 +2108,31 @@ function initGridClicks() {
     }
     openChapterList(manga);
   };
-  ["#catalogGrid", "#searchGrid", "#popularRow", "#recentRow"].forEach((sel) => el(sel).addEventListener("click", onCatalogClick));
+  ["#catalogGrid", "#catalogHome", "#searchGrid", "#popularRow", "#recentRow"].forEach((sel) => el(sel).addEventListener("click", onCatalogClick));
+  // "ทั้งหมด ›" ของแถว: หมวด = เปิดหมวดนั้น, อื่น ๆ = เลื่อนลงตาราง "ทุกเรื่อง" พร้อมตั้งเรียง/ตัวกรอง
+  el("#catalogHome").addEventListener("click", (e) => {
+    const cat = e.target.closest("[data-cat-jump]")?.dataset.catJump;
+    const jump = e.target.closest("[data-grid-jump]")?.dataset.gridJump;
+    if (!cat && !jump) return;
+    e.stopPropagation();
+    if (cat) {
+      state.activeCategory = cat;
+      state.catalogFollow = "all";
+      renderCategoryChips();
+      renderCatalog(filterCatalog());
+      return window.scrollTo(0, 0);
+    }
+    if (jump === "no") state.catalogFollow = "no";
+    else { state.catalogFollow = "all"; el("#catalogSort").value = jump; }
+    renderCatalog(filterCatalog());
+    el("#catalogGridTitle").scrollIntoView({ block: "start", behavior: "smooth" });
+  }, true);
+  el("#catalogFilters").addEventListener("click", (e) => {
+    const f = e.target.closest("[data-follow-filter]")?.dataset.followFilter;
+    if (!f) return;
+    state.catalogFollow = f;
+    renderCatalog(filterCatalog());
+  });
 }
 
 // ---------- Refresh ----------
@@ -2111,24 +2241,49 @@ async function loadCatalog() {
 
 let lastCatalogSignature = null;
 function catalogCardHtml(m) {
-  return cardHtml(
-    m,
-    `<button class="follow-btn${m.is_subscribed ? " subscribed" : ""}" data-action="toggle-follow">
-       ${m.is_subscribed ? "✓ ติดตามอยู่" : "+ ติดตาม"}
-     </button>`
-  );
+  const date = mangaDate(m);
+  return cardHtml(m, `${followDotHtml(m)}<div class="manga-chapter">${date ? timeAgo(date, "เมื่อสักครู่") : "&nbsp;"}</div>`);
+}
+
+// หน้า "ทั้งหมด" แบบแถว: อัปเดตล่าสุด / ยอดนิยม / แต่ละหมวด / อื่น ๆ / ยังไม่ได้ติดตาม
+const CATALOG_ROW_LIMIT = 10;
+function renderCatalogHome() {
+  const box = el("#catalogHome");
+  box.hidden = !!state.activeCategory;
+  if (box.hidden) return;
+  const all = catalogVisible();
+  const byDate = [...all].sort((a, b) => String(mangaDate(b) || "").localeCompare(String(mangaDate(a) || "")));
+  const tile = (m, opts = {}) => coverRowTileHtml(m, { follow: true, ...opts });
+  const dated = (m) => `${shortChapter(m.latest_chapter)}${mangaDate(m) ? ` · ${timeAgo(mangaDate(m), "เมื่อสักครู่")}` : ""}`;
+  const more = (label, attrs) => `<button class="link-btn mm-more" ${attrs}>${label} ›</button>`;
+  const parts = [];
+  if (byDate.length) parts.push(homeRowHtml("อัปเดตล่าสุด", byDate.slice(0, CATALOG_ROW_LIMIT).map((m) => tile(m, { meta: dated(m) })).join(""), more("ทั้งหมด", 'data-grid-jump="updated"'), "mm-row covers"));
+  const popular = all.filter((m) => m.followers > 0).sort((a, b) => b.followers - a.followers).slice(0, CATALOG_ROW_LIMIT);
+  if (popular.length) parts.push(homeRowHtml("ยอดนิยม", popular.map((m, i) => tile(m, { meta: `👥 ${m.followers} คน`, badge: `<span class="rank-badge">#${i + 1}</span>` })).join(""), more("ทั้งหมด", 'data-grid-jump="popular"'), "mm-row covers"));
+  for (const c of visibleCategories()) {
+    const inCat = all.filter((m) => (m.categories || []).includes(c.id));
+    if (inCat.length) parts.push(homeRowHtml(escapeHtml(c.name), inCat.slice(0, CATALOG_ROW_LIMIT).map((m) => tile(m, { meta: dated(m) })).join(""), more(`ทั้งหมด ${inCat.length}`, `data-cat-jump="${escapeHtml(c.id)}"`), "mm-row covers"));
+  }
+  const none = uncategorized();
+  if (none.length) parts.push(homeRowHtml("อื่น ๆ", none.slice(0, CATALOG_ROW_LIMIT).map((m) => tile(m, { meta: dated(m) })).join(""), more(`ทั้งหมด ${none.length}`, `data-cat-jump="${NO_CATEGORY}"`), "mm-row covers"));
+  const unfollowed = byDate.filter((m) => !m.is_subscribed);
+  if (unfollowed.length) parts.push(homeRowHtml(`ยังไม่ได้ติดตาม · ${unfollowed.length}`, unfollowed.slice(0, CATALOG_ROW_LIMIT).map((m) => tile(m, { meta: dated(m) })).join(""), more("ทั้งหมด", 'data-grid-jump="no"'), "mm-row covers"));
+  box.innerHTML = parts.join("");
 }
 
 function renderCatalog(items = state.catalog) {
   const grid = el("#catalogGrid");
   const empty = el("#catalogEmpty");
   empty.hidden = items.length > 0;
-  empty.textContent =
-    state.catalogMode === "category"
-      ? state.categories.length ? "หมวดนี้ยังไม่มีเรื่อง" : "ยังไม่มีหมวดหมู่"
-      : "ยังไม่มีเรื่องในระบบเลย";
+  empty.textContent = state.catalogFollow !== "all" ? "ไม่มีเรื่องตามตัวกรองนี้"
+    : state.activeCategory ? "หมวดนี้ยังไม่มีเรื่อง" : "ยังไม่มีเรื่องในระบบเลย";
+  renderCatalogHome();
+  const cat = state.activeCategory;
+  const catName = cat === NO_CATEGORY ? "อื่น ๆ" : (state.categories.find((c) => c.id === cat) || {}).name;
+  el("#catalogGridTitle").textContent = cat ? `${catName || "หมวด"} · ${items.length} เรื่อง` : `ทุกเรื่อง · ${items.length}`;
+  els("[data-follow-filter]").forEach((b) => b.classList.toggle("active", b.dataset.followFilter === state.catalogFollow));
 
-  const signature = JSON.stringify(items.map((m) => [m.id, m.is_subscribed, m.latest_chapter, m.cover_url]));
+  const signature = JSON.stringify([Math.floor(Date.now() / 600000), items.map((m) => [m.id, m.is_subscribed, m.latest_chapter, m.cover_url])]);
   if (signature === lastCatalogSignature) return;
   lastCatalogSignature = signature;
   grid.innerHTML = items.map(catalogCardHtml).join("");
@@ -2154,9 +2309,12 @@ async function toggleSubscribe(manga) {
 }
 
 function filterCatalog() {
-  if (state.catalogMode !== "category") return sortCatalog(catalogVisible());
   const cat = state.activeCategory;
-  return sortCatalog(cat ? catalogVisible().filter((m) => (m.categories || []).includes(cat)) : []);
+  let items = catalogVisible();
+  if (cat === NO_CATEGORY) items = items.filter((m) => !(m.categories || []).length);
+  else if (cat) items = items.filter((m) => (m.categories || []).includes(cat));
+  if (state.catalogFollow !== "all") items = items.filter((m) => m.is_subscribed === (state.catalogFollow === "yes"));
+  return sortCatalog(items);
 }
 
 function sortCatalog(items) {
@@ -2166,6 +2324,8 @@ function sortCatalog(items) {
     sorted.sort((a, b) => a.name.localeCompare(b.name, "th"));
   } else if (mode === "name-desc") {
     sorted.sort((a, b) => b.name.localeCompare(a.name, "th"));
+  } else if (mode === "popular") {
+    sorted.sort((a, b) => (b.followers || 0) - (a.followers || 0) || a.name.localeCompare(b.name, "th"));
   } else if (mode === "updated") {
     // ใช้วันที่ตอนล่าสุดจริงจากเว็บต้นทางก่อน (latest_chapter_date) ไม่ใช่เวลาที่ระบบเรามาเช็คเจอ
     // (last_updated_at) เพราะเรื่องที่พึ่งเพิ่มเข้าระบบจะโดนตราว่า "อัพเดตตอนนี้เลย" ทั้งที่ตอน
@@ -2616,6 +2776,8 @@ function openChapterList(manga) {
   document.body.style.overflow = "hidden";
   el("#chapterListMangaName").textContent = manga.name;
   el("#chapterSearch").value = "";
+  chapterRange = null;
+  chapterDesc = false;
 
   lastChapterRowsSignature = null;
   const cached = chapterListCache.get(manga.id);
@@ -2679,48 +2841,102 @@ async function renderChapterList({ keepScroll = false } = {}) {
   }
 }
 
+// ---------- หน้าเรื่อง: หัวเรื่อง + ปุ่มอ่านต่อ/ติดตาม + ตารางเลขตอน ----------
+const CHAPTER_RANGE = 100;
+let chapterRange = null; // null = ช่วงที่มีตอนอ่านต่อ (คำนวณตอนวาด)
+let chapterDesc = false;
 let lastChapterRowsSignature = null;
+
+// ตอนที่จะเปิดเมื่อกด "อ่านต่อ": ค้างกลางตอน = ตอนนั้น, อ่านจบ = ตอนถัดไป, ไม่เคยอ่าน = ตอนแรก
+function chapterResume(all) {
+  const idx = lastReadUrl ? all.findIndex((c) => c.url === lastReadUrl) : -1;
+  if (idx < 0) return { chapter: all[all.length - 1], label: "เริ่มอ่าน" };
+  const inProgress = lastScrollInfo && lastScrollInfo.url === lastReadUrl && lastScrollInfo.fraction > 0;
+  if (inProgress || idx === 0) return { chapter: all[idx], label: inProgress ? "อ่านต่อ" : "อ่านอีกครั้ง" };
+  return { chapter: all[idx - 1], label: "อ่านต่อ" };
+}
+
+function chapterTileHtml(c, { fresh = false } = {}) {
+  const cur = c.url === lastReadUrl && lastScrollInfo && lastScrollInfo.url === c.url && lastScrollInfo.fraction > 0;
+  const done = c.is_read && !cur;
+  const label = c.num !== null && c.num !== undefined ? String(c.num) : c.text;
+  const cls = ["ep-tile", done ? "done" : "", cur ? "cur" : "", c.num === null || c.num === undefined ? "has-sub" : ""].filter(Boolean).join(" ");
+  return `<button class="${cls}" data-url="${escapeHtml(c.url)}" title="${escapeHtml(c.text)}${c.date ? ` · ${escapeHtml(c.date)}` : ""}"><span class="ep-num">${escapeHtml(label)}</span>${done ? '<span class="ep-check" aria-label="อ่านแล้ว">✓</span>' : ""}${fresh ? '<span class="ep-new">NEW</span>' : ""}${cur ? `<span class="ep-pg" style="width:${(lastScrollInfo.fraction * 100).toFixed(1)}%"></span>` : ""}</button>`;
+}
+
+function mangaSubscribed(id) {
+  const fromCatalog = state.catalog.find((m) => m.id === id);
+  return fromCatalog ? fromCatalog.is_subscribed : state.manga.some((m) => m.id === id);
+}
+
+// chapters = ตอนที่จะแสดง (ทั้งหมด หรือที่ตรงกับช่องค้นหา) — คืน true ถ้าวาดใหม่
 function renderChapterRows(chapters) {
   const body = el("#chapterListBody");
-
+  const all = currentChapters;
+  const searching = chapters !== all;
   if (chapters.length === 0) {
     lastChapterRowsSignature = null;
     body.innerHTML = '<div class="reader-msg">ไม่พบตอนที่ค้นหา</div>';
     return true;
   }
-
-  const signature = JSON.stringify([lastReadUrl, chapters.map((c) => [c.url, c.is_read])]);
+  const m = mangaById(currentManga.id) || currentManga;
+  const subscribed = mangaSubscribed(currentManga.id);
+  const signature = JSON.stringify([lastReadUrl, lastScrollInfo, chapterRange, chapterDesc, searching, subscribed, chapters.map((c) => [c.url, c.is_read])]);
   if (signature === lastChapterRowsSignature) return false;
   lastChapterRowsSignature = signature;
 
-  // สร้าง HTML ทีเดียวทั้งก้อน (เรื่องหนึ่งมีได้เป็นพันตอน การสร้างทีละ element + ผูก listener
-  // ทีละแถวช้ากว่ามาก) แล้วใช้ event delegation ตัวเดียวที่ตัว container แทน
-  body.innerHTML = chapters
-    .map((c) => {
-      const isLastRead = c.url === lastReadUrl;
-      return `
-        <div class="chapter-row${c.is_read ? " read" : ""}${isLastRead ? " last-read" : ""}" data-url="${escapeHtml(c.url)}">
-          ${isLastRead ? BOOKMARK_ICON : ""}
-          <span class="chapter-text">${escapeHtml(c.text)}</span>
-          ${c.date ? `<span class="chapter-date">${escapeHtml(c.date)}</span>` : ""}
-          ${!c.is_read ? '<span class="new-badge">NEW!</span>' : ""}
-        </div>`;
-    })
-    .join("");
+  const readCount = all.filter((c) => c.is_read).length;
+  const newestRead = all.findIndex((c) => c.is_read);
+  const freshUrls = new Set(newestRead > 0 ? all.slice(0, newestRead).map((c) => c.url) : []);
+  const resume = chapterResume(all);
+  // ตารางเรียงเก่า→ใหม่ (ค่าเริ่มต้น) แบ่งช่วงละ 100 ตอน เปิดมาที่ช่วงของตอนอ่านต่อ
+  const ordered = chapterDesc ? chapters : [...chapters].reverse();
+  const ranges = Math.ceil(ordered.length / CHAPTER_RANGE);
+  if (searching) chapterRange = 0;
+  else if (chapterRange === null) chapterRange = Math.max(0, Math.floor(ordered.indexOf(resume.chapter) / CHAPTER_RANGE));
+  chapterRange = Math.min(chapterRange, ranges - 1);
+  const label = (c) => (c.num !== null && c.num !== undefined ? c.num : c.text);
+  const chips = ranges > 1 ? Array.from({ length: ranges }, (_, i) => {
+    const part = ordered.slice(i * CHAPTER_RANGE, (i + 1) * CHAPTER_RANGE);
+    return `<button class="video-chip${i === chapterRange ? " active" : ""}" data-ch-range="${i}">${escapeHtml(String(label(part[0])))}${part.length > 1 ? `–${escapeHtml(String(label(part[part.length - 1])))}` : ""}</button>`;
+  }).join("") : "";
+  const tiles = ordered.slice(chapterRange * CHAPTER_RANGE, (chapterRange + 1) * CHAPTER_RANGE)
+    .map((c) => chapterTileHtml(c, { fresh: freshUrls.has(c.url) })).join("");
+  const sources = (m.sources || []).length;
+  const date = mangaDate(m);
+  const head = searching ? "" : `<div class="ch-head">
+      ${m.cover_url ? `<img class="ch-cover" src="${proxied(m.cover_url, COVER_WIDTH)}" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0" />` : ""}
+      <div class="ch-info">
+        <div class="pl-name">${escapeHtml(m.name || "")}</div>
+        ${m.source ? `<div class="pl-meta">${escapeHtml(m.source)}${sources > 1 ? ` +${sources - 1} แหล่ง` : ""}</div>` : ""}
+        <div class="pl-meta">${all.length} ตอน${date ? ` · ตอนใหม่ ${timeAgo(date, "เมื่อสักครู่")}` : ""}</div>
+        <div class="pl-meta">อ่านไป ${readCount}/${all.length}</div>
+        <div class="lib-bar"><span style="width:${((readCount / all.length) * 100).toFixed(1)}%"></span></div>
+      </div></div>
+    <div class="pl-actions"><button class="btn primary" data-url="${escapeHtml(resume.chapter.url)}">▶ ${resume.label} ${escapeHtml(resume.chapter.text)}</button>
+      <button class="btn video-save-btn${subscribed ? " saved" : ""}" data-ch-follow>${subscribed ? "✓ ติดตาม" : "+ ติดตาม"}</button></div>`;
+  body.innerHTML = `${head}<div class="pl-controls">${chips}${searching ? "" : `<button class="video-chip" data-ch-sort>${chapterDesc ? "ล่าสุดก่อน" : "ตอนแรกก่อน"} ⇅</button>`}</div>
+    <div class="ep-grid ch-grid">${tiles}</div>`;
   return true;
 }
 
-// เลื่อนหาแถวตอนล่าสุดที่อ่าน ให้อยู่กลางจอ จะได้อ่านต่อง่ายไม่ต้องไล่หาเอง
+// เปิดหน้าเรื่องแล้วอยู่บนสุด (มีปุ่มอ่านต่อ + เปิดช่วงตอนที่อ่านค้างให้แล้ว)
 function scrollToLastRead() {
-  if (!lastReadUrl) return;
-  const body = el("#chapterListBody");
-  const row = body.querySelector(`.chapter-row[data-url="${CSS.escape(lastReadUrl)}"]`);
-  if (row) row.scrollIntoView({ block: "center", behavior: "auto" });
+  el("#chapterListBody").scrollTop = 0;
 }
 
 function initChapterListClicks() {
-  el("#chapterListBody").addEventListener("click", (e) => {
-    const row = e.target.closest(".chapter-row");
+  el("#chapterListBody").addEventListener("click", async (e) => {
+    const range = e.target.closest("[data-ch-range]")?.dataset.chRange;
+    if (range !== undefined) { chapterRange = Number(range); return renderChapterRows(currentChapters); }
+    if (e.target.closest("[data-ch-sort]")) { chapterDesc = !chapterDesc; chapterRange = null; return renderChapterRows(currentChapters); }
+    if (e.target.closest("[data-ch-follow]")) {
+      if (!state.catalog.length) await loadCatalog();
+      const item = state.catalog.find((m) => m.id === currentManga?.id);
+      if (item) { await toggleSubscribe(item); renderChapterRows(currentChapters); }
+      return;
+    }
+    const row = e.target.closest("[data-url]");
     if (row) openReader(row.dataset.url);
   });
 }
@@ -2730,6 +2946,7 @@ function initChapterSearch() {
     "input",
     debounce((e) => {
       const q = e.target.value.trim();
+      if (!q) chapterRange = null; // ล้างช่องค้นหา = กลับไปช่วงของตอนอ่านต่อ
       renderChapterRows(q ? currentChapters.filter((c) => c.text.includes(q)) : currentChapters);
     }, 120)
   );
@@ -3007,13 +3224,24 @@ function renderChapter(data, chapterUrl, restoreFraction) {
 
   awaitingConfirmScroll = false;
   sourceRetryDone = false;
-  if (data.next_url) {
-    const hint = document.createElement("div");
-    hint.className = "next-hint";
-    hint.id = "nextHint";
-    hint.textContent = "เลื่อนต่ออีกทีเพื่อไปตอนถัดไป ›";
-    body.appendChild(hint);
+  // การ์ดจบตอน (id nextHint เดิม: รูปแทรกก่อนการ์ดเสมอ, checkAutoAdvance ใส่ .show ตอนถึงล่างสุด)
+  // การเลื่อนต่อเพื่อเปลี่ยนตอนยังทำงานแบบเดิม การ์ดแค่เพิ่มปุ่มให้กด
+  if (data.images && data.images.length) {
+    const card = document.createElement("div");
+    card.className = "end-card";
+    card.id = "nextHint";
+    const curText = el("#readerChapterName").textContent;
+    const next = data.next_url && currentChapters.find((c) => c.url === data.next_url);
+    const nextText = data.next_url ? (next ? next.text : "ตอนถัดไป") : "";
+    card.innerHTML = `<div class="end-title">จบ ${escapeHtml(curText || "ตอนนี้")}</div>
+      ${data.next_url
+        ? `<div class="end-meta">${escapeHtml(nextText)}${next && next.date ? ` · ${escapeHtml(next.date)}` : ""}</div><button class="btn primary end-next">อ่าน ${escapeHtml(nextText)} ›</button>`
+        : '<div class="end-meta">อ่านทันตอนล่าสุดแล้ว</div>'}
+      <div class="end-actions"><button class="btn end-list">☰ รายการตอน</button><button class="btn end-comments">💬 คอมเมนต์</button></div>
+      ${data.next_url ? '<div class="end-hint">หรือเลื่อนต่ออีกทีเพื่อไปตอนถัดไป ›</div>' : ""}`;
+    body.appendChild(card);
   }
+  updateReaderProgress();
   initNextChapterConfirm();
   refreshCommentCount({ kind: "chapter", manga_id: readerMangaId, url: currentChapterData.url }, el("#readerCommentCount"));
 
@@ -3077,7 +3305,21 @@ async function loadChapter(mangaId, chapterUrl, restoreFraction = null) {
 // เช็คทุกครั้งที่เลื่อน ว่าถึงล่างสุดของตอนที่กำลังอ่านจริง ๆ หรือยัง ถ้าถึงแล้วโชว์ข้อความ
 // "เลื่อนต่ออีกทีเพื่อไปตอนถัดไป" ไว้ก่อน ยังไม่เปลี่ยนตอนทันที ต้องรอ confirm อีกจังหวะ
 // (กันเปลี่ยนตอนเร็วเกินไปทั้งที่ยังอ่านหน้าสุดท้ายไม่จบ)
+// หลอดในแถบล่าง = สัดส่วนที่เลื่อนอ่านมาแล้วของตอนนี้
+function updateReaderProgress() {
+  el("#readerProgressBar").style.width = `${(Math.max(0, Math.min(1, currentScrollFraction)) * 100).toFixed(1)}%`;
+}
+
+function openChapterListFromReader() {
+  if (!currentManga) return;
+  readerFromHistory = false; // ปิดหน้าอ่านแล้วไปหน้าเรื่อง ไม่ใช่กลับประวัติ
+  el("#chapterListMangaName").textContent = currentManga.name || "";
+  chapterRange = null;
+  closeReader();
+}
+
 function checkAutoAdvance() {
+  updateReaderProgress();
   const hint = el("#nextHint");
   if (!currentChapterData.nextUrl) return;
   const body = el("#readerBody");
@@ -3655,10 +3897,9 @@ function continueTileHtml({ kind, item }) {
     <span class="continue-meta">🎬 ดูค้างไว้${dur ? ` ${Math.round((pos / dur) * 100)}%` : ""}</span></button>`;
 }
 
+// แถว "ดูต่อ / อ่านต่อ" แบบเดิมเลิกใช้ — หน้าหลักมังงะมี "อ่านค้างไว้" และ MeeMovie มี "ดูต่อ" ของตัวเอง
 function renderContinue() {
-  const items = continueItems();
-  el("#continueSection").hidden = !items.length || state.homeMode !== "grid";
-  el("#continueRow").innerHTML = items.map(continueTileHtml).join("");
+  el("#continueSection").hidden = true;
 }
 
 function initContinue() {
@@ -4088,6 +4329,12 @@ function init() {
 
   el("#refreshAllBtn").addEventListener("click", refreshAll);
   el("#readerClose").addEventListener("click", closeReader);
+  el("#readerList").addEventListener("click", openChapterListFromReader);
+  el("#readerBody").addEventListener("click", (e) => {
+    if (e.target.closest(".end-next")) goNextChapter();
+    else if (e.target.closest(".end-list")) openChapterListFromReader();
+    else if (e.target.closest(".end-comments")) el("#readerComments").click();
+  });
   el("#chapterListClose").addEventListener("click", closeChapterList);
   el("#readerPrev").addEventListener("click", goPrevChapter);
   el("#readerNext").addEventListener("click", goNextChapter);

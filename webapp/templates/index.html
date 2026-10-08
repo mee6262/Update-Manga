@@ -29,11 +29,7 @@
   <header class="topbar">
     <div class="topbar-row">
       <h1 class="topbar-title" data-for="list">📚 MeeManga</h1>
-      <div class="topbar-title seg-tabs" data-for="catalog" hidden>
-        <button class="seg-btn active" data-catmode="all">เรื่องทั้งหมด</button>
-        <span class="seg-sep" aria-hidden="true"></span>
-        <button class="seg-btn" data-catmode="category">หมวดหมู่</button>
-      </div>
+      <h1 class="topbar-title" data-for="catalog" hidden>📖 ทั้งหมด</h1>
       <h1 class="topbar-title" data-for="search" hidden>ค้นหา</h1>
       <h1 class="topbar-title" data-for="videos" hidden>🎬 MeeMovie</h1>
       <h1 class="topbar-title" data-for="settings" hidden>ตั้งค่า</h1>
@@ -47,7 +43,7 @@
     </div>
     <nav id="homeTabs" class="home-tabs" aria-label="หน้าหลัก">
       <button class="home-tab active" data-home="grid">หน้าหลัก</button>
-      <button class="home-tab" data-home="history">รายการอ่านล่าสุด</button>
+      <button class="home-tab" data-home="history">ประวัติการอ่าน</button>
     </nav>
     <div id="categoryBar" class="category-bar" hidden>
       <div id="categoryChips" class="category-chips" role="tablist"></div>
@@ -61,28 +57,44 @@
   <main>
     <section id="listView" class="view active">
       <button id="homePwNotice" class="notice-card notice-btn" hidden>รหัสผ่านของคุณถูกรีเซ็ต แตะเพื่อไปตั้งรหัสผ่านใหม่ ›</button>
+      <div id="mangaHome"></div>
       <div id="continueSection" class="continue-section" hidden>
         <h2 class="section-title">ดูต่อ / อ่านต่อ</h2>
         <div id="continueRow" class="continue-row"></div>
+      </div>
+      <div id="followHead" class="mm-row-head follow-head" hidden>
+        <h2 id="followTitle" class="section-title">ติดตาม</h2>
+        <select id="followSort" class="form-select" aria-label="เรียงเรื่องที่ติดตาม">
+          <option value="updated">อัปเดตล่าสุด</option>
+          <option value="name">ชื่อ ก-ฮ / A-Z</option>
+        </select>
       </div>
       <div id="mangaGrid" class="manga-grid"></div>
       <div id="emptyState" class="empty-state" hidden>
         ยังไม่ได้ติดตามเรื่องไหนเลย ไปที่แท็บ "ทั้งหมด" เพื่อเลือกเรื่องที่อยากติดตาม
       </div>
       <div id="historyView" hidden>
-        <div id="historyStats" class="history-stats"></div>
+        <input type="search" id="readHistorySearch" class="history-search" placeholder="ค้นหาในประวัติการอ่าน" autocomplete="off" />
         <ul id="historyList" class="history-list"></ul>
         <div id="historyEmpty" class="empty-state" hidden>ยังไม่มีประวัติการอ่าน เปิดอ่านเรื่องไหนก็ตามจะขึ้นที่นี่</div>
       </div>
     </section>
 
     <section id="catalogView" class="view">
+      <div id="catalogHome"></div>
       <div class="catalog-sort-row">
+        <h2 id="catalogGridTitle" class="section-title"></h2>
         <select id="catalogSort" aria-label="เรียงลำดับ">
           <option value="name-asc">ชื่อ ก-ฮ / A-Z</option>
           <option value="name-desc">ชื่อ ฮ-ก / Z-A</option>
           <option value="updated">วันอัพเดตล่าสุด</option>
+          <option value="popular">ยอดนิยม</option>
         </select>
+      </div>
+      <div id="catalogFilters" class="pl-controls">
+        <button class="video-chip active" data-follow-filter="all">ทุกเรื่อง</button>
+        <button class="video-chip" data-follow-filter="yes">ติดตามอยู่</button>
+        <button class="video-chip" data-follow-filter="no">ยังไม่ติดตาม</button>
       </div>
       <div id="catalogGrid" class="manga-grid"></div>
       <div id="catalogEmpty" class="empty-state" hidden>ยังไม่มีเรื่องในระบบเลย</div>
@@ -368,7 +380,7 @@
       </div>
     </div>
     <div class="chapter-search-bar">
-      <input type="text" id="chapterSearch" inputmode="numeric" placeholder="ค้นหาเลขตอน..." />
+      <input type="text" id="chapterSearch" inputmode="numeric" placeholder="ไปตอนที่..." />
     </div>
     <div id="chapterListBody" class="chapter-list-body"></div>
   </div>
@@ -384,9 +396,11 @@
     </div>
     <div id="readerBody" class="reader-body"></div>
     <div id="readerBottombar" class="reader-bottombar">
+      <span class="reader-progress"><span id="readerProgressBar"></span></span>
       <span id="readerChapterName" class="reader-chapter"></span>
       <div class="reader-nav">
         <button id="readerComments" class="icon-btn comment-btn" title="ความคิดเห็นของตอนนี้">💬<span id="readerCommentCount" class="comment-count"></span></button>
+        <button id="readerList" class="icon-btn" title="รายการตอน" aria-label="รายการตอน">☰</button>
         <button id="readerPrev" class="icon-btn" disabled title="ตอนก่อนหน้า">
           <svg viewBox="0 0 24 24" width="20" height="20"><path d="M15 5 L8 12 L15 19" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
