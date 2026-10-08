@@ -2966,7 +2966,13 @@ function initChapterSearch() {
 }
 
 function closeChapterList() {
-  el("#chapterListView").hidden = true;
+  const view = el("#chapterListView");
+  view.hidden = true;
+  // เปิดซ้อนมาจากหน้าอ่าน: ปิดแล้วกลับไปหน้าอ่านเดิม ไม่ล้างสถานะของเรื่องที่อ่านอยู่
+  if (view.classList.contains("over-reader")) {
+    view.classList.remove("over-reader");
+    if (!el("#reader").hidden) return;
+  }
   document.body.style.overflow = "";
   currentManga = null;
   currentChapters = [];
@@ -3002,6 +3008,7 @@ let prefetchingUrl = null;
 
 async function openReader(chapterUrl) {
   el("#chapterListView").hidden = true;
+  el("#chapterListView").classList.remove("over-reader");
   const restoreFraction =
     chapterUrl === lastReadUrl && lastScrollInfo && lastScrollInfo.url === chapterUrl
       ? lastScrollInfo.fraction
@@ -3342,12 +3349,21 @@ function updateReaderProgress() {
   el("#readerProgressBar").style.width = `${(Math.max(0, Math.min(1, currentScrollFraction)) * 100).toFixed(1)}%`;
 }
 
+// เปิดหน้าเรื่องซ้อนบนหน้าอ่าน (หน้าอ่านยังอยู่ข้างล่าง) — กดปิดหน้าเรื่องแล้วกลับมาอ่านต่อจุดเดิม
 function openChapterListFromReader() {
   if (!currentManga) return;
-  readerFromHistory = false; // ปิดหน้าอ่านแล้วไปหน้าเรื่อง ไม่ใช่กลับประวัติ
+  rememberScroll(); // สถานะตอนที่อ่านอยู่ (กรอบ/หลอด) ในตารางให้ตรงกับตอนนี้
+  const view = el("#chapterListView");
   el("#chapterListMangaName").textContent = currentManga.name || "";
+  el("#chapterSearch").value = "";
   chapterRange = null;
-  closeReader();
+  lastChapterRowsSignature = null;
+  view.classList.add("over-reader");
+  view.hidden = false;
+  if (currentChapters.length) renderChapterRows(currentChapters);
+  else el("#chapterListBody").innerHTML = '<div class="reader-msg">กำลังโหลด...</div>';
+  scrollToLastRead();
+  renderChapterList({ keepScroll: true });
 }
 
 function checkAutoAdvance() {
@@ -4246,6 +4262,7 @@ function goBack() {
   if (!el("#commentSheet").hidden) return closeComments(), true;
   if (!el("#videoFormModal").hidden) return showVideoForm(false), true;
   if (!el("#mangaFormModal").hidden) return closeMangaModal(), true;
+  if (!el("#chapterListView").hidden && el("#chapterListView").classList.contains("over-reader")) return closeChapterList(), true;
   if (!el("#reader").hidden) return closeReader(), true;
   if (!el("#videoPlayer").hidden && !isVideoMini()) return closeVideo(), true;
   if (!el("#playlistView").hidden) return closePlaylist(), true;

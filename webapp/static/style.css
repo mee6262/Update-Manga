@@ -1206,3 +1206,4 @@ button, .nav-item, .home-tab, .video-tab, .continue-tile { -webkit-user-select: 
 .reader-error details { width: 100%; font-size: 0.78rem; color: var(--text-dim); }
 .reader-error summary { cursor: pointer; }
 .reader-error-raw { margin-top: 6px; word-break: break-all; text-align: left; }
+#chapterListView.over-reader { z-index: 105; }
