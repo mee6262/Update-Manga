@@ -749,7 +749,15 @@ function playEpisode(video) {
 // เล่นตอนถัดไปเองเมื่อจบตอน — เปิด/ปิดได้ จำต่อเครื่อง (ค่าเริ่มต้น: เปิด)
 const AUTO_NEXT_KEY = "videoAutoNext";
 function autoNextOn() {
+  if (typeof state.prefs.auto_next === "boolean") return state.prefs.auto_next; // ตามบัญชี
   try { return localStorage.getItem(AUTO_NEXT_KEY) !== "off"; } catch (e) { return true; }
+}
+
+function setAutoNextPref(on) {
+  try { localStorage.setItem(AUTO_NEXT_KEY, on ? "on" : "off"); } catch (e) { /* ไม่จำก็ได้ */ }
+  savePref("auto_next", on);
+  el("#setAutoNext").checked = on;
+  renderAutoNext();
 }
 
 function renderAutoNext() {
@@ -1003,6 +1011,7 @@ function mountNativeVideo(video, position, sources) {
       if (!q || q === nativeQualityPref) return;
       nativeQualityPref = q;
       try { localStorage.setItem(VIDEO_QUALITY_KEY, q); } catch (e) { /* ไม่จำก็ได้ */ }
+      el("#setVideoQuality").value = q;
       setNativeQuality(q === "auto" ? await pickAutoQuality(nativeSources) : q);
     });
   });
@@ -1478,10 +1487,7 @@ function initVideos() {
   });
   el("#episodePrev").addEventListener("click", () => playEpisode(neighborEpisode(activeVideo, -1)));
   el("#episodeNext").addEventListener("click", () => playEpisode(neighborEpisode(activeVideo, 1)));
-  el("#autoNextBtn").addEventListener("click", () => {
-    try { localStorage.setItem(AUTO_NEXT_KEY, autoNextOn() ? "off" : "on"); } catch (e) { /* ไม่จำก็ได้ */ }
-    renderAutoNext();
-  });
+  el("#autoNextBtn").addEventListener("click", () => setAutoNextPref(!autoNextOn()));
   window.addEventListener("pagehide", () => { stopVideoClock(); saveActiveVideoProgress(true); });
   window.addEventListener("orientationchange", nudgeViewport);
   document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement) nudgeViewport(); });
@@ -1707,19 +1713,9 @@ function syncThemeColor() {
 }
 
 function renderThemeMenu() {
-  const theme = THEMES.find((t) => t.id === currentTheme()) || THEMES[1];
-  el("#themeBtn").textContent = `${theme.icon} ${theme.label}`;
-  el("#themeMenu").innerHTML = THEMES.map(
-    (t) =>
-      `<button class="menu-item" role="menuitemradio" aria-checked="${t.id === theme.id}" data-theme="${t.id}">
-         <span class="menu-check">${t.id === theme.id ? "✓" : ""}</span><span>${t.icon}</span><span>${t.label}</span>
-       </button>`
-  ).join("");
-}
-
-function setThemeMenu(open) {
-  el("#themeMenu").hidden = !open;
-  el("#themeBtn").setAttribute("aria-expanded", String(open));
+  const theme = currentTheme();
+  el("#themeSeg").innerHTML = THEMES.map((t) =>
+    `<button role="radio" aria-checked="${t.id === theme}" class="${t.id === theme ? "on" : ""}" data-theme="${t.id}">${t.id === "system" ? "อัตโนมัติ" : t.label.replace("โหมด", "")}</button>`).join("");
 }
 
 function initTheme() {
@@ -1729,15 +1725,7 @@ function initTheme() {
   window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", syncThemeColor);
   // บางเครื่อง/บางเบราว์เซอร์ไม่ยิง event ข้างบนตอนแอปอยู่เบื้องหลัง — เช็คซ้ำทุกครั้งที่กลับมาเปิด
   document.addEventListener("visibilitychange", () => { if (!document.hidden) syncThemeColor(); });
-
-  el("#themeBtn").addEventListener("click", (e) => {
-    e.stopPropagation();
-    setThemeMenu(el("#themeMenu").hidden);
-  });
-  document.addEventListener("click", (e) => {
-    if (!e.target.closest("#themeMenu")) setThemeMenu(false);
-  });
-  el("#themeMenu").addEventListener("click", (e) => {
+  el("#themeSeg").addEventListener("click", (e) => {
     const item = e.target.closest("[data-theme]");
     if (!item) return;
     const theme = item.dataset.theme;
@@ -1750,18 +1738,34 @@ function initTheme() {
     }
     renderThemeMenu();
     syncThemeColor();
-    setThemeMenu(false);
-    fetch("/api/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ theme }) });
+    savePref("theme", theme);
   });
+}
+
+// ค่าตั้งส่วนตัวที่ตามบัญชี (เก็บบนเซิร์ฟเวอร์) — ไม่ได้ login ใช้ค่าในเครื่องแทน
+function savePref(key, value) {
+  state.prefs[key] = value;
+  fetch("/api/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [key]: value }) }).catch(() => {});
 }
 
 function renderPrefs() {
   el("#prefCard").hidden = !state.categories.some((c) => c.special);
   el("#showSpecialToggle").checked = showSpecial();
+  el("#setChapterSort").value = chapterSortDesc() ? "desc" : "asc";
+  el("#setAutoNext").checked = autoNextOn();
+  el("#setVideoQuality").value = readVideoQualityPref();
+  el("#setInstallRow").hidden = el("#installBtn").hidden;
 }
 
 function initPrefs() {
   renderPrefs();
+  el("#setChapterSort").addEventListener("change", (e) => setChapterSortPref(e.target.value === "desc"));
+  el("#setAutoNext").addEventListener("change", (e) => setAutoNextPref(e.target.checked));
+  el("#setVideoQuality").addEventListener("change", (e) => {
+    try { localStorage.setItem(VIDEO_QUALITY_KEY, e.target.value); } catch (err) { /* ไม่จำก็ได้ */ }
+  });
+  el("#setPushToggle").addEventListener("click", (e) => { e.preventDefault(); togglePush(); });
+  el("#setInstallRow").addEventListener("click", () => el("#installBtn").click());
   el("#showSpecialToggle").addEventListener("change", (e) => {
     state.prefs.show_special = e.target.checked;
     lastCatalogSignature = null;
@@ -1918,7 +1922,7 @@ function applyAdminSearch(jump = false) {
     if (badge && badge.textContent !== label) badge.textContent = label;
   });
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  el(".admin-only").classList.toggle("searching", words.length > 0); // ซ่อนฟอร์ม/ปุ่ม ให้ผลอยู่บนสุด
+  el("#adminPage").classList.toggle("searching", words.length > 0); // ซ่อนฟอร์ม/ปุ่ม ให้ผลอยู่บนสุด
   const msg = el("#adminSearchMsg");
   const text = words.length ? (total ? `พบ ${total} รายการ` : "ไม่พบ") : "";
   if (msg.textContent !== text) msg.textContent = text;
@@ -1948,7 +1952,72 @@ function initAdminSearch() {
   new MutationObserver(() => {
     if (!box.value.trim() || pending) return;
     pending = setTimeout(() => { pending = null; applyAdminSearch(); }, 50);
-  }).observe(el(".admin-only"), { childList: true, subtree: true });
+  }).observe(el("#adminPage"), { childList: true, subtree: true });
+}
+
+// ---------- หน้าตั้งค่า: ตั้งค่าของฉัน → ศูนย์จัดการ (แอดมิน) → หน้าจัดการย่อย ----------
+function showSettingsPane(pane) {
+  el("#settingsMain").hidden = pane !== "main";
+  el("#adminHub").hidden = pane !== "hub";
+  el("#adminPage").hidden = pane !== "page";
+  window.scrollTo(0, 0);
+  if (pane === "hub") renderAdminHub();
+}
+
+function settingsPane() {
+  return !el("#adminPage").hidden ? "page" : !el("#adminHub").hidden ? "hub" : "main";
+}
+
+function openAdminPage(subtab, scrollTo) {
+  showSettingsPane("page");
+  const btn = el(`.sub-tab-btn[data-subtab="${subtab}"]`);
+  if (btn) btn.click(); // ใช้ตัวโหลดข้อมูลของแท็บย่อยเดิม
+  if (scrollTo) setTimeout(() => el(`#${scrollTo}`)?.scrollIntoView({ block: "start" }), 400);
+}
+
+// การ์ดสรุป + ตัวเลขในศูนย์จัดการ + จุดเตือนที่แถว "จัดการระบบ"
+async function renderAdminHub() {
+  if (!state.catalog.length) await loadCatalog();
+  const problems = state.catalog.filter((m) => m.refresh_error);
+  const nocat = state.catalog.filter((m) => !(m.categories || []).length).length;
+  const clips = state.videos.filter((v) => !v.playlist_id).length;
+  const watch = playlistWatch && playlistWatch.last_result ? playlistWatch : await getJSON("/api/video-playlists/watch").catch(() => ({}));
+  if (watch.sources) playlistWatch = watch;
+  const watchErr = (watch.last_result || []).some((r) => r.error);
+  let users = null;
+  try { users = (await getJSON("/api/users")).length; } catch (e) { /* ไม่โชว์ตัวเลข */ }
+  const card = (label, value, status, tone) => `<div class="admin-card"><div class="mm-meta">${label}</div><div class="admin-card-num">${value}</div>${status ? `<div class="admin-card-status"><span class="status-dot ${tone}"></span>${escapeHtml(status)}</div>` : ""}</div>`;
+  el("#adminCards").innerHTML = [
+    card("มังงะ", state.catalog.length, problems.length ? `มีปัญหา ${problems.length} เรื่อง` : "ปกติทุกเรื่อง", problems.length ? "bad" : "ok"),
+    card("คลิป / Playlist", `${clips} / ${(state.videoPlaylists || []).length}`,
+      watch.last_run ? `เช็คเพจ ${timeAgo(watch.last_run, "เมื่อสักครู่")}${watchErr ? " ⚠️" : ""}` : (watch.sources || []).length ? "ยังไม่เคยเช็คเพจ" : "", watchErr ? "warn" : "ok"),
+    card("สมาชิก", users ?? "–", "", ""),
+    card("หมวดหมู่มังงะ", state.categories.length, nocat ? `ไม่มีหมวด ${nocat} เรื่อง` : "", nocat ? "warn" : "ok"),
+  ].join("");
+  const counts = { manga: problems.length ? `${state.catalog.length} · ⚠️ ${problems.length}` : String(state.catalog.length), nocat: nocat ? `ไม่มีหมวด ${nocat}` : "", watch: watchErr ? "⚠️" : "", users: users ?? "",
+    checked: state.catalog.length ? `ล่าสุด ${timeAgo(state.catalog.map((m) => m.last_checked_at || "").sort().pop(), "เมื่อสักครู่")}` : "" };
+  els("[data-admin-count]").forEach((x) => { x.textContent = counts[x.dataset.adminCount] ?? ""; });
+  el("#adminDot").hidden = !(problems.length || watchErr);
+}
+
+function initSettingsPanes() {
+  el("#openAdminHub").addEventListener("click", () => showSettingsPane("hub"));
+  els("[data-admin-back]").forEach((b) => b.addEventListener("click", () => showSettingsPane(b.dataset.adminBack)));
+  el("#adminHub").addEventListener("click", (e) => {
+    const row = e.target.closest("[data-admin-open]");
+    if (row) openAdminPage(row.dataset.adminOpen, row.dataset.adminScroll);
+  });
+  el("#adminHubSearch").addEventListener("click", () => {
+    openAdminPage("mangaManage");
+    el("#adminSearch").focus();
+  });
+  el("#adminRefreshAll").addEventListener("click", async () => {
+    await refreshAll();
+    await loadCatalog();
+    renderAdminHub();
+  });
+  // จุดเตือนที่แถว "จัดการระบบ" — เช็คเงียบ ๆ ครั้งแรกที่เปิดหน้าตั้งค่า
+  if (state.currentUser.is_admin) setTimeout(() => renderAdminHub().catch(() => {}), 1500);
 }
 
 function initSubTabs() {
@@ -2174,39 +2243,73 @@ const ICON_DELETE =
   '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 6h18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><line x1="10" y1="11" x2="10" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="11" x2="14" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
 let lastSettingsSignature = null;
+let mangaAdminFilter = "all"; // all / problem (ดึงไม่สำเร็จทุกแหล่ง) / nocat (ไม่มีหมวด)
+
 function renderSettings() {
   const list = el("#settingsList");
-  const signature = JSON.stringify(state.catalog.map((m) => [m.id, m.name, m.source, m.latest_chapter, m.cover_url, (m.sources || []).length]));
+  const problems = state.catalog.filter((m) => m.refresh_error).length;
+  const nocat = state.catalog.filter((m) => !(m.categories || []).length).length;
+  els("[data-manga-filter]").forEach((b) => {
+    b.classList.toggle("active", b.dataset.mangaFilter === mangaAdminFilter);
+    const n = { all: state.catalog.length, problem: problems, nocat }[b.dataset.mangaFilter];
+    b.textContent = `${{ all: "ทั้งหมด", problem: "มีปัญหา", nocat: "ไม่มีหมวด" }[b.dataset.mangaFilter]} ${n}`;
+  });
+  const items = state.catalog.filter((m) => mangaAdminFilter === "problem" ? m.refresh_error
+    : mangaAdminFilter === "nocat" ? !(m.categories || []).length : true);
+  const signature = JSON.stringify([mangaAdminFilter, Math.floor(Date.now() / 600000), items.map((m) => [m.id, m.name, m.source, m.latest_chapter, m.cover_url, (m.sources || []).length, m.refresh_error, m.last_checked_at])]);
   if (signature === lastSettingsSignature) return;
   lastSettingsSignature = signature;
 
-  list.innerHTML = state.catalog
+  list.innerHTML = items
     .map((m) => {
       const sourceCount = (m.sources || []).length;
       const sourceLabel =
         sourceCount > 1 ? `${escapeHtml(m.source)} +${sourceCount - 1} แหล่ง` : escapeHtml(m.source);
+      const status = m.refresh_error
+        ? `<span class="status-dot bad"></span><span class="status-bad">ดึงไม่สำเร็จทุกแหล่ง · ${timeAgo(m.refresh_error.at, "เมื่อสักครู่")}</span>`
+        : `<span class="status-dot ok"></span>${m.last_checked_at ? `เช็ค ${timeAgo(m.last_checked_at, "เมื่อสักครู่")}` : "ยังไม่เคยเช็ค"}`;
       return `
         <li class="settings-row" data-id="${escapeHtml(m.id)}">
           <img src="${proxied(m.cover_url, THUMB_WIDTH)}" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0" />
           <div class="grow">
             <div class="name">${escapeHtml(m.name)}</div>
             <div class="meta">${sourceLabel} — ${m.latest_chapter ? escapeHtml(m.latest_chapter) : "-"}</div>
+            <div class="meta row-status">${status}</div>
           </div>
-          <button class="icon-btn" data-action="edit" title="แก้ไข">${ICON_EDIT}</button>
-          <button class="icon-btn" data-action="refresh" title="รีเฟรช">${ICON_REFRESH}</button>
-          <button class="icon-btn danger" data-action="delete" title="ลบออกจากระบบ">${ICON_DELETE}</button>
+          <button class="icon-btn" data-action="menu" title="ตัวเลือก" aria-label="ตัวเลือก">⋯</button>
+          <div class="row-menu" hidden>
+            <button class="btn" data-action="edit">${ICON_EDIT} แก้ไข</button>
+            <button class="btn" data-action="refresh">${ICON_REFRESH} รีเฟรช</button>
+            <button class="btn danger" data-action="delete">${ICON_DELETE} ลบเรื่อง</button>
+          </div>
         </li>`;
     })
-    .join("");
+    .join("") || '<li class="hint">ไม่มีเรื่องตามตัวกรองนี้</li>';
 }
 
 function initSettingsClicks() {
+  el("#mangaAdminFilters").addEventListener("click", (e) => {
+    const f = e.target.closest("[data-manga-filter]")?.dataset.mangaFilter;
+    if (!f) return;
+    mangaAdminFilter = f;
+    renderSettings();
+  });
   el("#settingsList").addEventListener("click", (e) => {
     const btn = e.target.closest("[data-action]");
     if (!btn) return;
-    const id = e.target.closest(".settings-row").dataset.id;
+    const row = e.target.closest(".settings-row");
+    const id = row.dataset.id;
     const manga = state.catalog.find((m) => m.id === id);
     if (!manga) return;
+    if (btn.dataset.action === "menu") {
+      const menu = row.querySelector(".row-menu");
+      const open = menu.hidden;
+      els("#settingsList .row-menu").forEach((m) => { m.hidden = true; });
+      menu.hidden = !open;
+      return;
+    }
+    row.querySelector(".row-menu").hidden = true;
+    if (btn.dataset.action === "refresh") row.querySelector(".row-status").textContent = "กำลังรีเฟรช...";
     if (btn.dataset.action === "edit") openMangaModal(manga);
     if (btn.dataset.action === "refresh") refreshOne(id, btn);
     if (btn.dataset.action === "delete") deleteManga(id, manga.name);
@@ -2850,7 +2953,14 @@ let chapterRange = null; // null = ช่วงที่มีตอนอ่า
 // เรียงตอน: ค่าเริ่มต้น "ล่าสุดก่อน" จำต่อเครื่องและใช้กับทุกเรื่อง
 const CHAPTER_SORT_KEY = "chapterSort";
 function chapterSortDesc() {
+  if (state.prefs.chapter_sort) return state.prefs.chapter_sort !== "asc"; // ตามบัญชี
   try { return localStorage.getItem(CHAPTER_SORT_KEY) !== "asc"; } catch (e) { return true; }
+}
+
+function setChapterSortPref(desc) {
+  try { localStorage.setItem(CHAPTER_SORT_KEY, desc ? "desc" : "asc"); } catch (err) { /* ไม่จำก็ได้ */ }
+  savePref("chapter_sort", desc ? "desc" : "asc");
+  el("#setChapterSort").value = desc ? "desc" : "asc";
 }
 let chapterDesc = chapterSortDesc();
 let lastChapterRowsSignature = null;
@@ -2939,7 +3049,7 @@ function initChapterListClicks() {
     if (range !== undefined) { chapterRange = Number(range); return renderChapterRows(currentChapters); }
     if (e.target.closest("[data-ch-sort]")) {
       chapterDesc = !chapterDesc;
-      try { localStorage.setItem(CHAPTER_SORT_KEY, chapterDesc ? "desc" : "asc"); } catch (err) { /* ไม่จำก็ได้ */ }
+      setChapterSortPref(chapterDesc);
       chapterRange = null;
       return renderChapterRows(currentChapters);
     }
@@ -3554,6 +3664,11 @@ function setPushButton(on) {
 }
 
 function renderPushCard() {
+  // แถวแจ้งเตือนในหน้าตั้งค่าใช้สถานะเดียวกับแผงกระดิ่ง
+  el("#setPushToggle").checked = !!pushOn;
+  el("#setPushDesc").textContent = !BOOT.push_key ? "เซิร์ฟเวอร์ยังไม่เปิดระบบนี้"
+    : !pushSupported && isIOS && !isStandalone ? "iPhone ต้องเปิดจากไอคอนหน้าจอโฮมก่อน"
+    : !pushSupported ? "เบราว์เซอร์นี้ไม่รองรับ" : pushOn ? "เครื่องนี้เปิดอยู่" : "เครื่องนี้ปิดอยู่";
   const btn = el("#pushCardBtn");
   let title, desc, label = null, primary = false;
   if (!BOOT.push_key) {
@@ -3661,6 +3776,7 @@ const isAndroid = /Android/i.test(navigator.userAgent);
 
 function updateInstallButton() {
   el("#installBtn").hidden = isStandalone || !(isIOS || isAndroid || installPromptEvent);
+  el("#setInstallRow").hidden = el("#installBtn").hidden;
 }
 
 function initInstallButton() {
@@ -4268,6 +4384,7 @@ function goBack() {
   if (!el("#playlistView").hidden) return closePlaylist(), true;
   if (!el("#chapterListView").hidden) return closeChapterList(), true;
   if (state.tab === "list" && state.homeMode === "history") return setHomeMode("grid"), true;
+  if (state.tab === "settings" && settingsPane() !== "main") return showSettingsPane(settingsPane() === "page" ? "hub" : "main"), true;
   const prev = tabHistory.pop();
   if (prev) return showTab(prev, true), true;
   return false;
@@ -4369,6 +4486,7 @@ function init() {
   initAdminPanels();
   initPlaylistWatch();
   initLibrary();
+  initSettingsPanes();
   initAdminSearch();
   initAppShell();
   initEdgeSwipe();

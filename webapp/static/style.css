@@ -1043,7 +1043,7 @@ button, .nav-item, .home-tab, .video-tab, .continue-tile { -webkit-user-select: 
 .sub-tab-count { margin-left: 4px; font-weight: 700; color: var(--accent); }
 .search-miss { display: none !important; }
 .sub-tab-btn.active .sub-tab-count { color: inherit; }
-.admin-only.searching .subview > :not(ul) { display: none; }
+#adminPage.searching .subview > :not(ul) { display: none; }
 .playlist-row { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
 .playlist-row::-webkit-scrollbar { display: none; }
 .playlist-row > * { flex: 0 0 160px; scroll-snap-align: start; }
@@ -1207,3 +1207,44 @@ button, .nav-item, .home-tab, .video-tab, .continue-tile { -webkit-user-select: 
 .reader-error summary { cursor: pointer; }
 .reader-error-raw { margin-top: 6px; word-break: break-all; text-align: left; }
 #chapterListView.over-reader { z-index: 105; }
+
+/* ===== หน้าตั้งค่าแบบกลุ่ม ===== */
+.set-group-title { font-size: 0.78rem; font-weight: 600; color: var(--text-dim); margin: 18px 4px 6px; }
+.set-group { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.set-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 14px; background: none; border: 0; border-top: 1px solid var(--border); color: var(--text); font: inherit; font-size: 0.95rem; text-align: left; text-decoration: none; cursor: pointer; }
+.set-group > .set-item:first-child, .set-group > :first-child .set-row { border-top: 0; }
+.set-item[hidden] { display: none; }
+.set-ic { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: var(--bg); font-size: 0.95rem; }
+.set-label { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.set-label small { font-size: 0.75rem; color: var(--text-dim); }
+.set-value { color: var(--text-dim); font-size: 0.85rem; white-space: nowrap; }
+.set-item .chev { color: var(--text-dim); }
+.set-item .form-select { font-size: 0.85rem; padding: 6px 8px; }
+.set-danger .set-label { color: var(--danger); }
+.set-details { display: block; padding: 0; }
+.set-details > summary { display: flex; align-items: center; gap: 12px; padding: 12px 14px; list-style: none; cursor: pointer; }
+.set-details > summary::-webkit-details-marker { display: none; }
+.set-details > summary .set-label { flex: 1; }
+.set-details .password-form { padding: 0 14px 14px; }
+.set-seg { display: flex; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 2px; gap: 2px; }
+.set-seg button { background: none; border: 0; border-radius: 7px; padding: 5px 9px; color: var(--text-dim); font: inherit; font-size: 0.8rem; cursor: pointer; white-space: nowrap; }
+.set-seg button.on { background: var(--bg-card); color: var(--text); font-weight: 600; box-shadow: 0 0 0 1px var(--border); }
+.set-back { margin-bottom: 10px; }
+.status-dot { flex: none; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); margin-right: 5px; vertical-align: middle; }
+.status-dot[hidden] { display: none; }
+.status-dot.ok { background: var(--accent); }
+.status-dot.warn { background: #f5a524; }
+.status-dot.bad { background: var(--danger); }
+.status-bad { color: var(--danger); }
+.admin-search-fake { display: block; text-align: left; color: var(--text-dim); cursor: pointer; }
+.admin-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0 4px; }
+.admin-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; min-width: 0; }
+.admin-card-num { font-size: 1.3rem; font-weight: 700; margin: 2px 0; }
+.admin-card-status { font-size: 0.75rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-row { position: relative; flex-wrap: wrap; }
+.row-status { display: flex; align-items: center; }
+.row-menu { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; padding: 8px 0 2px; }
+.row-menu[hidden] { display: none; }
+.row-menu .btn { font-size: 0.85rem; padding: 6px 10px; display: inline-flex; align-items: center; gap: 6px; }
+.row-menu .btn svg { width: 16px; height: 16px; }
+#settingsMain[hidden], #adminHub[hidden], #adminPage[hidden] { display: none; }

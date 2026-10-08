@@ -2546,18 +2546,24 @@ def _sources_of(manga: dict) -> list[dict]:
     return manga.get("sources") or [{"url": manga["url"]}]
 
 
-def _commit_refreshes(results: dict[str, dict]) -> list[str]:
+def _commit_refreshes(results: dict[str, dict], failed_ids: set[str] | None = None) -> list[str]:
     """บันทึกผลดึงข้อมูลหลายเรื่องลงไฟล์ครั้งเดียว — โหลดไฟล์ใหม่ตอนจะบันทึก (ไม่ใช้ชุดที่โหลดไว้
     ก่อนเริ่มดึง ซึ่งอาจนานหลายนาที) กันทับเรื่องที่ถูกเพิ่ม/แก้/ลบระหว่างนั้น แล้วค่อยแจ้งเตือน
-    หลังบันทึกเสร็จ คืนค่า id เรื่องที่ตอนล่าสุดเปลี่ยน"""
-    if not results:
+    หลังบันทึกเสร็จ คืนค่า id เรื่องที่ตอนล่าสุดเปลี่ยน
+    failed_ids = เรื่องที่ดึงไม่สำเร็จทุกแหล่ง → จำ refresh_error ไว้ให้หน้าแอดมินขึ้นจุดแดง (สำเร็จรอบหน้าลบออก)"""
+    failed_ids = failed_ids or set()
+    if not results and not failed_ids:
         return []
     manga_items = storage.load_manga(fresh=True)
     changed = []
     for manga in manga_items:
+        if manga["id"] in failed_ids:
+            manga["refresh_error"] = {"at": now_iso(), "error": "ดึงข้อมูลไม่สำเร็จจากทุกแหล่งที่มา"}
+            continue
         parsed = results.get(manga["id"])
         if not parsed:
             continue
+        manga.pop("refresh_error", None)
         prev_chapter = _apply_refresh(manga, parsed)
         if _is_new_chapter(prev_chapter, parsed.get("latest_chapter")):
             changed.append((manga, prev_chapter))
@@ -2586,6 +2592,7 @@ def refresh_manga(manga_id):
 
     parsed = refresh_from_sources(_sources_of(manga), manga_id=manga_id)
     if not parsed:
+        _commit_refreshes({}, {manga_id})
         return jsonify({"error": "ดึงข้อมูลไม่สำเร็จ (ทุกแหล่งที่มา)"}), 502
 
     _commit_refreshes({manga_id: parsed})
@@ -2622,7 +2629,7 @@ def refresh_all():
             else:
                 failed.append({"id": manga["id"], "name": manga["name"], "error": "ดึงข้อมูลไม่สำเร็จ (ทุกแหล่งที่มา)"})
 
-    updated_ids = _commit_refreshes(results)
+    updated_ids = _commit_refreshes(results, {f["id"] for f in failed})
     items = manga_list_payload(current_username())
     return jsonify({"items": items, "updated_ids": updated_ids, "failed": failed})
 

@@ -153,24 +153,49 @@
     </section>
 
     <section id="settingsView" class="view">
+      <div id="settingsMain">
       <div class="account-card">
         <div class="account-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 21a8 8 0 0 1 16 0" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
         <div class="grow">
           <div id="accountName" class="account-name"></div>
           <div id="accountRole" class="account-role"></div>
         </div>
-        <a href="/logout" class="btn danger">ออกจากระบบ</a>
       </div>
 
       <div id="pwNotice" class="notice-card" hidden>
         รหัสผ่านของคุณถูกรีเซ็ตเป็นรหัสเริ่มต้น กรุณาตั้งรหัสผ่านใหม่ด้านล่าง
       </div>
 
-      <details id="passwordCard" class="pref-card collapsible">
-        <summary class="pref-row">
-          <div class="grow">
-            <div class="pref-title">เปลี่ยนรหัสผ่าน</div>
-          </div>
+      <h3 class="set-group-title">การแสดงผล</h3>
+      <div class="set-group">
+        <div class="set-item set-row"><span class="set-ic">🌓</span><span class="set-label">ธีม</span>
+          <span id="themeSeg" class="set-seg" role="radiogroup" aria-label="ธีม"></span></div>
+        <label id="prefCard" class="set-item set-row" hidden><span class="set-ic">👁</span>
+          <span class="set-label">แสดงหมวดพิเศษ<small>หมวดพิเศษและเรื่องในหมวดนั้น ในหน้าทั้งหมดและค้นหา</small></span>
+          <input type="checkbox" id="showSpecialToggle" class="switch" role="switch" /></label>
+      </div>
+
+      <h3 class="set-group-title">การอ่านและการดู</h3>
+      <div class="set-group">
+        <label class="set-item set-row"><span class="set-ic">📖</span><span class="set-label">เรียงตอนในหน้าเรื่อง</span>
+          <select id="setChapterSort" class="form-select"><option value="desc">ล่าสุดก่อน</option><option value="asc">ตอนแรกก่อน</option></select></label>
+        <label class="set-item set-row"><span class="set-ic">⏭</span><span class="set-label">เล่นตอนถัดไปอัตโนมัติ<small>คลิปใน playlist นับถอยหลัง 5 วิแล้วเล่นต่อ</small></span>
+          <input type="checkbox" id="setAutoNext" class="switch" role="switch" /></label>
+        <label class="set-item set-row"><span class="set-ic">🎬</span><span class="set-label">คุณภาพวิดีโอ<small>จำแยกตามเครื่อง</small></span>
+          <select id="setVideoQuality" class="form-select"><option value="auto">อัตโนมัติ</option><option value="hd">720p</option><option value="sd">360p</option></select></label>
+      </div>
+
+      <h3 class="set-group-title">การแจ้งเตือน</h3>
+      <div class="set-group">
+        <label class="set-item set-row"><span class="set-ic">🔔</span><span class="set-label">แจ้งเตือนตอนใหม่<small id="setPushDesc"></small></span>
+          <input type="checkbox" id="setPushToggle" class="switch" role="switch" /></label>
+      </div>
+
+      <h3 class="set-group-title">บัญชีและแอป</h3>
+      <div class="set-group">
+      <details id="passwordCard" class="set-item set-details collapsible">
+        <summary class="set-row">
+          <span class="set-ic">🔒</span><span class="set-label">เปลี่ยนรหัสผ่าน</span>
           <span class="chev" aria-hidden="true">›</span>
         </summary>
         <form id="passwordForm" class="password-form">
@@ -181,31 +206,44 @@
           <button type="submit" class="btn primary">บันทึกรหัสผ่านใหม่</button>
         </form>
       </details>
-
-      <div class="pref-card">
-        <div class="pref-row">
-          <div class="grow">
-            <div class="pref-title">ธีม</div>
-            <div class="pref-desc">สีของหน้าเว็บ</div>
-          </div>
-          <div class="menu-anchor">
-            <button id="themeBtn" class="btn menu-btn" aria-haspopup="menu" aria-expanded="false"></button>
-            <div id="themeMenu" class="menu" role="menu" hidden></div>
-          </div>
-        </div>
-      </div>
-
-      <div id="prefCard" class="pref-card" hidden>
-        <label class="pref-row">
-          <div class="grow">
-            <div class="pref-title">แสดงหมวดพิเศษ</div>
-            <div class="pref-desc">แสดงหมวดพิเศษและเรื่องในหมวดนั้น ในหน้าทั้งหมดและหน้าค้นหา</div>
-          </div>
-          <input type="checkbox" id="showSpecialToggle" class="switch" role="switch" />
-        </label>
+        <button id="setInstallRow" class="set-item set-row" hidden><span class="set-ic">📲</span><span class="set-label">เพิ่มไปหน้าจอโฮม</span><span class="chev" aria-hidden="true">›</span></button>
+        <a href="/logout" class="set-item set-row set-danger"><span class="set-ic">↩</span><span class="set-label">ออกจากระบบ</span></a>
       </div>
 
       <div class="admin-only" hidden>
+        <h3 class="set-group-title">ผู้ดูแลระบบ</h3>
+        <div class="set-group">
+          <button id="openAdminHub" class="set-item set-row"><span class="set-ic">🛡</span><span class="set-label"><b>จัดการระบบ</b></span><span id="adminDot" class="status-dot warn" hidden></span><span class="chev" aria-hidden="true">›</span></button>
+        </div>
+      </div>
+      </div>
+
+      <div id="adminHub" hidden>
+        <button class="btn set-back" data-admin-back="main">‹ ตั้งค่า</button>
+        <h2 class="section-title">จัดการระบบ</h2>
+        <button id="adminHubSearch" class="admin-search admin-search-fake">🔍 ค้นหา: เรื่อง, หมวด, สมาชิก, คลิป, playlist, คอมเมนต์</button>
+        <div id="adminCards" class="admin-cards"></div>
+        <h3 class="set-group-title">เนื้อหา</h3>
+        <div class="set-group">
+          <button class="set-item set-row" data-admin-open="mangaManage"><span class="set-ic">📚</span><span class="set-label">มังงะ</span><span class="set-value" data-admin-count="manga"></span><span class="chev">›</span></button>
+          <button class="set-item set-row" data-admin-open="categoryManage"><span class="set-ic">🏷</span><span class="set-label">หมวดหมู่มังงะ</span><span class="set-value" data-admin-count="nocat"></span><span class="chev">›</span></button>
+          <button class="set-item set-row" data-admin-open="videoManage"><span class="set-ic">🎬</span><span class="set-label">คลิป / Playlist / หมวดคลิป</span><span class="chev">›</span></button>
+          <button class="set-item set-row" data-admin-open="videoManage" data-admin-scroll="watchSourceForm"><span class="set-ic">📡</span><span class="set-label">ติดตามเพจ + วางลิงก์</span><span class="set-value" data-admin-count="watch"></span><span class="chev">›</span></button>
+        </div>
+        <h3 class="set-group-title">ผู้ใช้</h3>
+        <div class="set-group">
+          <button class="set-item set-row" data-admin-open="userManage"><span class="set-ic">👥</span><span class="set-label">สมาชิก + เปิดรับสมัคร</span><span class="set-value" data-admin-count="users"></span><span class="chev">›</span></button>
+          <button class="set-item set-row" data-admin-open="commentManage"><span class="set-ic">💬</span><span class="set-label">คอมเมนต์</span><span class="chev">›</span></button>
+        </div>
+        <h3 class="set-group-title">ระบบ</h3>
+        <div class="set-group">
+          <button class="set-item set-row" data-admin-open="systemManage"><span class="set-ic">🖥</span><span class="set-label">สถานะเซิร์ฟเวอร์ + ล็อก</span><span class="chev">›</span></button>
+          <button id="adminRefreshAll" class="set-item set-row"><span class="set-ic">🔄</span><span class="set-label">รีเฟรชมังงะทั้งหมด</span><span class="set-value" data-admin-count="checked"></span></button>
+        </div>
+      </div>
+
+      <div id="adminPage" hidden>
+        <button class="btn set-back" data-admin-back="hub">‹ จัดการระบบ</button>
         <input type="search" id="adminSearch" class="admin-search" placeholder="🔍 ค้นหา: เรื่อง, หมวด, สมาชิก, คลิป, playlist, คอมเมนต์" autocomplete="off" />
         <div id="adminSearchMsg" class="hint admin-search-msg" hidden></div>
         <nav class="sub-tabs">
@@ -226,6 +264,11 @@
           </button>
         </div>
         <div id="statusBar" class="status-bar" hidden></div>
+        <div id="mangaAdminFilters" class="pl-controls">
+          <button class="video-chip active" data-manga-filter="all">ทั้งหมด</button>
+          <button class="video-chip" data-manga-filter="problem">มีปัญหา</button>
+          <button class="video-chip" data-manga-filter="nocat">ไม่มีหมวด</button>
+        </div>
         <ul id="settingsList" class="settings-list"></ul>
         </div>
 
