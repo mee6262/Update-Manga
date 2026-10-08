@@ -154,7 +154,9 @@ function videoCardHtml(video) {
   if (video.external) {
     return videoItemHtml(video, `<a class="video-card" data-video-id="${escapeHtml(video.id)}" href="${escapeHtml(video.facebook_url)}" target="_blank" rel="noopener"><span class="video-media">${image}<span class="video-resume-badge video-external-badge">เปิดใน Facebook</span>${video.can_delete ? '<span class="video-card-delete" data-delete-video role="button">ลบ</span>' : ""}</span>${info}</a>`);
   }
-  return videoItemHtml(video, `<button class="video-card" data-video-id="${escapeHtml(video.id)}"><span class="video-media">${image}${resume}${timeLabel}</span>${info}</button>`);
+  // คลิปเดี่ยวที่เพิ่มภายใน 3 วันและยังไม่ได้ดู (ตอนของ playlist ใช้ป้ายบนการ์ดเรื่องแทน)
+  const fresh = !video.playlist_id && !video.watched_at && isRecent(video.created_at) ? '<span class="new-badge">NEW</span>' : "";
+  return videoItemHtml(video, `<button class="video-card" data-video-id="${escapeHtml(video.id)}"><span class="video-media">${image}${fresh}${resume}${timeLabel}</span>${info}</button>`);
 }
 
 // ปุ่ม "บันทึก" แยกจากการ์ด (ปุ่มซ้อนใน <button>/<a> ของการ์ดไม่ได้)
@@ -215,6 +217,24 @@ async function loadVideos() {
   } finally {
     videoLoading = false;
   }
+}
+
+// ---------- ป้าย NEW (คลิป/เรื่องใหม่, ตอนใหม่ของ playlist) ----------
+// ใหม่ = เพิ่มภายใน 3 วัน และคนนี้ยังไม่ได้ดู
+const NEW_DAYS = 3;
+function isRecent(iso) {
+  return !!iso && Date.now() - new Date(iso).getTime() < NEW_DAYS * 86400000;
+}
+
+// ตอนที่เพิ่มทีหลังเรื่อง (เกิน 10 นาทีจากตอนสร้างเรื่อง = ไม่ใช่ชุดแรก) ภายใน 3 วัน ที่ยังไม่ได้ดู
+function newEpisodes(playlist, episodes = playlistEpisodes(playlist.id)) {
+  const born = new Date(playlist.created_at || 0).getTime() + 10 * 60000;
+  return episodes.filter((v) => !v.watched_at && isRecent(v.created_at) && new Date(v.created_at).getTime() > born);
+}
+
+function playlistBadge(p, episodes) {
+  if (p.is_fresh && isRecent(p.created_at) && !episodes.some((v) => v.watched_at)) return '<span class="new-badge">NEW</span>';
+  return newEpisodes(p, episodes).length ? '<span class="new-badge">NEW EP</span>' : "";
 }
 
 // ---------- Playlist (เรื่องยาวหลายตอน) ----------
@@ -329,7 +349,7 @@ function playlistCardHtml(p) {
     : '<span class="video-placeholder" aria-hidden="true">▶</span>';
   const eps = playlistEpisodes(p.id);
   const resume = eps.some((v) => v.watched_at) ? playlistResume(eps) : null;
-  return `<div class="video-item playlist-item"><button class="video-card playlist-card" data-playlist-id="${escapeHtml(p.id)}"><span class="video-media">${image}<span class="video-time">${p.count} ตอน</span></span><span class="video-card-info"><span class="video-card-title">${escapeHtml(p.name)}</span><span class="video-card-meta">${resume ? `ดูต่อ ${episodeLabel(resume)}` : "ยังไม่เคยดู"}</span></span></button>${playlistSaveButton(p)}</div>`;
+  return `<div class="video-item playlist-item"><button class="video-card playlist-card" data-playlist-id="${escapeHtml(p.id)}"><span class="video-media">${image}${playlistBadge(p, eps)}<span class="video-time">${p.count} ตอน</span></span><span class="video-card-info"><span class="video-card-title">${escapeHtml(p.name)}</span><span class="video-card-meta">${resume ? `ดูต่อ ${episodeLabel(resume)}` : "ยังไม่เคยดู"}</span></span></button>${playlistSaveButton(p)}</div>`;
 }
 
 function openPlaylist(playlistId) {
@@ -353,6 +373,7 @@ function renderPlaylistView() {
   el("#playlistTitle").textContent = playlist.name;
   const resume = playlistResume(episodes);
   const started = episodes.some((v) => v.watched_at);
+  const fresh = new Set(newEpisodes(playlist, episodes).map((v) => v.id));
   const rows = episodes.map((v) => {
     const pos = Number(v.position_seconds) || 0;
     const dur = Number(v.duration_seconds) || 0;
@@ -360,7 +381,7 @@ function renderPlaylistView() {
     const bar = pos > 0 && dur > 0 ? `<span class="video-progress"><span style="width:${Math.min(100, (pos / dur) * 100).toFixed(1)}%"></span></span>` : "";
     const image = v.thumbnail_url ? `<img src="${escapeHtml(v.thumbnail_url)}" alt="" loading="lazy" />` : '<span class="video-placeholder">▶</span>';
     const sub = episodeSubtitle(v, playlist.name);
-    return `<button class="episode-row${v.id === resume.id && started ? " current" : ""}${v.watched_at && !pos ? " watched" : ""}" data-episode-id="${escapeHtml(v.id)}"><span class="episode-thumb">${image}${bar}</span><span class="episode-info"><strong>${episodeLabel(v)}</strong>${sub ? `<span class="episode-sub">${escapeHtml(sub)}</span>` : ""}<small>${status}</small></span></button>`;
+    return `<button class="episode-row${v.id === resume.id && started ? " current" : ""}${v.watched_at && !pos ? " watched" : ""}" data-episode-id="${escapeHtml(v.id)}"><span class="episode-thumb">${image}${bar}</span><span class="episode-info"><strong>${episodeLabel(v)}${fresh.has(v.id) ? ' <span class="badge-up">NEW</span>' : ""}</strong>${sub ? `<span class="episode-sub">${escapeHtml(sub)}</span>` : ""}<small>${status}</small></span></button>`;
   }).join("");
   el("#playlistBody").innerHTML = `<div class="playlist-head"><p>${episodes.length} ตอน</p><div class="playlist-head-actions">${playlistSaveButton(playlist)}<button class="btn primary" data-episode-id="${escapeHtml(resume.id)}">▶ ${started ? "ดูต่อ" : "เริ่มดู"} ${episodeLabel(resume)}</button></div></div><div class="episode-list">${rows}</div>`;
 }

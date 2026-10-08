@@ -1701,10 +1701,15 @@ def _public_playlists(videos: list[dict], saved: dict | None = None) -> list[dic
             "name": playlist["name"],
             "category_id": playlist.get("category_id"),
             "saved_at": (saved or {}).get(f"playlist:{playlist['id']}"),  # บันทึกทั้งเรื่องไว้ในคลังวิดีโอ
+            "created_at": playlist.get("created_at"),
+            # สร้างจากตอนใหม่ (เช็คเพจ/วางลิงก์) = ป้าย NEW ได้; ชุดที่นำเข้าทีเดียวทั้งคลังไม่นับว่าเรื่องใหม่
+            "is_fresh": bool(playlist.get("fresh")),
             "count": len(items),
             "thumbnail_url": cover,
             "updated_at": max(v.get("created_at", "") for v in items),
         })
+    # เรื่องที่เพิ่ง มีตอนใหม่/เพิ่งสร้าง ขึ้นก่อน (นำเข้าพร้อมกันเวลาเท่ากัน = คงลำดับเดิม)
+    result.sort(key=lambda p: p["updated_at"], reverse=True)
     return result
 
 
@@ -1761,6 +1766,8 @@ def _store_playlist_items(groups: list[tuple[str, list[dict]]], category_name: s
             created = not playlist
             if created:
                 playlist = {"id": secrets.token_hex(4), "name": name, "created_at": now}
+                if not move_existing:
+                    playlist["fresh"] = True  # เรื่องใหม่จากเพจจริง (ไม่ใช่นำเข้าย้อนหลัง)
                 playlists.append(playlist)
             if category_id and (created or move_existing):
                 playlist["category_id"] = category_id
