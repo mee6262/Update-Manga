@@ -3296,7 +3296,7 @@ async function loadChapter(mangaId, chapterUrl, restoreFraction = null) {
     const data = await getJSON(`/api/manga/${mangaId}/chapter${qs}`);
     renderChapter(data, chapterUrl, restoreFraction);
   } catch (e) {
-    body.innerHTML = `<div class="reader-msg">${escapeHtml(e.body?.error || "เกิดข้อผิดพลาด: " + e)}</div>`;
+    showChapterError(e.body?.error || String(e), mangaId, chapterUrl, restoreFraction);
   } finally {
     autoAdvancing = false;
   }
@@ -3305,6 +3305,24 @@ async function loadChapter(mangaId, chapterUrl, restoreFraction = null) {
 // เช็คทุกครั้งที่เลื่อน ว่าถึงล่างสุดของตอนที่กำลังอ่านจริง ๆ หรือยัง ถ้าถึงแล้วโชว์ข้อความ
 // "เลื่อนต่ออีกทีเพื่อไปตอนถัดไป" ไว้ก่อน ยังไม่เปลี่ยนตอนทันที ต้องรอ confirm อีกจังหวะ
 // (กันเปลี่ยนตอนเร็วเกินไปทั้งที่ยังอ่านหน้าสุดท้ายไม่จบ)
+// เปิดตอนไม่สำเร็จ: บอกสั้น ๆ ว่าเกิดอะไร + ลองใหม่/รายการตอน (รายละเอียดเทคนิคพับไว้)
+// แถบล่างเปลี่ยนเป็นชื่อตอนที่กำลังเปิด ไม่ค้างชื่อตอนก่อนหน้า
+function showChapterError(raw, mangaId, chapterUrl, restoreFraction) {
+  el("#readerChapterName").textContent = findChapterText(chapterUrl) || "";
+  const parts = String(raw).split(" | ");
+  const codes = [...new Set((String(raw).match(/\b(5\d\d)\b/g) || []))];
+  const down = codes.length > 0 && parts.every((p) => /\b5\d\d\b|timed? ?out|timeout|ล่ม|connection/i.test(p));
+  const title = down
+    ? `เว็บต้นทางล่มอยู่${parts.length > 1 ? `ทั้ง ${parts.length} แหล่ง` : ""} (${codes.join(", ")})`
+    : "เปิดตอนนี้ไม่สำเร็จ";
+  const hint = down ? "ปัญหาอยู่ที่เว็บมังงะ ไม่ใช่ที่แอป ลองใหม่อีกครั้งภายหลัง" : "ลองใหม่อีกครั้ง ถ้ายังไม่ได้ลองเปิดตอนอื่นก่อน";
+  el("#readerBody").innerHTML = `<div class="reader-error">
+    <div class="end-title">${escapeHtml(title)}</div><div class="end-meta">${escapeHtml(hint)}</div>
+    <div class="end-actions"><button class="btn primary" data-retry-chapter>ลองใหม่</button><button class="btn end-list">☰ รายการตอน</button></div>
+    <details><summary>รายละเอียด</summary><div class="reader-error-raw">${escapeHtml(raw)}</div></details></div>`;
+  el("#readerBody").querySelector("[data-retry-chapter]").addEventListener("click", () => loadChapter(mangaId, chapterUrl, restoreFraction));
+}
+
 // หลอดในแถบล่าง = สัดส่วนที่เลื่อนอ่านมาแล้วของตอนนี้
 function updateReaderProgress() {
   el("#readerProgressBar").style.width = `${(Math.max(0, Math.min(1, currentScrollFraction)) * 100).toFixed(1)}%`;
