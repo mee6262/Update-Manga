@@ -1343,6 +1343,69 @@ function initSearch() {
 }
 
 // ---------- แท็บย่อยในหน้าตั้งค่า (จัดการเรื่อง / จัดการสมาชิก) ----------
+// ---------- ค้นหาในหน้าจัดการ (แอดมิน) ----------
+// กรองแถวของทุกรายการในหน้าจัดการพร้อมกัน + ตัวเลขผลบนแท็บย่อย; รายการถูกวาดใหม่ (โหลด/แก้) ก็กรองซ้ำเอง
+const ADMIN_SEARCH_ROWS = ["#settingsList", "#categoryList", "#userList", "#watchSourceList", "#playlistManageList", "#videoManageList", "#commentManageList"]
+  .map((id) => `${id} > li`).join(", ");
+let adminSearchLoaded = false;
+
+function adminRowText(row) {
+  const values = [...row.querySelectorAll("input:not([type=checkbox]), textarea")].map((i) => i.value);
+  const selected = [...row.querySelectorAll("select")].map((s) => s.selectedOptions[0]?.textContent || "");
+  return [row.textContent, ...values, ...selected].join(" ").toLowerCase();
+}
+
+function applyAdminSearch(jump = false) {
+  const words = el("#adminSearch").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const counts = {};
+  const searchable = new Set(["mangaManage", "categoryManage", "userManage", "videoManage", "commentManage"]);
+  els(ADMIN_SEARCH_ROWS).forEach((row) => {
+    const text = words.length ? adminRowText(row) : "";
+    const hit = words.every((w) => text.includes(w));
+    row.classList.toggle("search-miss", !hit);
+    const sub = row.closest(".subview")?.id.replace(/Subview$/, "");
+    if (hit && words.length) counts[sub] = (counts[sub] || 0) + 1;
+  });
+  els(".sub-tab-btn").forEach((btn) => {
+    let badge = btn.querySelector(".sub-tab-count");
+    const label = words.length && searchable.has(btn.dataset.subtab) ? ` ${counts[btn.dataset.subtab] || 0}` : "";
+    if (!badge && label) btn.appendChild(badge = Object.assign(document.createElement("span"), { className: "sub-tab-count" }));
+    if (badge && badge.textContent !== label) badge.textContent = label;
+  });
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  el(".admin-only").classList.toggle("searching", words.length > 0); // ซ่อนฟอร์ม/ปุ่ม ให้ผลอยู่บนสุด
+  const msg = el("#adminSearchMsg");
+  const text = words.length ? (total ? `พบ ${total} รายการ` : "ไม่พบ") : "";
+  if (msg.textContent !== text) msg.textContent = text;
+  msg.hidden = !words.length;
+  // แท็บที่เปิดอยู่ไม่มีผล แต่แท็บอื่นมี → พาไปแท็บนั้น (เฉพาะตอนพิมพ์ ไม่กระโดดตอนรายการวาดใหม่)
+  const active = el(".sub-tab-btn.active")?.dataset.subtab;
+  if (jump && words.length && !counts[active]) {
+    const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    if (best) el(`.sub-tab-btn[data-subtab="${best[0]}"]`).click();
+  }
+}
+
+function initAdminSearch() {
+  const box = el("#adminSearch");
+  box.addEventListener("input", () => {
+    if (!adminSearchLoaded) {
+      // รายการคลิป/คอมเมนต์ปกติโหลดตอนกดแท็บ — ค้นหาครั้งแรกโหลดให้ครบทุกแท็บ
+      adminSearchLoaded = true;
+      Promise.all([
+        loadVideos().then(() => { renderVideoManage(); return loadPlaylistWatch(); }),
+        loadCommentManage(),
+      ]).finally(() => applyAdminSearch(true)); // โหลดเสร็จแล้วค่อยพาไปแท็บที่มีผล
+    }
+    applyAdminSearch(true);
+  });
+  let pending = null;
+  new MutationObserver(() => {
+    if (!box.value.trim() || pending) return;
+    pending = setTimeout(() => { pending = null; applyAdminSearch(); }, 50);
+  }).observe(el(".admin-only"), { childList: true, subtree: true });
+}
+
 function initSubTabs() {
   els(".sub-tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -3494,6 +3557,7 @@ function init() {
   initContinue();
   initAdminPanels();
   initPlaylistWatch();
+  initAdminSearch();
   initAppShell();
   initEdgeSwipe();
   initAndroidBack();
