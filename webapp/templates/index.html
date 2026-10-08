@@ -228,7 +228,7 @@
           <button class="set-item set-row" data-admin-open="mangaManage"><span class="set-ic">📚</span><span class="set-label">มังงะ</span><span class="set-value" data-admin-count="manga"></span><span class="chev">›</span></button>
           <button class="set-item set-row" data-admin-open="categoryManage"><span class="set-ic">🏷</span><span class="set-label">หมวดหมู่มังงะ</span><span class="set-value" data-admin-count="nocat"></span><span class="chev">›</span></button>
           <button class="set-item set-row" data-admin-open="videoManage"><span class="set-ic">🎬</span><span class="set-label">คลิป / Playlist / หมวดคลิป</span><span class="chev">›</span></button>
-          <button class="set-item set-row" data-admin-open="videoManage" data-admin-scroll="watchSourceForm"><span class="set-ic">📡</span><span class="set-label">ติดตามเพจ + วางลิงก์</span><span class="set-value" data-admin-count="watch"></span><span class="chev">›</span></button>
+          <button class="set-item set-row" data-admin-open="videoManage" data-admin-vm="add"><span class="set-ic">📡</span><span class="set-label">ติดตามเพจ + วางลิงก์</span><span class="set-value" data-admin-count="watch"></span><span class="chev">›</span></button>
         </div>
         <h3 class="set-group-title">ผู้ใช้</h3>
         <div class="set-group">
@@ -304,38 +304,64 @@
         </div>
 
         <div id="videoManageSubview" class="subview">
-          <form id="addVideoCategoryForm" class="add-form">
-            <input type="text" id="newVideoCategoryName" placeholder="ชื่อหมวดคลิปใหม่ เช่น พากย์ไทย" maxlength="40" required />
-            <button type="submit" class="btn primary">+ เพิ่มหมวดคลิป</button>
-          </form>
-          <div id="videoCategoryMsg" class="form-msg"></div>
-          <div id="videoCategoryList" class="chip-list"></div>
-          <div class="manage-actions">
-            <button id="checkVideosBtn" class="btn">ตรวจไฟล์คลิปทั้งหมด</button>
+          <div id="vmSeg" class="seg vm-seg">
+            <button data-vm-tab="clips">คลิป</button>
+            <button data-vm-tab="playlists" class="active">Playlist</button>
+            <button data-vm-tab="cats">หมวด</button>
+            <button data-vm-tab="add">เพิ่ม</button>
           </div>
-          <div id="checkVideosMsg" class="form-msg"></div>
-          <form id="watchSourceForm" class="add-form">
-            <h2>ติดตามเพจ — เช็คตอนใหม่อัตโนมัติทุก 2 ชม.</h2>
-            <input type="url" id="watchSourceUrl" placeholder="ลิงก์หน้า Reels ของเพจ Facebook" required />
-            <select id="watchSourceCategory" class="form-select"></select>
-            <button type="submit" class="btn primary">+ ติดตาม</button>
-          </form>
-          <ul id="watchSourceList" class="settings-list"></ul>
-          <div class="manage-actions"><button id="watchRunBtn" class="btn">เช็คตอนนี้</button></div>
-          <div id="watchStatus" class="form-msg watch-status"></div>
-          <div class="add-form">
-            <h2>เพิ่มตอนจากลิงก์ (reel / ลิงก์แชร์ หลายลิงก์ได้)</h2>
-            <textarea id="addLinksText" rows="3" placeholder="วางลิงก์ทีละบรรทัด"></textarea>
-            <select id="addLinksPlaylist" class="form-select"></select>
-            <button type="button" id="addLinksBtn" class="btn primary">เพิ่มตอน</button>
+          <div id="vmClips" class="vm-pane" hidden>
+            <input type="search" id="vmClipSearch" class="history-search" placeholder="ค้นหาคลิป" autocomplete="off" />
+            <div id="vmClipFilters" class="pl-controls"></div>
+            <ul id="videoManageList" class="settings-list vm-list"></ul>
           </div>
-          <div id="addLinksMsg" class="form-msg watch-status"></div>
-          <div class="manage-actions">
-            <label class="btn">นำเข้า Playlist (ไฟล์ .json)<input type="file" id="playlistImportFile" accept=".json,application/json" hidden /></label>
+          <div id="vmPlaylists" class="vm-pane">
+            <input type="search" id="vmPlSearch" class="history-search" placeholder="ค้นหาเรื่อง" autocomplete="off" />
+            <div id="vmPlFilters" class="pl-controls"></div>
+            <ul id="playlistManageList" class="settings-list vm-list"></ul>
           </div>
-          <div id="playlistImportMsg" class="form-msg"></div>
-          <ul id="playlistManageList" class="settings-list"></ul>
-          <ul id="videoManageList" class="settings-list"></ul>
+          <div id="vmCats" class="vm-pane" hidden>
+            <form id="addVideoCategoryForm" class="add-form">
+              <input type="text" id="newVideoCategoryName" placeholder="ชื่อหมวดคลิปใหม่ เช่น พากย์ไทย" maxlength="40" required />
+              <button type="submit" class="btn primary">+ เพิ่มหมวด</button>
+            </form>
+            <div id="videoCategoryMsg" class="form-msg"></div>
+            <ul id="videoCategoryList" class="settings-list vm-list"></ul>
+          </div>
+          <div id="vmAdd" class="vm-pane" hidden>
+            <div class="vm-card">
+              <h3>🔗 วางลิงก์</h3>
+              <textarea id="addLinksText" rows="3" placeholder="วางลิงก์ reel / ลิงก์แชร์ ทีละบรรทัด"></textarea>
+              <div id="addLinksMode" class="pl-controls">
+                <button class="video-chip active" data-add-mode="auto">อัตโนมัติ</button>
+                <button class="video-chip" data-add-mode="clip">คลิปเดี่ยว</button>
+                <button class="video-chip" data-add-mode="pick">เข้าเรื่อง…</button>
+              </div>
+              <select id="addLinksPlaylist" class="form-select" hidden></select>
+              <label class="vm-field">หมวด <select id="addLinksCategory" class="form-select"></select></label>
+              <button type="button" id="addLinksBtn" class="btn primary">เพิ่ม</button>
+              <div class="hint">อัตโนมัติ: มีเลขตอน → เข้าเรื่อง (ไม่มีเรื่องก็สร้างใหม่), ไม่มีเลขตอน → คลิปเดี่ยว</div>
+              <div id="addLinksMsg" class="form-msg watch-status"></div>
+            </div>
+            <div class="vm-card">
+              <h3>📡 ติดตามเพจ <button type="button" id="watchAddToggle" class="btn">+ เพจ</button></h3>
+              <form id="watchSourceForm" class="vm-watch-form" hidden>
+                <input type="url" id="watchSourceUrl" placeholder="ลิงก์หน้า Reels ของเพจ Facebook" required />
+                <select id="watchSourceCategory" class="form-select"></select>
+                <button type="submit" class="btn primary">ติดตาม</button>
+              </form>
+              <ul id="watchSourceList" class="settings-list vm-list"></ul>
+              <button id="watchRunBtn" class="btn">เช็คทุกเพจตอนนี้</button>
+              <div id="watchStatus" class="form-msg watch-status"></div>
+            </div>
+            <div class="vm-card">
+              <h3>🛠 เครื่องมือ</h3>
+              <button id="checkVideosBtn" class="btn">ตรวจไฟล์คลิปทั้งหมด</button>
+              <div id="checkVideosMsg" class="form-msg"></div>
+              <label class="btn">นำเข้า Playlist (ไฟล์ .json)<input type="file" id="playlistImportFile" accept=".json,application/json" hidden /></label>
+              <div id="playlistImportMsg" class="form-msg"></div>
+            </div>
+          </div>
         </div>
 
         <div id="commentManageSubview" class="subview">
@@ -452,6 +478,10 @@
         </button>
       </div>
     </div>
+  </div>
+
+  <div id="vmSheet" class="sheet-backdrop" hidden>
+    <div class="sheet" role="dialog" aria-modal="true"><div class="sheet-grip" aria-hidden="true"></div><div id="vmSheetBody"></div></div>
   </div>
 
   <div id="notifBackdrop" class="notif-backdrop" hidden></div>

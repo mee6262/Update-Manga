@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlsplit, urlunsplit
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template, request, Response, session, url_for
+from flask import Flask, copy_current_request_context, jsonify, redirect, render_template, request, Response, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import playlist_parse
@@ -1238,13 +1238,21 @@ def add_video():
     if not username and storage.load_users():
         return jsonify({"error": "unauthorized"}), 401
     body = request.get_json(force=True, silent=True) or {}
-    title = " ".join(str(body.get("title") or "").split())
-    raw_url = str(body.get("facebook_url") or "").strip()
-    thumbnail_url = str(body.get("thumbnail_url") or "").strip()
+    payload, status = _create_clip(
+        str(body.get("facebook_url") or "").strip(), username or "local",
+        title=" ".join(str(body.get("title") or "").split()),
+        thumbnail_url=str(body.get("thumbnail_url") or "").strip(),
+    )
+    return jsonify(payload), status
+
+
+def _create_clip(raw_url: str, username: str, title: str = "", thumbnail_url: str = "",
+                 category_id: str | None = None) -> tuple[dict, int]:
+    """เพิ่มคลิปเดี่ยวจากลิงก์ Facebook (ปุ่ม + เพิ่มคลิป และช่องวางลิงก์ของแอดมิน) คืน (ข้อมูล, HTTP status)"""
     if thumbnail_url:
         thumb = urlsplit(thumbnail_url)
         if thumb.scheme != "https" or not thumb.hostname:
-            return jsonify({"error": "รูปปกต้องเป็นลิงก์ https"}), 400
+            return {"error": "รูปปกต้องเป็นลิงก์ https"}, 400
 
     # อ่านข้อมูลจากหน้า Facebook ก่อนเข้า lock (ห้ามยิงเน็ตใน state_lock) — แปลงลิงก์แชร์เป็น reel และใช้เป็น
     # ชื่อ/ปกอัตโนมัติถ้าผู้ใช้ไม่ได้ใส่มา
@@ -1258,16 +1266,17 @@ def add_video():
     resolved = (_resolve_facebook_share(raw_url) if is_share else None) or (meta.get("url") if is_share else None)
     facebook_url, error = _canonical_facebook_video_url(resolved or raw_url)
     if error:
-        return jsonify({"error": error}), 400
+        return {"error": error}, 400
     # คลิปที่เล่นแบบฝังไม่ได้ (ไม่สาธารณะ/ปิดการฝัง) ยังเพิ่มได้ แต่การ์ดจะเปิดในแอป Facebook แทนตัวเล่นในเว็บ
     duration, external = _facebook_embed_check(facebook_url)
     if external and _facebook_video_sources(facebook_url):
         external = False  # ปิดการฝังแต่เป็นคลิปสาธารณะ: GraphQL ให้ไฟล์ตรง เล่นในเว็บได้
     if not title:
-        title = _clean_video_title(meta.get("title") or "")[:MAX_VIDEO_TITLE]
+        # ตัดยอดดู/แฮชแท็ก/"| ชื่อเพจ | Facebook" ท้าย og:title
+        title = (_reel_title(meta.get("title") or "") or _clean_video_title(meta.get("title") or ""))[:MAX_VIDEO_TITLE]
     title = title or "คลิปจาก Facebook"  # ฟอร์มไม่มีช่องชื่อแล้ว ดึงชื่อไม่ได้ก็ยังเพิ่มได้
     if len(title) > MAX_VIDEO_TITLE:
-        return jsonify({"error": f"ชื่อเรื่องต้องไม่เกิน {MAX_VIDEO_TITLE} ตัวอักษร"}), 400
+        return {"error": f"ชื่อเรื่องต้องไม่เกิน {MAX_VIDEO_TITLE} ตัวอักษร"}, 400
     canonical_key = hashlib.sha256(facebook_url.encode("utf-8")).hexdigest()[:20]
     if not thumbnail_url and meta.get("image") and not storage.video_thumb_path(canonical_key).exists():
         _fetch_video_thumb(canonical_key, meta["image"])
@@ -1279,7 +1288,7 @@ def add_video():
         existing = next((video for video in videos if video.get("canonical_key") == canonical_key), None)
         if existing:
             # POST แบบ idempotent: มือถือ/เน็ตช้าส่งซ้ำได้ แต่หน้าเว็บต้องไม่แจ้งล้มเหลวหลังคลิปถูกสร้างแล้ว
-            return jsonify({**_public_video(existing), "already_exists": True})
+            return {**_public_video(existing), "already_exists": True}, 200
         video = {
             "id": canonical_key,
             "canonical_key": canonical_key,
@@ -1288,12 +1297,14 @@ def add_video():
             "thumbnail_url": thumbnail_url or None,
             "duration_seconds": duration,
             "external": external,
-            "added_by": username or "local",
+            "added_by": username,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        if category_id:
+            video["category_id"] = category_id
         videos.append(video)
         storage.save_videos(videos)
-    return jsonify(_public_video(video)), 201
+    return _public_video(video), 201
 
 @app.route("/api/videos/<video_id>", methods=["DELETE"])
 def delete_video(video_id):
@@ -1688,8 +1699,43 @@ def update_video(video_id):
             if category_id and not any(c["id"] == category_id for c in storage.load_video_categories()):
                 return jsonify({"error": "ไม่พบหมวดนี้"}), 400
             video["category_id"] = category_id
+        if "episode" in body:  # แก้เลขตอนที่ตัวแยกชื่อให้ผิด (เฉพาะตอนใน playlist)
+            if not video.get("playlist_id"):
+                return jsonify({"error": "คลิปนี้ไม่ได้อยู่ใน playlist"}), 400
+            try:
+                episode = float(body.get("episode"))
+            except (TypeError, ValueError):
+                return jsonify({"error": "เลขตอนต้องเป็นตัวเลข"}), 400
+            if not 0 <= episode < 100000:
+                return jsonify({"error": "เลขตอนไม่ถูกต้อง"}), 400
+            video["episode"] = episode
         storage.save_videos(videos)
     return jsonify(_public_video(video))
+
+
+@app.route("/api/video-categories/<category_id>", methods=["PATCH"])
+@require_admin
+def rename_video_category(category_id):
+    name = " ".join(str((request.get_json(force=True, silent=True) or {}).get("name") or "").split())
+    if not name or len(name) > 40:
+        return jsonify({"error": "ชื่อหมวดต้องมี 1-40 ตัวอักษร"}), 400
+    with storage.state_lock:
+        categories = storage.load_video_categories(fresh=True)
+        category = next((c for c in categories if c["id"] == category_id), None)
+        if not category:
+            return jsonify({"error": "ไม่พบหมวดนี้"}), 404
+        if any(c["name"] == name and c["id"] != category_id for c in categories):
+            return jsonify({"error": "มีหมวดชื่อนี้อยู่แล้ว"}), 400
+        old_name, category["name"] = category["name"], name
+        storage.save_video_categories(categories)
+        # เพจที่ติดตามอ้างหมวดด้วยชื่อ — เปลี่ยนตาม ไม่งั้นรอบเช็คถัดไปจะสร้างหมวดชื่อเดิมขึ้นมาใหม่
+        watch = storage.load_playlist_watch(fresh=True)
+        if any(s.get("category") == old_name for s in watch.get("sources", [])):
+            for s in watch["sources"]:
+                if s.get("category") == old_name:
+                    s["category"] = name
+            storage.save_playlist_watch(watch)
+    return jsonify(category)
 
 
 # ---------- playlist (เรื่องยาวหลายตอน นำเข้าทีละเรื่อง แอดมินเท่านั้น) ----------
@@ -1900,6 +1946,38 @@ def update_video_playlist(playlist_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/video-playlists/<playlist_id>/merge", methods=["POST"])
+@require_admin
+def merge_video_playlist(playlist_id):
+    """รวมเรื่อง (ชื่อแตกเป็นสองเรื่อง เช่น "มหาเวท"/"มหาเวทย์"): ย้ายทุกตอนเข้าเรื่องปลายทาง แล้วลบเรื่องนี้
+    เลขตอนซ้ำกันเก็บไว้ทั้งคู่ (แก้เลขเองทีหลัง); คนที่บันทึกเรื่องนี้ไว้ ย้ายไปบันทึกเรื่องปลายทางแทน"""
+    target_id = str((request.get_json(force=True, silent=True) or {}).get("into") or "")
+    if target_id == playlist_id:
+        return jsonify({"error": "เลือกเรื่องอื่น"}), 400
+    with storage.state_lock:
+        playlists = storage.load_video_playlists(fresh=True)
+        source = next((p for p in playlists if p["id"] == playlist_id), None)
+        target = next((p for p in playlists if p["id"] == target_id), None)
+        if not source or not target:
+            return jsonify({"error": "ไม่พบ playlist"}), 404
+        videos = storage.load_videos(fresh=True)
+        moved = 0
+        for video in videos:
+            if video.get("playlist_id") == playlist_id:
+                video["playlist_id"] = target_id
+                moved += 1
+        storage.save_videos(videos)
+        storage.save_video_playlists([p for p in playlists if p["id"] != playlist_id])
+        src_key, dst_key = f"playlist:{playlist_id}", f"playlist:{target_id}"
+        for u in [*storage.all_usernames(), "local"]:
+            saved = storage.load_video_saved(u, fresh=True)
+            if src_key in saved:
+                saved.setdefault(dst_key, saved[src_key])
+                del saved[src_key]
+                storage.save_video_saved(u, saved)
+    return jsonify({"ok": True, "moved": moved, "into": target["name"]})
+
+
 @app.route("/api/video-playlists/<playlist_id>", methods=["DELETE"])
 @require_admin
 def delete_video_playlist(playlist_id):
@@ -2003,7 +2081,26 @@ def add_playlist_links():
             return jsonify({"error": "ไม่พบ playlist"}), 404
         forced = playlist["name"]
     category = " ".join(str(body.get("category") or "").split())[:40]
-    results = _add_reels_to_playlists(urls, category, current_username() or "local", forced)
+    username = current_username() or "local"
+    mode = body.get("mode") or "auto"  # auto = มีเลขตอนเข้าเรื่อง ไม่มีเป็นคลิปเดี่ยว / clip = คลิปเดี่ยวทั้งหมด
+    if mode == "clip" and not forced:
+        clip_urls, results = urls, []
+    else:
+        results = _add_reels_to_playlists(urls, category, username, forced)
+        # ไม่ใช่ตอนของซีรีส์ (ไม่มีเลขตอน) → เพิ่มเป็นคลิปเดี่ยวแทนการข้าม (เต็มเรื่อง ฯลฯ)
+        clip_urls = [r["url"] for r in results if r.get("status") == "skipped"] if mode == "auto" and not forced else []
+        results = [r for r in results if r["url"] not in clip_urls] if clip_urls else results
+    if clip_urls:
+        cat_id = next((c["id"] for c in storage.load_video_categories() if c["name"] == category), None)
+
+        @copy_current_request_context  # _public_video อ่าน session (สิทธิ์ลบ) — thread ต้องเห็น request เดิม
+        def add_clip(url):
+            payload, status = _create_clip(url, username, category_id=cat_id)
+            if status >= 400:
+                return {"url": url, "status": "error", "error": payload.get("error")}
+            return {"url": url, "title": payload.get("title"), "status": "exists" if payload.get("already_exists") else "added_clip"}
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            results.extend(pool.map(add_clip, clip_urls))
     return jsonify({"ok": True, "results": results})
 
 

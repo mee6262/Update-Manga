@@ -1968,11 +1968,11 @@ function settingsPane() {
   return !el("#adminPage").hidden ? "page" : !el("#adminHub").hidden ? "hub" : "main";
 }
 
-function openAdminPage(subtab, scrollTo) {
+function openAdminPage(subtab, vm) {
   showSettingsPane("page");
+  if (vm) setVmTab(vm);
   const btn = el(`.sub-tab-btn[data-subtab="${subtab}"]`);
   if (btn) btn.click(); // ใช้ตัวโหลดข้อมูลของแท็บย่อยเดิม
-  if (scrollTo) setTimeout(() => el(`#${scrollTo}`)?.scrollIntoView({ block: "start" }), 400);
 }
 
 // การ์ดสรุป + ตัวเลขในศูนย์จัดการ + จุดเตือนที่แถว "จัดการระบบ"
@@ -2005,7 +2005,7 @@ function initSettingsPanes() {
   els("[data-admin-back]").forEach((b) => b.addEventListener("click", () => showSettingsPane(b.dataset.adminBack)));
   el("#adminHub").addEventListener("click", (e) => {
     const row = e.target.closest("[data-admin-open]");
-    if (row) openAdminPage(row.dataset.adminOpen, row.dataset.adminScroll);
+    if (row) openAdminPage(row.dataset.adminOpen, row.dataset.adminVm);
   });
   el("#adminHubSearch").addEventListener("click", () => {
     openAdminPage("mangaManage");
@@ -4151,29 +4151,214 @@ async function loadCommentManage() {
   } catch (e) { el("#commentManageList").innerHTML = '<li class="comment-empty">โหลดไม่สำเร็จ</li>'; }
 }
 
+// ---------- จัดการคลิป (แอดมิน): แท็บ คลิป / Playlist / หมวด / เพิ่ม + แผ่นแก้ไข ----------
+let vmTab = "playlists";
+let vmPlFilter = "updated"; // updated / nocat / similar
+let vmClipFilter = "all"; // all / nocat / external
+
+function setVmTab(tab) {
+  vmTab = tab;
+  els("#vmSeg [data-vm-tab]").forEach((b) => b.classList.toggle("active", b.dataset.vmTab === tab));
+  [["clips", "#vmClips"], ["playlists", "#vmPlaylists"], ["cats", "#vmCats"], ["add", "#vmAdd"]]
+    .forEach(([t, sel]) => { el(sel).hidden = t !== tab; });
+}
+
+function categoryName(id) {
+  return (state.videoCategories || []).find((c) => c.id === id)?.name || "";
+}
+
+// ชื่อคล้ายกัน: ตัดวรรณยุกต์/การันต์/ช่องว่างแล้วเท่ากัน หรือห่างกันไม่เกิน 2 ตัวอักษร (ตัวเลขต้องตรงกัน
+// — "ภาค1" กับ "ภาค2" เป็นคนละภาคจริง) ระบบแค่เสนอ ไม่รวมให้เอง
+function normName(name) {
+  return name.toLowerCase().replace(/[\s\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]/g, "").replace(/ย$/, "");
+}
+
+function editDistance(a, b) {
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let k = 1; k <= b.length; k++) cur[k] = Math.min(prev[k] + 1, cur[k - 1] + 1, prev[k - 1] + (a[i - 1] === b[k - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+function similarPlaylists() {
+  const lists = state.videoPlaylists || [];
+  const out = new Map();
+  const digits = (s) => (s.match(/\d+/g) || []).join(",");
+  for (let i = 0; i < lists.length; i++) {
+    for (let k = i + 1; k < lists.length; k++) {
+      const a = normName(lists[i].name), b = normName(lists[k].name);
+      if (digits(lists[i].name) !== digits(lists[k].name)) continue;
+      if (a === b || (Math.min(a.length, b.length) >= 6 && editDistance(a, b) <= 2)) {
+        out.set(lists[i].id, [...(out.get(lists[i].id) || []), lists[k].id]);
+        out.set(lists[k].id, [...(out.get(lists[k].id) || []), lists[i].id]);
+      }
+    }
+  }
+  return out;
+}
+
+function vmThumb(url) {
+  return url ? `<img class="vm-thumb" src="${escapeHtml(url)}" alt="" loading="lazy" />` : '<span class="vm-thumb video-placeholder">▶</span>';
+}
+
 function renderVideoManage() {
   const cats = state.videoCategories || [];
-  el("#videoCategoryList").innerHTML = cats.length
-    ? cats.map((c) => `<span class="chip">${escapeHtml(c.name)} <button class="link-btn" data-delete-video-category="${escapeHtml(c.id)}">✕</button></span>`).join("")
-    : '<span class="hint">ยังไม่มีหมวดคลิป</span>';
-  const options = (selected) => [`<option value="">— ไม่มีหมวด —</option>`, ...cats.map((c) =>
-    `<option value="${escapeHtml(c.id)}"${c.id === selected ? " selected" : ""}>${escapeHtml(c.name)}</option>`)].join("");
-  el("#playlistManageList").innerHTML = (state.videoPlaylists || []).map((p) => `<li class="video-manage-row" data-playlist-id="${escapeHtml(p.id)}">
-    ${p.thumbnail_url ? `<img src="${escapeHtml(p.thumbnail_url)}" alt="" loading="lazy" />` : '<span class="video-placeholder">▶</span>'}
-    <div class="grow">
-      <input class="playlist-name-input" value="${escapeHtml(p.name)}" maxlength="80" />
-      <div class="video-manage-meta"><select class="playlist-category-select">${options(p.category_id)}</select><small>Playlist · ${p.count} ตอน</small>
-      <button class="link-btn danger-text" data-delete-playlist>ลบทั้งเรื่อง</button></div>
-    </div></li>`).join("");
-  // ตอนของ playlist จัดการผ่านแถว playlist ด้านบน (หลายร้อยแถวจะทำหน้านี้หน่วง)
-  el("#videoManageList").innerHTML = state.videos.filter((v) => !v.playlist_id).map((v) => `<li class="video-manage-row" data-video-id="${escapeHtml(v.id)}">
-    ${v.thumbnail_url ? `<img src="${escapeHtml(v.thumbnail_url)}" alt="" loading="lazy" />` : '<span class="video-placeholder">▶</span>'}
-    <div class="grow">
-      <input class="video-title-input" value="${escapeHtml(v.title)}" maxlength="160" />
-      <div class="video-manage-meta"><select class="video-category-select">${options(v.category_id)}</select>
-      <small>${v.external ? "เปิดใน Facebook · " : ""}เพิ่มโดย ${escapeHtml(v.added_by)}</small>
-      <button class="link-btn danger-text" data-admin-delete-video>ลบ</button></div>
-    </div></li>`).join("");
+  const lists = state.videoPlaylists || [];
+  const clips = state.videos.filter((v) => !v.playlist_id);
+  const similar = similarPlaylists();
+  const seg = { clips: `คลิป ${clips.length}`, playlists: `Playlist ${lists.length}`, cats: "หมวด", add: "เพิ่ม" };
+  els("#vmSeg [data-vm-tab]").forEach((b) => { b.textContent = seg[b.dataset.vmTab]; });
+  setVmTab(vmTab);
+
+  // Playlist
+  const nocatPl = lists.filter((p) => !p.category_id);
+  el("#vmPlFilters").innerHTML = [["updated", "อัปเดตล่าสุด"], ["nocat", `ไม่มีหมวด ${nocatPl.length}`], ["similar", `ชื่อคล้ายกัน ${similar.size}`]]
+    .map(([k, label]) => `<button class="video-chip${vmPlFilter === k ? " active" : ""}" data-vm-pl-filter="${k}">${label}</button>`).join("");
+  const q = el("#vmPlSearch").value.trim().toLowerCase();
+  const pls = (vmPlFilter === "nocat" ? nocatPl : vmPlFilter === "similar" ? lists.filter((p) => similar.has(p.id)) : lists)
+    .filter((p) => !q || p.name.toLowerCase().includes(q));
+  if (vmPlFilter === "similar") pls.sort((a, b) => normName(a.name).localeCompare(normName(b.name), "th"));
+  el("#playlistManageList").innerHTML = pls.map((p) => {
+    const twin = similar.get(p.id);
+    const meta = twin ? `<span class="status-bad">คล้าย "${escapeHtml(lists.find((x) => x.id === twin[0])?.name || "")}"</span>`
+      : `${escapeHtml(categoryName(p.category_id) || "ไม่มีหมวด")} · ตอนใหม่ ${timeAgo(p.updated_at, "เมื่อสักครู่")}`;
+    return `<li class="vm-row" data-vm-open="pl:${escapeHtml(p.id)}">${vmThumb(p.thumbnail_url)}${playlistBadge(p, playlistEpisodes(p.id)) ? '<span class="vm-ep">EP</span>' : ""}
+      <div class="grow"><div class="name">${escapeHtml(p.name)}</div><div class="meta">${p.count} ตอน · ${meta}</div></div><span class="vm-more" aria-hidden="true">⋯</span></li>`;
+  }).join("") || '<li class="hint">ไม่มีเรื่องตามตัวกรองนี้</li>';
+
+  // คลิปเดี่ยว
+  el("#vmClipFilters").innerHTML = [["all", `ทั้งหมด ${clips.length}`], ["nocat", `ไม่มีหมวด ${clips.filter((v) => !v.category_id).length}`], ["external", `เปิดใน Facebook ${clips.filter((v) => v.external).length}`]]
+    .map(([k, label]) => `<button class="video-chip${vmClipFilter === k ? " active" : ""}" data-vm-clip-filter="${k}">${label}</button>`).join("");
+  const cq = el("#vmClipSearch").value.trim().toLowerCase();
+  el("#videoManageList").innerHTML = clips
+    .filter((v) => vmClipFilter === "nocat" ? !v.category_id : vmClipFilter === "external" ? v.external : true)
+    .filter((v) => !cq || v.title.toLowerCase().includes(cq))
+    .map((v) => {
+      const dur = Number(v.duration_seconds) || 0;
+      return `<li class="vm-row" data-vm-open="v:${escapeHtml(v.id)}">${vmThumb(v.thumbnail_url)}
+        <div class="grow"><div class="name">${escapeHtml(v.title)}</div><div class="meta">${escapeHtml(categoryName(v.category_id) || "ไม่มีหมวด")} · ${escapeHtml(v.added_by)}${dur ? ` · ${Math.max(1, Math.round(dur / 60))} นาที` : ""}${v.external ? " · เปิดใน Facebook" : ""}</div></div><span class="vm-more" aria-hidden="true">⋯</span></li>`;
+    }).join("") || '<li class="hint">ไม่มีคลิปตามตัวกรองนี้</li>';
+
+  // หมวด
+  el("#videoCategoryList").innerHTML = cats.length ? cats.map((c) => {
+    const nClips = clips.filter((v) => v.category_id === c.id).length;
+    const nPl = lists.filter((p) => p.category_id === c.id).length;
+    return `<li class="vm-row" data-cat-id="${escapeHtml(c.id)}"><div class="grow"><div class="name">${escapeHtml(c.name)}</div><div class="meta">คลิป ${nClips} · เรื่อง ${nPl}</div></div>
+      <button class="btn" data-rename-video-category="${escapeHtml(c.id)}">เปลี่ยนชื่อ</button><button class="btn danger" data-delete-video-category="${escapeHtml(c.id)}">ลบ</button></li>`;
+  }).join("") : '<li class="hint">ยังไม่มีหมวดคลิป</li>';
+
+  // ตัวเลือกในแท็บเพิ่ม
+  const catOptions = (none) => [`<option value="">${none}</option>`, ...cats.map((c) => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`)].join("");
+  const keepCat = el("#addLinksCategory").value;
+  el("#addLinksCategory").innerHTML = catOptions("— ไม่มีหมวด —");
+  el("#addLinksCategory").value = keepCat || (cats.some((c) => c.name === "ซีรีส์จีน") ? "ซีรีส์จีน" : "");
+  const keepPl = el("#addLinksPlaylist").value;
+  el("#addLinksPlaylist").innerHTML = ['<option value="">— เลือกเรื่อง —</option>', ...lists.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`)].join("");
+  el("#addLinksPlaylist").value = keepPl;
+}
+
+// ---------- แผ่นแก้ไข (กด ⋯ / แถว) ----------
+let vmSheetKey = null;
+
+function closeVmSheet() {
+  vmSheetKey = null;
+  el("#vmSheet").hidden = true;
+}
+
+function catChipsHtml(selected) {
+  return [{ id: "", name: "ไม่มี" }, ...(state.videoCategories || [])].map((c) =>
+    `<button type="button" class="video-chip${(selected || "") === c.id ? " active" : ""}" data-sheet-cat="${escapeHtml(c.id)}">${escapeHtml(c.name)}</button>`).join("");
+}
+
+function openVmSheet(key, { episodes = false } = {}) {
+  vmSheetKey = key;
+  const [kind, id] = [key.slice(0, key.indexOf(":")), key.slice(key.indexOf(":") + 1)];
+  const body = el("#vmSheetBody");
+  if (kind === "pl") {
+    const p = playlistById(id);
+    if (!p) return closeVmSheet();
+    const eps = playlistEpisodes(id);
+    const twins = similarPlaylists().get(id) || [];
+    const others = [...twins.map(playlistById), ...(state.videoPlaylists || []).filter((x) => x.id !== id && !twins.includes(x.id))].filter(Boolean);
+    body.innerHTML = `<div class="sheet-head">${vmThumb(p.thumbnail_url)}<div><div class="name">${escapeHtml(p.name)}</div><div class="meta">${eps.length} ตอน${eps.length ? ` · ตอนที่ ${Number(eps[0].episode)}–${Number(eps[eps.length - 1].episode)}` : ""}</div></div></div>
+      <label class="vm-field">ชื่อเรื่อง<input id="sheetName" value="${escapeHtml(p.name)}" maxlength="80" /></label>
+      <div class="vm-field">หมวด<div class="pl-controls" id="sheetCats">${catChipsHtml(p.category_id)}</div></div>
+      <button class="btn primary" data-sheet-save>บันทึก</button>
+      <div class="vm-field">รวมเข้ากับเรื่องอื่น<select id="sheetMergeTarget" class="form-select">${others.map((o, i) => `<option value="${escapeHtml(o.id)}">${i < twins.length ? "★ " : ""}${escapeHtml(o.name)} (${o.count} ตอน)</option>`).join("")}</select>
+        <button class="btn" data-sheet-merge>รวมทุกตอนเข้าเรื่องที่เลือก</button></div>
+      <button class="btn" data-sheet-episodes>${episodes ? "ซ่อนรายการตอน" : "ดูรายการตอน / แก้เลขตอน"}</button>
+      ${episodes ? `<ul class="sheet-eps">${eps.map((v) => `<li><input type="number" step="any" value="${Number(v.episode)}" data-ep-id="${escapeHtml(v.id)}" aria-label="เลขตอน" /><span>${escapeHtml(v.title)}</span></li>`).join("")}</ul><div class="hint">แก้เลขแล้วกดออกจากช่อง = บันทึกทันที</div>` : ""}
+      <button class="btn danger" data-sheet-delete>ลบทั้งเรื่อง</button>
+      <div id="sheetMsg" class="form-msg"></div>`;
+  } else {
+    const v = state.videos.find((x) => x.id === id);
+    if (!v) return closeVmSheet();
+    body.innerHTML = `<div class="sheet-head">${vmThumb(v.thumbnail_url)}<div><div class="name">${escapeHtml(v.title)}</div><div class="meta">เพิ่มโดย ${escapeHtml(v.added_by)} · ${timeAgo(v.created_at, "เมื่อสักครู่")}</div></div></div>
+      <label class="vm-field">ชื่อคลิป<input id="sheetName" value="${escapeHtml(v.title)}" maxlength="160" /></label>
+      <div class="vm-field">หมวด<div class="pl-controls" id="sheetCats">${catChipsHtml(v.category_id)}</div></div>
+      <button class="btn primary" data-sheet-save>บันทึก</button>
+      <button class="btn" data-sheet-play>▶ เปิดดูคลิป</button>
+      <button class="btn danger" data-sheet-delete>ลบคลิป</button>
+      <div id="sheetMsg" class="form-msg"></div>`;
+  }
+  el("#vmSheet").hidden = false;
+}
+
+async function vmSheetAction(e) {
+  if (e.target === el("#vmSheet")) return closeVmSheet(); // แตะพื้นหลัง = ปิด
+  const key = vmSheetKey;
+  if (!key) return;
+  const kind = key.slice(0, key.indexOf(":"));
+  const id = key.slice(key.indexOf(":") + 1);
+  const msg = el("#sheetMsg");
+  const chip = e.target.closest("[data-sheet-cat]");
+  if (chip) {
+    els("#sheetCats [data-sheet-cat]").forEach((b) => b.classList.toggle("active", b === chip));
+    return;
+  }
+  const refresh = async () => { await loadVideos(); renderVideoManage(); };
+  try {
+    if (e.target.closest("[data-sheet-save]")) {
+      const name = el("#sheetName").value.trim();
+      const category_id = el("#sheetCats .active")?.dataset.sheetCat || null;
+      if (kind === "pl") await sendJSON("PATCH", `/api/video-playlists/${encodeURIComponent(id)}`, { name, category_id });
+      else await sendJSON("PATCH", `/api/videos/${encodeURIComponent(id)}`, { title: name, category_id });
+      await refresh();
+      closeVmSheet();
+    } else if (e.target.closest("[data-sheet-merge]")) {
+      const target = playlistById(el("#sheetMergeTarget").value);
+      const p = playlistById(id);
+      if (!target || !confirm(`ย้ายทั้ง ${p.count} ตอนของ "${p.name}" เข้า "${target.name}" แล้วลบ "${p.name}"?`)) return;
+      const res = await sendJSON("POST", `/api/video-playlists/${encodeURIComponent(id)}/merge`, { into: target.id });
+      await refresh();
+      openVmSheet(`pl:${target.id}`, { episodes: true });
+      el("#sheetMsg").textContent = `รวมแล้ว ${res.moved} ตอน — ตรวจเลขตอนซ้ำด้านบนได้เลย`;
+    } else if (e.target.closest("[data-sheet-episodes]")) {
+      openVmSheet(key, { episodes: !el("#vmSheetBody .sheet-eps") });
+    } else if (e.target.closest("[data-sheet-play]")) {
+      const v = state.videos.find((x) => x.id === id);
+      closeVmSheet();
+      if (v) openVideo(v);
+    } else if (e.target.closest("[data-sheet-delete]")) {
+      if (kind === "pl") {
+        const p = playlistById(id);
+        if (!confirm(`ลบ "${p.name}" พร้อมทั้ง ${p.count} ตอน?\n(ทุกคนจะไม่เห็นอีก)`)) return;
+        await sendJSON("DELETE", `/api/video-playlists/${encodeURIComponent(id)}`);
+      } else {
+        const v = state.videos.find((x) => x.id === id);
+        if (!confirm(`ลบคลิป "${v.title}"?`)) return;
+        await sendJSON("DELETE", `/api/videos/${encodeURIComponent(id)}`);
+      }
+      closeVmSheet();
+      await refresh();
+    }
+  } catch (err) {
+    if (msg) { msg.classList.add("error"); msg.textContent = err.message || "ไม่สำเร็จ"; }
+  }
 }
 
 // ---------- ติดตามเพจ / เพิ่มตอนจากลิงก์ ----------
@@ -4195,18 +4380,21 @@ function renderPlaylistWatch() {
   const cats = state.videoCategories || [];
   el("#watchSourceCategory").innerHTML = ['<option value="">— ไม่มีหมวด —</option>', ...cats.map((c) =>
     `<option value="${escapeHtml(c.name)}"${c.name === "ซีรีส์จีน" ? " selected" : ""}>${escapeHtml(c.name)}</option>`)].join("");
-  el("#addLinksPlaylist").innerHTML = ['<option value="">แยกเรื่องจากชื่อคลิปอัตโนมัติ</option>', ...(state.videoPlaylists || []).map((p) =>
-    `<option value="${escapeHtml(p.id)}">เข้า: ${escapeHtml(p.name)}</option>`)].join("");
   const sources = playlistWatch.sources || [];
-  el("#watchSourceList").innerHTML = sources.map((s, i) => `<li class="video-manage-row"><div class="grow"><div class="watch-url">${escapeHtml(s.url)}</div>
-    <div class="video-manage-meta"><small>หมวด: ${escapeHtml(s.category || "—")}</small><button class="link-btn danger-text" data-remove-watch="${i}">เลิกติดตาม</button></div></div></li>`).join("");
+  const results = playlistWatch.last_result || [];
+  el("#watchSourceList").innerHTML = sources.map((s, i) => {
+    const r = results.find((x) => x.url === s.url);
+    const status = playlistWatch.running ? '<span class="status-dot warn"></span>กำลังเช็ค...'
+      : !r ? '<span class="status-dot"></span>ยังไม่เคยเช็ค'
+      : r.error ? `<span class="status-dot bad"></span><span class="status-bad">${escapeHtml(r.error)}</span>`
+      : `<span class="status-dot ok"></span>เช็ค ${timeAgo(r.checked_at, "เมื่อสักครู่")} · พบ ${r.found} · เพิ่ม ${r.added.length} ตอน`;
+    const id = (s.url.match(/id=(\d+)/) || s.url.match(/facebook\.com\/([^/?#]+)/) || [])[1] || s.url;
+    return `<li class="vm-row"><div class="grow"><div class="name">เพจ ${escapeHtml(id)}</div><div class="meta">→ ${escapeHtml(s.category || "ไม่มีหมวด")}</div><div class="meta row-status">${status}</div>
+      ${r && r.added.length ? `<div class="meta">${escapeHtml(r.added.join(", "))}</div>` : ""}</div>
+      <button class="btn danger" data-remove-watch="${i}">เลิกติดตาม</button></li>`;
+  }).join("") || '<li class="hint">ยังไม่ได้ติดตามเพจไหน — กด "+ เพจ"</li>';
   el("#watchRunBtn").disabled = !sources.length || playlistWatch.running;
-  const lines = (playlistWatch.last_result || []).map((r) => r.error
-    ? `⚠️ ${r.error}`
-    : `พบ ${r.found} คลิปล่าสุด · เพิ่ม ${r.added.length} ตอน${r.added.length ? `: ${r.added.join(", ")}` : ""}`);
-  el("#watchStatus").textContent = playlistWatch.running ? "กำลังเช็ค..."
-    : playlistWatch.last_run ? `เช็คล่าสุด ${timeAgo(playlistWatch.last_run, "เมื่อสักครู่")} — ${lines.join(" / ")}`
-    : sources.length ? "ยังไม่เคยเช็ค (จะเช็คเองภายใน 2 ชม. หรือกด เช็คตอนนี้)" : "";
+  el("#watchStatus").textContent = playlistWatch.running ? "กำลังเช็ค..." : playlistWatch.last_run ? `เช็คอัตโนมัติทุก 2 ชม. · ล่าสุด ${timeAgo(playlistWatch.last_run, "เมื่อสักครู่")}` : "";
 }
 
 async function saveWatchSources(sources) {
@@ -4231,20 +4419,38 @@ function initPlaylistWatch() {
     try { await sendJSON("POST", "/api/video-playlists/watch/run"); } catch (e) { alert(e.message); }
     loadPlaylistWatch();
   });
+  el("#watchAddToggle").addEventListener("click", () => {
+    el("#watchSourceForm").hidden = !el("#watchSourceForm").hidden;
+    if (!el("#watchSourceForm").hidden) el("#watchSourceUrl").focus();
+  });
+  el("#addLinksMode").addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-add-mode]");
+    if (!chip) return;
+    els("#addLinksMode [data-add-mode]").forEach((b) => b.classList.toggle("active", b === chip));
+    el("#addLinksPlaylist").hidden = chip.dataset.addMode !== "pick";
+  });
   el("#addLinksBtn").addEventListener("click", async (event) => {
     const btn = event.currentTarget;
     const msg = el("#addLinksMsg");
+    const mode = el("#addLinksMode .active")?.dataset.addMode || "auto";
+    if (mode === "pick" && !el("#addLinksPlaylist").value) {
+      msg.classList.add("error");
+      msg.textContent = "เลือกเรื่องปลายทางก่อน";
+      return;
+    }
     btn.disabled = true;
     msg.classList.remove("error");
-    msg.textContent = "กำลังอ่านลิงก์...";
+    msg.textContent = "กำลังอ่านลิงก์... (ลิงก์ละไม่กี่วินาที)";
     try {
       const data = await sendJSON("POST", "/api/video-playlists/add-links", {
-        links: el("#addLinksText").value, playlist_id: el("#addLinksPlaylist").value || null, category: "ซีรีส์จีน" });
+        links: el("#addLinksText").value, mode: mode === "pick" ? "auto" : mode,
+        playlist_id: mode === "pick" ? el("#addLinksPlaylist").value : null, category: el("#addLinksCategory").value });
       const label = { exists: "มีอยู่แล้ว", skipped: "ข้าม", error: "ผิดพลาด" };
       msg.textContent = data.results.map((r) => r.status === "added"
         ? `✓ ${r.playlist} ตอนที่ ${r.episode}${r.new_playlist ? " (เรื่องใหม่)" : ""}`
+        : r.status === "added_clip" ? `✓ คลิปเดี่ยว: ${r.title}`
         : `${label[r.status]}: ${r.title || r.url}${r.error ? ` — ${r.error}` : ""}`).join("\n");
-      if (data.results.some((r) => r.status === "added")) {
+      if (data.results.some((r) => r.status === "added" || r.status === "added_clip")) {
         el("#addLinksText").value = "";
         await loadVideos();
         renderVideoManage();
@@ -4294,25 +4500,6 @@ function initAdminPanels() {
       msg.textContent = e instanceof SyntaxError ? "ไฟล์ไม่ใช่ JSON" : e.message || "นำเข้าไม่สำเร็จ";
     }
   });
-  el("#playlistManageList").addEventListener("change", async (event) => {
-    const input = event.target.closest(".playlist-name-input, .playlist-category-select");
-    if (!input) return;
-    const body = input.matches("select") ? { category_id: input.value || null } : { name: input.value };
-    try { await sendJSON("PATCH", `/api/video-playlists/${encodeURIComponent(input.closest("[data-playlist-id]").dataset.playlistId)}`, body); }
-    catch (e) { alert(e.message || "บันทึกไม่สำเร็จ"); }
-    await loadVideos();
-    renderVideoManage();
-  });
-  el("#playlistManageList").addEventListener("click", async (event) => {
-    if (!event.target.closest("[data-delete-playlist]")) return;
-    const row = event.target.closest("[data-playlist-id]");
-    const p = (state.videoPlaylists || []).find((x) => x.id === row.dataset.playlistId);
-    if (!p || !confirm(`ลบ playlist "${p.name}" พร้อมทั้ง ${p.count} ตอน?\n(ทุกคนจะไม่เห็นอีก)`)) return;
-    try { await sendJSON("DELETE", `/api/video-playlists/${encodeURIComponent(p.id)}`); }
-    catch (e) { alert(e.message || "ลบไม่สำเร็จ"); return; }
-    await loadVideos();
-    renderVideoManage();
-  });
   el("#addVideoCategoryForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const name = el("#newVideoCategoryName").value.trim();
@@ -4325,26 +4512,49 @@ function initAdminPanels() {
     } catch (e) { el("#videoCategoryMsg").textContent = e.message; }
   });
   el("#videoCategoryList").addEventListener("click", async (event) => {
-    const id = event.target.closest("[data-delete-video-category]")?.dataset.deleteVideoCategory;
-    if (!id || !confirm("ลบหมวดนี้? (คลิปในหมวดจะกลายเป็นไม่มีหมวด)")) return;
-    try { await sendJSON("DELETE", `/api/video-categories/${encodeURIComponent(id)}`); } catch (e) { alert(e.message); }
+    const del = event.target.closest("[data-delete-video-category]")?.dataset.deleteVideoCategory;
+    const ren = event.target.closest("[data-rename-video-category]")?.dataset.renameVideoCategory;
+    try {
+      if (del) {
+        if (!confirm("ลบหมวดนี้? (คลิปและเรื่องในหมวดจะกลายเป็นไม่มีหมวด)")) return;
+        await sendJSON("DELETE", `/api/video-categories/${encodeURIComponent(del)}`);
+      } else if (ren) {
+        const name = prompt("ชื่อหมวดใหม่", categoryName(ren));
+        if (!name || !name.trim()) return;
+        await sendJSON("PATCH", `/api/video-categories/${encodeURIComponent(ren)}`, { name: name.trim() });
+      } else return;
+    } catch (e) { alert(e.message); }
     await loadVideos();
     renderVideoManage();
   });
-  el("#videoManageList").addEventListener("change", (event) => {
-    const row = event.target.closest("[data-video-id]");
-    if (!row) return;
-    if (event.target.matches(".video-category-select")) patchVideo(row.dataset.videoId, { category_id: event.target.value || null });
-    if (event.target.matches(".video-title-input")) patchVideo(row.dataset.videoId, { title: event.target.value });
+  el("#vmSeg").addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-vm-tab]")?.dataset.vmTab;
+    if (tab) setVmTab(tab);
   });
-  el("#videoManageList").addEventListener("click", async (event) => {
-    if (!event.target.closest("[data-admin-delete-video]")) return;
-    const row = event.target.closest("[data-video-id]");
-    const v = state.videos.find((x) => x.id === row.dataset.videoId);
-    if (!v || !confirm(`ลบคลิป "${v.title}"?`)) return;
-    try { await sendJSON("DELETE", `/api/videos/${encodeURIComponent(v.id)}`); } catch (e) { alert(e.message); return; }
-    await loadVideos();
-    renderVideoManage();
+  el("#vmPlFilters").addEventListener("click", (event) => {
+    const f = event.target.closest("[data-vm-pl-filter]")?.dataset.vmPlFilter;
+    if (f) { vmPlFilter = f; renderVideoManage(); }
+  });
+  el("#vmClipFilters").addEventListener("click", (event) => {
+    const f = event.target.closest("[data-vm-clip-filter]")?.dataset.vmClipFilter;
+    if (f) { vmClipFilter = f; renderVideoManage(); }
+  });
+  el("#vmPlSearch").addEventListener("input", debounce(renderVideoManage, 150));
+  el("#vmClipSearch").addEventListener("input", debounce(renderVideoManage, 150));
+  ["#playlistManageList", "#videoManageList"].forEach((sel) => el(sel).addEventListener("click", (event) => {
+    const row = event.target.closest("[data-vm-open]");
+    if (row) openVmSheet(row.dataset.vmOpen);
+  }));
+  el("#vmSheet").addEventListener("click", vmSheetAction);
+  el("#vmSheetBody").addEventListener("change", async (event) => {
+    const input = event.target.closest("[data-ep-id]");
+    if (!input) return;
+    try {
+      await sendJSON("PATCH", `/api/videos/${encodeURIComponent(input.dataset.epId)}`, { episode: input.value });
+      const v = state.videos.find((x) => x.id === input.dataset.epId);
+      if (v) v.episode = Number(input.value);
+      input.classList.add("saved");
+    } catch (e) { alert(e.message || "บันทึกไม่สำเร็จ"); }
   });
   el("#checkVideosBtn").addEventListener("click", async (event) => {
     const btn = event.currentTarget;
@@ -4376,6 +4586,7 @@ function initAppShell() {
 function goBack() {
   if (!el("#notifPanel").hidden) return toggleNotifPanel(false), true;
   if (!el("#commentSheet").hidden) return closeComments(), true;
+  if (!el("#vmSheet").hidden) return closeVmSheet(), true;
   if (!el("#videoFormModal").hidden) return showVideoForm(false), true;
   if (!el("#mangaFormModal").hidden) return closeMangaModal(), true;
   if (!el("#chapterListView").hidden && el("#chapterListView").classList.contains("over-reader")) return closeChapterList(), true;
