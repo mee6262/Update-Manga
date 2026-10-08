@@ -296,8 +296,10 @@ function renderPlaylistRow() {
   const lists = visiblePlaylists();
   el("#playlistSection").hidden = !lists.length;
   const limited = playlistPreviewOnly(lists);
-  el("#playlistMoreBtn").hidden = !limited;
-  el("#playlistMoreBtn").textContent = `ดูทั้งหมด ${lists.length} เรื่อง`;
+  // หน้า "ทั้งหมด": แถวเดียวเลื่อนข้าง ปิดท้ายด้วยการ์ด "ดูทั้งหมด" / เลือกหมวดหรือกดดูทั้งหมด: ตาราง + เลื่อนลงโหลดเพิ่ม
+  el("#playlistRow").className = limited ? "playlist-row" : "playlist-grid";
+  el("#playlistMoreBtn").hidden = true;
+  const more = limited ? `<button class="video-card playlist-card playlist-more" data-playlist-more><span>ดูทั้งหมด<br>${lists.length} เรื่อง ›</span></button>` : "";
   el("#playlistRow").innerHTML = lists.slice(0, limited ? PLAYLIST_PREVIEW : playlistShown).map((p) => {
     const image = p.thumbnail_url
       ? `<img class="video-thumb" src="${escapeHtml(p.thumbnail_url)}" alt="" loading="lazy" />`
@@ -305,7 +307,7 @@ function renderPlaylistRow() {
     const eps = playlistEpisodes(p.id);
     const resume = eps.some((v) => v.watched_at) ? playlistResume(eps) : null;
     return `<button class="video-card playlist-card" data-playlist-id="${escapeHtml(p.id)}"><span class="video-media">${image}<span class="video-time">${p.count} ตอน</span></span><span class="video-card-info"><span class="video-card-title">${escapeHtml(p.name)}</span><span class="video-card-meta">${resume ? `ดูต่อ ${episodeLabel(resume)}` : "ยังไม่เคยดู"}</span></span></button>`;
-  }).join("");
+  }).join("") + more;
 }
 
 function openPlaylist(playlistId) {
@@ -959,6 +961,12 @@ function initVideos() {
   }));
   el("#videoPlayerClose").addEventListener("click", closeVideo);
   el("#playlistRow").addEventListener("click", (event) => {
+    if (event.target.closest("[data-playlist-more]")) {
+      playlistShowAll = true;
+      playlistShown = PLAYLIST_PAGE * 2;
+      renderPlaylistRow();
+      return;
+    }
     const card = event.target.closest("[data-playlist-id]");
     if (card) openPlaylist(card.dataset.playlistId);
   });
