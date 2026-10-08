@@ -10,24 +10,35 @@ app.py เรียกไฟล์นี้เป็น process แยก (ไ�
 import json
 import re
 import sys
+import time
 
 from playwright.sync_api import sync_playwright
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
 
 
+def stage(text: str):
+    # บอกขั้นที่ทำอยู่ทาง stderr — ค้าง/หมดเวลา ฝั่งเว็บจะแสดงขั้นสุดท้ายให้รู้ว่าติดตรงไหน
+    print(f"[{time.strftime('%H:%M:%S')}] {text}", file=sys.stderr, flush=True)
+
+
 def newest_reels(page_url: str) -> list[str]:
+    stage("เริ่ม playwright")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        stage("เปิด Chromium")
+        browser = p.chromium.launch(headless=True, timeout=40000)
         try:
             page = browser.new_page(user_agent=UA, locale="th-TH", viewport={"width": 1280, "height": 1600})
+            stage("โหลดหน้าเพจ")
             page.goto(page_url, wait_until="domcontentloaded", timeout=45000)
+            stage("รอรายการคลิป")
             try:
                 page.wait_for_selector('a[href*="/reel/"]', timeout=25000)
             except Exception:
                 pass  # ไม่เจอ = คืนรายการว่าง ให้ฝั่งเว็บบันทึกว่าเช็คแล้วไม่พบ
             page.wait_for_timeout(2000)
             hrefs = page.eval_on_selector_all('a[href*="/reel/"]', "els => els.map(e => e.href)")
+            stage(f"เจอ {len(hrefs)} ลิงก์")
         finally:
             browser.close()
     seen = []

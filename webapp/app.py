@@ -1973,11 +1973,16 @@ _playlist_watch_started = False
 def _newest_page_reels(page_url: str) -> list[str]:
     """ลิงก์ reel ล่าสุดของเพจ (ใหม่→เก่า) จาก fb_reels_watch.py — Chromium รันเป็น process แยก มี timeout
     ไม่ให้เว็บค้างถ้า Facebook ไม่ตอบ"""
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).with_name("fb_reels_watch.py")), page_url],
-        capture_output=True, text=True, encoding="utf-8", timeout=PLAYLIST_WATCH_TIMEOUT,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(Path(__file__).with_name("fb_reels_watch.py")), page_url],
+            capture_output=True, text=True, encoding="utf-8", timeout=PLAYLIST_WATCH_TIMEOUT,
+            stdin=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired as e:
+        err = e.stderr.decode("utf-8", "replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+        last = err.strip().splitlines()[-1] if err.strip() else "ยังไม่เริ่มเลย"
+        raise RuntimeError(f"หมดเวลา {PLAYLIST_WATCH_TIMEOUT} วิ — ค้างที่: {last}") from None
     if proc.returncode != 0:
         err = (proc.stderr or "").strip().splitlines()
         message = err[-1] if err else f"exit {proc.returncode}"
