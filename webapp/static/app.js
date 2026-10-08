@@ -167,7 +167,8 @@ function videosForTab() {
   const byDesc = (key) => (a, b) => String(b[key] || "").localeCompare(String(a[key] || ""));
   if (videoTab === "saved") return state.videos.filter((v) => v.saved_at).sort(byDesc("saved_at"));
   if (videoTab === "history") return state.videos.filter((v) => v.watched_at).sort(byDesc("watched_at"));
-  return videoCategoryFilter ? state.videos.filter((v) => v.category_id === videoCategoryFilter) : state.videos;
+  // ตอนของ playlist ไม่ขึ้นในหน้าหลัก (หลายร้อยตอนจะท่วม) — เข้าดูผ่านการ์ด playlist แทน
+  return state.videos.filter((v) => !v.playlist_id && (!videoCategoryFilter || v.category_id === videoCategoryFilter));
 }
 
 const VIDEO_EMPTY_TEXT = {
@@ -180,7 +181,7 @@ function renderVideos() {
   const list = videosForTab();
   el("#videoGrid").innerHTML = list.slice(0, videoShown).map(videoCardHtml).join("");
   el("#videoEmpty").textContent = VIDEO_EMPTY_TEXT[videoTab];
-  el("#videoEmpty").hidden = list.length > 0;
+  el("#videoEmpty").hidden = list.length > 0 || (videoTab === "home" && (state.videoPlaylists || []).some((p) => !videoCategoryFilter || p.category_id === videoCategoryFilter));
   el("#videoMoreBtn").hidden = list.length <= videoShown;
   els("[data-video-tab]").forEach((b) => b.classList.toggle("active", b.dataset.videoTab === videoTab));
   // ผลค้นหาในหน้าค้นหาใช้ข้อมูลคลิปชุดเดียวกัน — บันทึก/ลบ/ดูค้างแล้วต้องอัปเดตตามด้วย
@@ -188,6 +189,8 @@ function renderVideos() {
   renderVideoCategoryChips();
   renderContinue();
   el("#videoToolbar").hidden = videoTab !== "home";
+  renderPlaylistRow();
+  if (!el("#playlistView").hidden) renderPlaylistView();
 }
 
 async function loadVideos() {
@@ -198,12 +201,123 @@ async function loadVideos() {
     const data = await getJSON("/api/videos");
     state.videos = data.items || [];
     state.videoCategories = data.categories || [];
+    state.videoPlaylists = data.playlists || [];
     renderVideos();
   } catch (e) {
     el("#videoGrid").innerHTML = `<div class="reader-msg">${escapeHtml(e.body?.error || "โหลดคลิปไม่สำเร็จ")}</div>`;
   } finally {
     videoLoading = false;
   }
+}
+
+// ---------- Playlist (เรื่องยาวหลายตอน) ----------
+let openPlaylistId = null;
+let playlistShowAll = false;
+const PLAYLIST_PREVIEW = 6; // หน้า "ทั้งหมด" โชว์แค่นี้ก่อน กดดูทั้งหมด / เลือกหมวดแล้วโชว์ครบ
+
+function playlistEpisodes(playlistId) {
+  return state.videos.filter((v) => v.playlist_id === playlistId).sort((a, b) => (a.episode || 0) - (b.episode || 0));
+}
+
+function episodeLabel(video) {
+  return `ตอนที่ ${Number(video.episode)}`;
+}
+
+// ชื่อตอน (ถ้ามี) = ชื่อคลิปที่ตัดชื่อเรื่อง/เลขตอนออก เช่น "THE4 โดนซองขาว" → "โดนซองขาว"
+function episodeSubtitle(video, playlistName) {
+  let rest = video.title.startsWith(playlistName) ? video.title.slice(playlistName.length) : video.title;
+  rest = rest.replace(/^[\s,.:|-]*(ep\.?|ตอนที่|ตอน|part)?\s*\d+(\.\d+)?\.?\s*(จบ)?/i, "").trim();
+  return rest && rest !== video.title ? rest : "";
+}
+
+// ตอนที่ควรเล่นเมื่อกด "ดูต่อ": ตอนล่าสุดที่เปิด — ดูค้างอยู่ = ตอนนั้น, ดูจบแล้ว = ตอนถัดไป, ยังไม่เคยดู = ตอนแรก
+function playlistResume(episodes) {
+  const last = episodes.reduce((best, v) => (v.watched_at && (!best || v.watched_at > best.watched_at) ? v : best), null);
+  if (!last) return episodes[0];
+  if (Number(last.position_seconds) > 0) return last;
+  return episodes[episodes.indexOf(last) + 1] || last;
+}
+
+function renderPlaylistRow() {
+  const lists = videoTab === "home" ? (state.videoPlaylists || []).filter((p) => !videoCategoryFilter || p.category_id === videoCategoryFilter) : [];
+  el("#playlistSection").hidden = !lists.length;
+  const limited = !videoCategoryFilter && !playlistShowAll && lists.length > PLAYLIST_PREVIEW;
+  el("#playlistMoreBtn").hidden = !limited;
+  el("#playlistMoreBtn").textContent = `ดูทั้งหมด ${lists.length} เรื่อง`;
+  el("#playlistRow").innerHTML = (limited ? lists.slice(0, PLAYLIST_PREVIEW) : lists).map((p) => {
+    const image = p.thumbnail_url
+      ? `<img class="video-thumb" src="${escapeHtml(p.thumbnail_url)}" alt="" loading="lazy" />`
+      : '<span class="video-placeholder" aria-hidden="true">▶</span>';
+    const eps = playlistEpisodes(p.id);
+    const resume = eps.some((v) => v.watched_at) ? playlistResume(eps) : null;
+    return `<button class="video-card playlist-card" data-playlist-id="${escapeHtml(p.id)}"><span class="video-media">${image}<span class="video-time">${p.count} ตอน</span></span><span class="video-card-info"><span class="video-card-title">${escapeHtml(p.name)}</span><span class="video-card-meta">${resume ? `ดูต่อ ${episodeLabel(resume)}` : "ยังไม่เคยดู"}</span></span></button>`;
+  }).join("");
+}
+
+function openPlaylist(playlistId) {
+  openPlaylistId = playlistId;
+  el("#playlistView").hidden = false;
+  document.body.style.overflow = "hidden";
+  renderPlaylistView();
+  el("#playlistBody").scrollTop = 0;
+}
+
+function closePlaylist() {
+  openPlaylistId = null;
+  el("#playlistView").hidden = true;
+  if (el("#videoPlayer").hidden) document.body.style.overflow = "";
+}
+
+function renderPlaylistView() {
+  const playlist = (state.videoPlaylists || []).find((p) => p.id === openPlaylistId);
+  const episodes = playlistEpisodes(openPlaylistId);
+  if (!playlist || !episodes.length) return closePlaylist();
+  el("#playlistTitle").textContent = playlist.name;
+  const resume = playlistResume(episodes);
+  const started = episodes.some((v) => v.watched_at);
+  const rows = episodes.map((v) => {
+    const pos = Number(v.position_seconds) || 0;
+    const dur = Number(v.duration_seconds) || 0;
+    const status = pos > 0 ? `ดูค้าง ${formatVideoTime(pos)}` : v.watched_at ? "✓ ดูแล้ว" : "";
+    const bar = pos > 0 && dur > 0 ? `<span class="video-progress"><span style="width:${Math.min(100, (pos / dur) * 100).toFixed(1)}%"></span></span>` : "";
+    const image = v.thumbnail_url ? `<img src="${escapeHtml(v.thumbnail_url)}" alt="" loading="lazy" />` : '<span class="video-placeholder">▶</span>';
+    const sub = episodeSubtitle(v, playlist.name);
+    return `<button class="episode-row${v.id === resume.id && started ? " current" : ""}${v.watched_at && !pos ? " watched" : ""}" data-episode-id="${escapeHtml(v.id)}"><span class="episode-thumb">${image}${bar}</span><span class="episode-info"><strong>${episodeLabel(v)}</strong>${sub ? `<span class="episode-sub">${escapeHtml(sub)}</span>` : ""}<small>${status}</small></span></button>`;
+  }).join("");
+  el("#playlistBody").innerHTML = `<div class="playlist-head"><p>${episodes.length} ตอน</p><button class="btn primary" data-episode-id="${escapeHtml(resume.id)}">▶ ${started ? "ดูต่อ" : "เริ่มดู"} ${episodeLabel(resume)}</button></div><div class="episode-list">${rows}</div>`;
+}
+
+function neighborEpisode(video, step) {
+  if (!video?.playlist_id) return null;
+  const episodes = playlistEpisodes(video.playlist_id);
+  return episodes[episodes.findIndex((v) => v.id === video.id) + step] || null;
+}
+
+function renderEpisodeNav(video) {
+  const nav = el("#episodeNav");
+  nav.hidden = !video.playlist_id;
+  if (nav.hidden) return;
+  const episodes = playlistEpisodes(video.playlist_id);
+  el("#episodeLabel").textContent = `${episodeLabel(video)} / ${episodes.length}`;
+  el("#episodePrev").disabled = !neighborEpisode(video, -1);
+  el("#episodeNext").disabled = !neighborEpisode(video, 1);
+}
+
+// เปลี่ยนตอนโดยไม่ปิดหน้าตัวเล่น — ใช้ <video> ตัวเดิม iPhone จึงยอมเล่นต่ออัตโนมัติ (ตัวใหม่ต้องแตะเล่นเอง)
+function playEpisode(video) {
+  if (!video) return;
+  closeComments();
+  stopVideoClock();
+  saveActiveVideoProgress(true);
+  clearInterval(videoSaveTimer);
+  videoSaveTimer = null;
+  if (nativeVideo) nativeVideo.pause();
+  openVideo(video, { autoplay: true });
+}
+
+function playNextEpisode() {
+  const next = neighborEpisode(activeVideo, 1);
+  if (next) playEpisode(next);
 }
 
 function showVideoForm(show) {
@@ -283,7 +397,7 @@ async function mountFacebookVideo(video, position) {
         try { if (Number(player.getCurrentPosition()) < position - 3) player.seek(position); } catch (e) { /* เล่นจากต้นต่อได้ */ }
       });
       player.subscribe("paused", () => { stopVideoClock(); saveActiveVideoProgress(true); });
-      player.subscribe("finishedPlaying", () => { stopVideoClock(); clearActiveVideoProgress(); });
+      player.subscribe("finishedPlaying", () => { stopVideoClock(); clearActiveVideoProgress(); playNextEpisode(); });
     } catch (e) { /* SDK บางรุ่นไม่มี event เหล่านี้ */ }
     return player;
   });
@@ -336,11 +450,11 @@ function renderQualityButtons() {
 }
 
 // เปลี่ยนไฟล์แล้วเล่นต่อจากวินาทีเดิม (สะดุดสั้น ๆ ระหว่างโหลดหัวไฟล์ใหม่)
-function setNativeQuality(quality, startAt) {
+function setNativeQuality(quality, startAt, autoplay = false) {
   const v = nativeVideo;
   if (!v || !nativeSources[quality]) return;
   const at = startAt ?? v.currentTime;
-  const wasPlaying = startAt === undefined && !v.paused;
+  const wasPlaying = autoplay || (startAt === undefined && !v.paused);
   nativeCurrentQuality = quality;
   nativeStalls = [];
   v.src = nativeSources[quality];
@@ -383,7 +497,7 @@ function mountNativeVideo(video, position, sources) {
     videoApiWorks = true; // ตำแหน่งจริง ไม่ต้องใช้นาฬิกาสำรอง
     rememberVideoDuration();
     v.addEventListener("pause", () => { if (!v.ended) saveActiveVideoProgress(true); });
-    v.addEventListener("ended", clearActiveVideoProgress);
+    v.addEventListener("ended", () => { clearActiveVideoProgress(); playNextEpisode(); });
     v.addEventListener("webkitendfullscreen", nudgeViewport);
     initNativeExtras(v);
     // อัตโนมัติ: กระตุก (waiting) 2 ครั้งใน 60 วิ ขณะเล่น 720p → ลดเป็น 360p
@@ -400,6 +514,28 @@ function mountNativeVideo(video, position, sources) {
       try { localStorage.setItem(VIDEO_QUALITY_KEY, q); } catch (e) { /* ไม่จำก็ได้ */ }
       setNativeQuality(q === "auto" ? await pickAutoQuality(nativeSources) : q);
     });
+  });
+}
+
+// ตอนถัดไปของ playlist: เปลี่ยนไฟล์ใน <video> ตัวเดิม (listener ต่าง ๆ อ้างตัวแปรกลาง ใช้ต่อได้เลย) แล้วสั่งเล่น
+function reuseNativeVideo(position, sources) {
+  const v = nativeVideo;
+  nativeSources = sources;
+  return new Promise(async (resolve, reject) => {
+    const quality = nativeQualityPref === "auto" || !sources[nativeQualityPref] ? await pickAutoQuality(sources) : nativeQualityPref;
+    if (nativeVideo !== v) return reject(new Error("closed"));
+    const fail = () => { clearTimeout(timer); reject(new Error("native video failed")); };
+    const timer = setTimeout(fail, 15000);
+    v.addEventListener("error", fail, { once: true });
+    v.addEventListener("loadedmetadata", () => {
+      clearTimeout(timer);
+      v.removeEventListener("error", fail);
+      activeFbPlayer = { getCurrentPosition: () => v.currentTime, getDuration: () => v.duration };
+      videoApiWorks = true;
+      rememberVideoDuration();
+      resolve();
+    }, { once: true });
+    setNativeQuality(quality, position, true);
   });
 }
 
@@ -568,7 +704,7 @@ function unmountNativeVideo() {
   nativeCurrentQuality = null;
 }
 
-async function openVideo(video) {
+async function openVideo(video, { autoplay = false } = {}) {
   activeVideo = video;
   activeFbPlayer = null;
   activeVideoDuration = Number(video.duration_seconds) || null;
@@ -577,7 +713,9 @@ async function openVideo(video) {
   videoApiWorks = false;
   videoClockBase = 0;
   videoClockStartedAt = null;
-  el("#videoPlayerTitle").textContent = video.title;
+  const playlist = video.playlist_id && (state.videoPlaylists || []).find((p) => p.id === video.playlist_id);
+  el("#videoPlayerTitle").textContent = playlist ? `${playlist.name} · ${episodeLabel(video)}` : video.title;
+  renderEpisodeNav(video);
   refreshCommentCount({ kind: "video", id: video.id }, el("#videoCommentCount"));
   el("#videoDeleteBtn").hidden = !video.can_delete;
   el("#videoPlayer").hidden = false;
@@ -590,11 +728,18 @@ async function openVideo(video) {
     if (!activeVideo || activeVideo.id !== video.id) return;
     const position = Number(progress.position_seconds) || 0;
     let native = false;
-    if (sources.hd || sources.sd) {
+    if ((sources.hd || sources.sd) && autoplay && nativeVideo) {
+      native = await reuseNativeVideo(position, sources).then(() => true, () => false);
+      if (!activeVideo || activeVideo.id !== video.id) return;
+    } else if (sources.hd || sources.sd) {
+      unmountNativeVideo();
       try { await mountNativeVideo(video, position, sources); native = true; }
       catch (e) { unmountNativeVideo(); if (!activeVideo || activeVideo.id !== video.id) return; }
     }
-    if (!native) await mountFacebookVideo(video, position);
+    if (!native) {
+      unmountNativeVideo();
+      await mountFacebookVideo(video, position);
+    }
     clearInterval(videoSaveTimer);
     videoSaveTimer = setInterval(saveActiveVideoProgress, 10000);
   } catch (e) {
@@ -682,8 +827,9 @@ function closeVideo() {
   activeVideoFinished = false;
   el("#videoPlayer").hidden = true;
   el("#videoDeleteBtn").hidden = true;
+  el("#episodeNav").hidden = true;
   el("#videoPlayerBody").innerHTML = '<div class="reader-msg">กำลังโหลด...</div>';
-  document.body.style.overflow = "";
+  if (el("#playlistView").hidden) document.body.style.overflow = "";
   renderVideos();
   reloadIfPending();
 }
@@ -758,6 +904,19 @@ function initVideos() {
     window.scrollTo(0, 0);
   }));
   el("#videoPlayerClose").addEventListener("click", closeVideo);
+  el("#playlistRow").addEventListener("click", (event) => {
+    const card = event.target.closest("[data-playlist-id]");
+    if (card) openPlaylist(card.dataset.playlistId);
+  });
+  el("#playlistClose").addEventListener("click", closePlaylist);
+  el("#playlistMoreBtn").addEventListener("click", () => { playlistShowAll = true; renderPlaylistRow(); });
+  el("#playlistBody").addEventListener("click", (event) => {
+    const id = event.target.closest("[data-episode-id]")?.dataset.episodeId;
+    const video = id && state.videos.find((v) => v.id === id);
+    if (video) openVideo(video);
+  });
+  el("#episodePrev").addEventListener("click", () => playEpisode(neighborEpisode(activeVideo, -1)));
+  el("#episodeNext").addEventListener("click", () => playEpisode(neighborEpisode(activeVideo, 1)));
   window.addEventListener("pagehide", () => { stopVideoClock(); saveActiveVideoProgress(true); });
   window.addEventListener("orientationchange", nudgeViewport);
   document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement) nudgeViewport(); });
@@ -2955,7 +3114,15 @@ function renderVideoManage() {
     : '<span class="hint">ยังไม่มีหมวดคลิป</span>';
   const options = (selected) => [`<option value="">— ไม่มีหมวด —</option>`, ...cats.map((c) =>
     `<option value="${escapeHtml(c.id)}"${c.id === selected ? " selected" : ""}>${escapeHtml(c.name)}</option>`)].join("");
-  el("#videoManageList").innerHTML = state.videos.map((v) => `<li class="video-manage-row" data-video-id="${escapeHtml(v.id)}">
+  el("#playlistManageList").innerHTML = (state.videoPlaylists || []).map((p) => `<li class="video-manage-row" data-playlist-id="${escapeHtml(p.id)}">
+    ${p.thumbnail_url ? `<img src="${escapeHtml(p.thumbnail_url)}" alt="" loading="lazy" />` : '<span class="video-placeholder">▶</span>'}
+    <div class="grow">
+      <input class="playlist-name-input" value="${escapeHtml(p.name)}" maxlength="80" />
+      <div class="video-manage-meta"><select class="playlist-category-select">${options(p.category_id)}</select><small>Playlist · ${p.count} ตอน</small>
+      <button class="link-btn danger-text" data-delete-playlist>ลบทั้งเรื่อง</button></div>
+    </div></li>`).join("");
+  // ตอนของ playlist จัดการผ่านแถว playlist ด้านบน (หลายร้อยแถวจะทำหน้านี้หน่วง)
+  el("#videoManageList").innerHTML = state.videos.filter((v) => !v.playlist_id).map((v) => `<li class="video-manage-row" data-video-id="${escapeHtml(v.id)}">
     ${v.thumbnail_url ? `<img src="${escapeHtml(v.thumbnail_url)}" alt="" loading="lazy" />` : '<span class="video-placeholder">▶</span>'}
     <div class="grow">
       <input class="video-title-input" value="${escapeHtml(v.title)}" maxlength="160" />
@@ -2984,6 +3151,42 @@ function initAdminPanels() {
   el("#commentManageList").addEventListener("click", async (event) => {
     const btn = event.target.closest("[data-delete-comment]");
     if (btn && (await deleteCommentById(btn.closest("[data-comment-id]").dataset.commentId))) loadCommentManage();
+  });
+  el("#playlistImportFile").addEventListener("change", async (event) => {
+    const file = event.target.files[0];
+    event.target.value = "";
+    if (!file) return;
+    const msg = el("#playlistImportMsg");
+    msg.classList.remove("error");
+    msg.textContent = "กำลังนำเข้า...";
+    try {
+      const data = await sendJSON("POST", "/api/video-playlists/import", JSON.parse(await file.text()));
+      msg.textContent = `นำเข้าแล้ว: ตอนใหม่ ${data.added} · ย้ายเข้า playlist ${data.moved} · กำลังโหลดปก ${data.thumbs_queued} รูปเบื้องหลัง`;
+      await loadVideos();
+      renderVideoManage();
+    } catch (e) {
+      msg.classList.add("error");
+      msg.textContent = e instanceof SyntaxError ? "ไฟล์ไม่ใช่ JSON" : e.message || "นำเข้าไม่สำเร็จ";
+    }
+  });
+  el("#playlistManageList").addEventListener("change", async (event) => {
+    const input = event.target.closest(".playlist-name-input, .playlist-category-select");
+    if (!input) return;
+    const body = input.matches("select") ? { category_id: input.value || null } : { name: input.value };
+    try { await sendJSON("PATCH", `/api/video-playlists/${encodeURIComponent(input.closest("[data-playlist-id]").dataset.playlistId)}`, body); }
+    catch (e) { alert(e.message || "บันทึกไม่สำเร็จ"); }
+    await loadVideos();
+    renderVideoManage();
+  });
+  el("#playlistManageList").addEventListener("click", async (event) => {
+    if (!event.target.closest("[data-delete-playlist]")) return;
+    const row = event.target.closest("[data-playlist-id]");
+    const p = (state.videoPlaylists || []).find((x) => x.id === row.dataset.playlistId);
+    if (!p || !confirm(`ลบ playlist "${p.name}" พร้อมทั้ง ${p.count} ตอน?\n(ทุกคนจะไม่เห็นอีก)`)) return;
+    try { await sendJSON("DELETE", `/api/video-playlists/${encodeURIComponent(p.id)}`); }
+    catch (e) { alert(e.message || "ลบไม่สำเร็จ"); return; }
+    await loadVideos();
+    renderVideoManage();
   });
   el("#addVideoCategoryForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -3052,6 +3255,7 @@ function goBack() {
   if (!el("#mangaFormModal").hidden) return closeMangaModal(), true;
   if (!el("#reader").hidden) return closeReader(), true;
   if (!el("#videoPlayer").hidden) return closeVideo(), true;
+  if (!el("#playlistView").hidden) return closePlaylist(), true;
   if (!el("#chapterListView").hidden) return closeChapterList(), true;
   if (state.tab === "list" && state.homeMode === "history") return setHomeMode("grid"), true;
   const prev = tabHistory.pop();

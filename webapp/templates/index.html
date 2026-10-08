@@ -118,6 +118,11 @@
         <p>คลิป Facebook ที่สมาชิกเพิ่มไว้</p>
         <button id="addVideoBtn" class="btn primary">+ เพิ่มคลิป</button>
       </div>
+      <div id="playlistSection" class="playlist-section" hidden>
+        <h2 class="section-title">เรื่องยาว (Playlist)</h2>
+        <div id="playlistRow" class="playlist-grid"></div>
+        <button id="playlistMoreBtn" class="btn" hidden></button>
+      </div>
       <div id="videoGrid" class="video-grid"></div>
       <div id="videoEmpty" class="empty-state" hidden>ยังไม่มีคลิปในคลัง</div>
       <button id="videoMoreBtn" class="btn" hidden>โหลดเพิ่ม</button>
@@ -240,6 +245,11 @@
             <button id="checkVideosBtn" class="btn">ตรวจไฟล์คลิปทั้งหมด</button>
           </div>
           <div id="checkVideosMsg" class="form-msg"></div>
+          <div class="manage-actions">
+            <label class="btn">นำเข้า Playlist (ไฟล์ .json)<input type="file" id="playlistImportFile" accept=".json,application/json" hidden /></label>
+          </div>
+          <div id="playlistImportMsg" class="form-msg"></div>
+          <ul id="playlistManageList" class="settings-list"></ul>
           <ul id="videoManageList" class="settings-list"></ul>
         </div>
 
@@ -306,9 +316,15 @@
     </div>
   </div>
 
+  <div id="playlistView" class="reader playlist-view" hidden>
+    <div class="reader-topbar"><button id="playlistClose" class="btn">✕ ปิด</button><div class="reader-title"><span id="playlistTitle"></span></div></div>
+    <div id="playlistBody" class="playlist-body"></div>
+  </div>
+
   <div id="videoPlayer" class="reader video-player" hidden>
     <div class="reader-topbar"><button id="videoPlayerClose" class="btn">✕ ปิด</button><div class="reader-title"><span id="videoPlayerTitle"></span></div><button id="videoCommentsBtn" class="icon-btn comment-btn" title="ความคิดเห็นของคลิปนี้">💬<span id="videoCommentCount" class="comment-count"></span></button><button id="videoDeleteBtn" class="btn danger" hidden>🗑 ลบคลิป</button></div>
     <div id="videoPlayerBody" class="video-player-body"><div class="reader-msg">กำลังโหลด...</div></div>
+    <div id="episodeNav" class="episode-nav" hidden><button id="episodePrev" class="btn">‹ ตอนก่อน</button><span id="episodeLabel"></span><button id="episodeNext" class="btn">ตอนถัดไป ›</button></div>
   </div>
 
   <div id="chapterListView" class="reader" hidden>

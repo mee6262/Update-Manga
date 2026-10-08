@@ -1122,14 +1122,18 @@ _duration_backfill_lock = threading.Lock()
 _duration_backfill_tried: set[str] = set()
 
 
+def _needs_duration_backfill(video: dict) -> bool:
+    # ตอนใน playlist นำเข้าทีละหลายร้อย — ไม่ไล่ยิงหน้าฝังของ Facebook ทุกตอน ความยาวได้จากตัวเล่นตอนดูจริง
+    return not video.get("duration_seconds") and not video.get("playlist_id") and video["id"] not in _duration_backfill_tried
+
+
 def _backfill_video_durations():
     """เติมความยาวให้คลิปที่เพิ่มไว้ก่อนมีระบบนี้ — รันเป็น thread แยก ไม่ให้หน้าคลังรอเน็ต
     ลองแต่ละคลิปครั้งเดียวต่อการรันเซิร์ฟเวอร์ (ดึงไม่ได้จะไม่ยิงซ้ำทุกครั้งที่เปิดหน้าคลัง)"""
     if not _duration_backfill_lock.acquire(blocking=False):
         return
     try:
-        todo = [(v["id"], v["facebook_url"]) for v in storage.load_videos()
-                if not v.get("duration_seconds") and v["id"] not in _duration_backfill_tried]
+        todo = [(v["id"], v["facebook_url"]) for v in storage.load_videos() if _needs_duration_backfill(v)]
         for video_id, facebook_url in todo:
             _duration_backfill_tried.add(video_id)
             duration = _facebook_video_duration(facebook_url)  # ยิงเน็ตนอก lock
@@ -1186,6 +1190,8 @@ def _public_video(video: dict, progress: dict | None = None, saved: dict | None 
         "thumbnail_url": video.get("thumbnail_url") or None,
         "external": bool(video.get("external")),
         "category_id": video.get("category_id"),
+        "playlist_id": video.get("playlist_id"),
+        "episode": video.get("episode"),
         "added_by": video["added_by"],
         "created_at": video["created_at"],
         "can_delete": _can_delete_video(video),
@@ -1200,11 +1206,12 @@ def list_videos():
     username = current_username() or "local"
     progress = storage.load_video_progress(username)
     saved = storage.load_video_saved(username)
-    if any(not v.get("duration_seconds") and v["id"] not in _duration_backfill_tried for v in videos):
+    if any(_needs_duration_backfill(v) for v in videos):
         threading.Thread(target=_backfill_video_durations, daemon=True).start()
     return jsonify({
         "items": [_public_video(video, progress, saved) for video in videos],
         "categories": storage.load_video_categories(),
+        "playlists": _public_playlists(videos),
         "next_cursor": None,
     })
 
@@ -1379,9 +1386,10 @@ def clear_video_progress(video_id):
     with storage.state_lock:
         progress = storage.load_video_progress(username or "local", fresh=True)
         # ดูจบ: ล้างจุดที่ดูค้าง แต่เก็บรายการไว้ในประวัติการดู (เวลาที่ดู + ความยาว)
+        # ไม่เคยบันทึกจุดค้าง (เช่น ข้ามไปท้ายตอนแล้วจบ) ก็สร้างรายการไว้ — playlist ใช้บอกว่าตอนนี้ "ดูแล้ว"
         old = progress.get(video_id)
-        if old is not None:
-            progress[video_id] = {**old, "position_seconds": 0, "updated_at": datetime.now(timezone.utc).isoformat()}
+        if old is not None or _video_exists(video_id):
+            progress[video_id] = {**(old or {}), "position_seconds": 0, "updated_at": datetime.now(timezone.utc).isoformat()}
             storage.save_video_progress(username or "local", progress)
     return jsonify({"ok": True})
 
@@ -1636,6 +1644,12 @@ def delete_video_category(category_id):
                 changed = True
         if changed:
             storage.save_videos(videos)
+        playlists = storage.load_video_playlists(fresh=True)
+        if any(p.get("category_id") == category_id for p in playlists):
+            for p in playlists:
+                if p.get("category_id") == category_id:
+                    p["category_id"] = None
+            storage.save_video_playlists(playlists)
     return jsonify({"ok": True})
 
 
@@ -1660,6 +1674,195 @@ def update_video(video_id):
             video["category_id"] = category_id
         storage.save_videos(videos)
     return jsonify(_public_video(video))
+
+
+# ---------- playlist (เรื่องยาวหลายตอน นำเข้าทีละเรื่อง แอดมินเท่านั้น) ----------
+MAX_PLAYLIST_NAME = 80
+MAX_PLAYLIST_IMPORT = 10000
+_playlist_thumb_lock = threading.Lock()
+
+
+def _public_playlists(videos: list[dict]) -> list[dict]:
+    episodes: dict[str, list[dict]] = {}
+    for video in videos:
+        if video.get("playlist_id"):
+            episodes.setdefault(video["playlist_id"], []).append(video)
+    result = []
+    for playlist in storage.load_video_playlists():
+        items = sorted(episodes.get(playlist["id"], []), key=lambda v: v.get("episode") or 0)
+        if not items:
+            continue
+        cover = next((v.get("thumbnail_url") for v in items if v.get("thumbnail_url")), None)
+        result.append({
+            "id": playlist["id"],
+            "name": playlist["name"],
+            "category_id": playlist.get("category_id"),
+            "count": len(items),
+            "thumbnail_url": cover,
+            "updated_at": max(v.get("created_at", "") for v in items),
+        })
+    return result
+
+
+def _fetch_playlist_thumbs(todo: list[tuple[str, str]]):
+    """ปกของตอนที่นำเข้า: ลิงก์ fbcdn หมดอายุในไม่กี่วัน จึงดาวน์โหลดเก็บทันทีเป็น thread แยก (ยิงเน็ตนอก lock)
+    เขียน videos.json เป็นชุด ๆ ไม่เขียนทีละตอน"""
+    with _playlist_thumb_lock:
+        done: list[str] = []
+
+        def flush():
+            if not done:
+                return
+            with storage.state_lock:
+                videos = storage.load_videos(fresh=True)
+                ids = set(done)
+                for video in videos:
+                    if video.get("id") in ids and not video.get("thumbnail_url"):
+                        video["thumbnail_url"] = f"/api/videos/{video['id']}/thumb"
+                storage.save_videos(videos)
+            done.clear()
+
+        for video_id, image_url in todo:
+            if storage.video_thumb_path(video_id).exists() or _fetch_video_thumb(video_id, image_url):
+                done.append(video_id)
+            if len(done) >= 50:
+                flush()
+            time.sleep(0.2)
+        flush()
+
+
+@app.route("/api/video-playlists/import", methods=["POST"])
+@require_admin
+def import_video_playlists():
+    """body: {"playlists": [{"name", "items": [{"url", "title", "episode", "image"}]}]}
+    เพิ่มตอนที่ยังไม่มี / ตอนที่มีอยู่แล้วย้ายเข้า playlist ให้ (นำเข้าซ้ำได้ เช่น ตอนใหม่ออก)
+    ไม่ยิงเน็ตใน request — ลิงก์ /reel/ แปลงเป็น URL มาตรฐานได้เลย ปกโหลดตามหลัง"""
+    body = request.get_json(force=True, silent=True) or {}
+    category_name = " ".join(str(body.get("category") or "").split())
+    if len(category_name) > 40:
+        return jsonify({"error": "ชื่อหมวดต้องไม่เกิน 40 ตัวอักษร"}), 400
+    groups = body.get("playlists")
+    if not isinstance(groups, list) or not groups:
+        return jsonify({"error": "ไม่พบรายการ playlist ในไฟล์"}), 400
+    parsed: list[tuple[str, list[dict]]] = []
+    total = 0
+    for group in groups:
+        name = " ".join(str((group or {}).get("name") or "").split())
+        if not name or len(name) > MAX_PLAYLIST_NAME:
+            return jsonify({"error": f"ชื่อ playlist ต้องมี 1-{MAX_PLAYLIST_NAME} ตัวอักษร"}), 400
+        items = []
+        for raw in group.get("items") or []:
+            facebook_url, error = _canonical_facebook_video_url(str((raw or {}).get("url") or "").strip())
+            if error:
+                return jsonify({"error": f"{name}: {error}"}), 400
+            try:
+                episode = float(raw.get("episode"))
+            except (TypeError, ValueError):
+                return jsonify({"error": f"{name}: ตอนต้องเป็นตัวเลข"}), 400
+            title = _clean_video_title(str(raw.get("title") or ""))[:MAX_VIDEO_TITLE] or f"{name} ตอนที่ {episode:g}"
+            items.append({"url": facebook_url, "title": title, "episode": episode, "image": str(raw.get("image") or "")})
+        total += len(items)
+        parsed.append((name, items))
+    if total > MAX_PLAYLIST_IMPORT:
+        return jsonify({"error": f"นำเข้าได้ครั้งละไม่เกิน {MAX_PLAYLIST_IMPORT} ตอน"}), 400
+
+    username = current_username() or "local"
+    now = datetime.now(timezone.utc).isoformat()
+    added = moved = 0
+    thumbs: list[tuple[str, str]] = []
+    with storage.state_lock:
+        category_id = None
+        if category_name:  # หมวดตามชื่อ (เช่น "ซีรีส์จีน") ไม่มีก็สร้างให้
+            categories = storage.load_video_categories(fresh=True)
+            category = next((c for c in categories if c["name"] == category_name), None)
+            if not category:
+                category = {"id": secrets.token_hex(4), "name": category_name}
+                categories.append(category)
+                storage.save_video_categories(categories)
+            category_id = category["id"]
+        playlists = storage.load_video_playlists(fresh=True)
+        videos = storage.load_videos(fresh=True)
+        by_key = {v.get("canonical_key"): v for v in videos}
+        for name, items in parsed:
+            playlist = next((p for p in playlists if p["name"] == name), None)
+            if not playlist:
+                playlist = {"id": secrets.token_hex(4), "name": name, "created_at": now}
+                playlists.append(playlist)
+            if category_id:
+                playlist["category_id"] = category_id
+            for item in items:
+                key = hashlib.sha256(item["url"].encode("utf-8")).hexdigest()[:20]
+                video = by_key.get(key)
+                if video:
+                    moved += video.get("playlist_id") != playlist["id"] or video.get("episode") != item["episode"]
+                else:
+                    video = {
+                        "id": key, "canonical_key": key, "title": item["title"], "facebook_url": item["url"],
+                        "thumbnail_url": None, "duration_seconds": None, "external": False,
+                        "added_by": username, "created_at": now,
+                    }
+                    videos.append(video)
+                    by_key[key] = video
+                    added += 1
+                video["playlist_id"] = playlist["id"]
+                video["episode"] = item["episode"]
+                if not video.get("thumbnail_url") and item["image"]:
+                    thumbs.append((key, item["image"]))
+        storage.save_video_playlists(playlists)
+        storage.save_videos(videos)
+    if thumbs:
+        threading.Thread(target=_fetch_playlist_thumbs, args=(thumbs,), daemon=True).start()
+    return jsonify({"ok": True, "added": added, "moved": moved, "thumbs_queued": len(thumbs)})
+
+
+@app.route("/api/video-playlists/<playlist_id>", methods=["PATCH"])
+@require_admin
+def update_video_playlist(playlist_id):
+    body = request.get_json(force=True, silent=True) or {}
+    with storage.state_lock:
+        playlists = storage.load_video_playlists(fresh=True)
+        playlist = next((p for p in playlists if p["id"] == playlist_id), None)
+        if not playlist:
+            return jsonify({"error": "ไม่พบ playlist"}), 404
+        if "name" in body:
+            name = " ".join(str(body.get("name") or "").split())
+            if not name or len(name) > MAX_PLAYLIST_NAME:
+                return jsonify({"error": f"ชื่อ playlist ต้องมี 1-{MAX_PLAYLIST_NAME} ตัวอักษร"}), 400
+            playlist["name"] = name
+        if "category_id" in body:
+            category_id = body.get("category_id") or None
+            if category_id and not any(c["id"] == category_id for c in storage.load_video_categories()):
+                return jsonify({"error": "ไม่พบหมวดนี้"}), 400
+            playlist["category_id"] = category_id
+        storage.save_video_playlists(playlists)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/video-playlists/<playlist_id>", methods=["DELETE"])
+@require_admin
+def delete_video_playlist(playlist_id):
+    """ลบ playlist พร้อมทุกตอนในนั้น (ตอนนำเข้ามาเป็นชุด ปล่อยค้างไว้จะท่วมหน้าหลัก)"""
+    with storage.state_lock:
+        playlists = storage.load_video_playlists(fresh=True)
+        if not any(p["id"] == playlist_id for p in playlists):
+            return jsonify({"error": "ไม่พบ playlist"}), 404
+        storage.save_video_playlists([p for p in playlists if p["id"] != playlist_id])
+        videos = storage.load_videos(fresh=True)
+        gone = {v["id"] for v in videos if v.get("playlist_id") == playlist_id}
+        storage.save_videos([v for v in videos if v["id"] not in gone])
+        for u in [*storage.all_usernames(), "local"]:
+            for load, save in ((storage.load_video_progress, storage.save_video_progress),
+                               (storage.load_video_saved, storage.save_video_saved)):
+                data = load(u, fresh=True)
+                if gone & data.keys():
+                    save(u, {k: v for k, v in data.items() if k not in gone})
+        comments = storage.load_comments(fresh=True)
+        removed = [comments.pop(f"video:{vid}") for vid in gone if f"video:{vid}" in comments]
+        if removed:
+            storage.save_comments(comments)
+    for vid in gone:
+        storage.video_thumb_path(vid).unlink(missing_ok=True)
+    return jsonify({"ok": True, "deleted": len(gone)})
 
 
 # ---------- หน้าแอดมิน: สถานะระบบ / สถิติ / จัดการเนื้อหา ----------

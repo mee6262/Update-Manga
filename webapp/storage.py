@@ -16,6 +16,7 @@ SITE_SETTINGS_FILE = DATA_DIR / "site_settings.json"
 VIDEOS_FILE = DATA_DIR / "videos.json"
 VIDEO_THUMBS_DIR = DATA_DIR / "video_thumbs"
 VIDEO_CATEGORIES_FILE = DATA_DIR / "video_categories.json"
+VIDEO_PLAYLISTS_FILE = DATA_DIR / "video_playlists.json"
 COMMENTS_FILE = DATA_DIR / "comments.json"
 ACTIVITY_FILE = DATA_DIR / "activity.json"
 USERS_FILE = DATA_DIR / "users.json"
@@ -268,6 +269,15 @@ def load_video_categories(fresh: bool = False) -> list[dict]:
 
 def save_video_categories(categories: list[dict]):
     _save_json(VIDEO_CATEGORIES_FILE, categories)
+
+
+def load_video_playlists(fresh: bool = False) -> list[dict]:
+    """playlist เรื่องยาวหลายตอน: [{"id", "name", "created_at"}] — ตอนไหนอยู่เรื่องไหนเก็บที่ video["playlist_id"] + video["episode"]"""
+    return _load_json(VIDEO_PLAYLISTS_FILE, [], fresh)
+
+
+def save_video_playlists(playlists: list[dict]):
+    _save_json(VIDEO_PLAYLISTS_FILE, playlists)
 
 
 def load_comments(fresh: bool = False) -> dict:
