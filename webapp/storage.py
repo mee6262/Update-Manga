@@ -17,6 +17,7 @@ VIDEOS_FILE = DATA_DIR / "videos.json"
 VIDEO_THUMBS_DIR = DATA_DIR / "video_thumbs"
 VIDEO_CATEGORIES_FILE = DATA_DIR / "video_categories.json"
 VIDEO_PLAYLISTS_FILE = DATA_DIR / "video_playlists.json"
+PLAYLIST_WATCH_FILE = DATA_DIR / "playlist_watch.json"
 COMMENTS_FILE = DATA_DIR / "comments.json"
 ACTIVITY_FILE = DATA_DIR / "activity.json"
 USERS_FILE = DATA_DIR / "users.json"
@@ -278,6 +279,15 @@ def load_video_playlists(fresh: bool = False) -> list[dict]:
 
 def save_video_playlists(playlists: list[dict]):
     _save_json(VIDEO_PLAYLISTS_FILE, playlists)
+
+
+def load_playlist_watch(fresh: bool = False) -> dict:
+    """เพจที่ติดตามตอนใหม่อัตโนมัติ: {"sources": [{"url", "category"}], "last_run", "last_result": [...]}"""
+    return _load_json(PLAYLIST_WATCH_FILE, {"sources": []}, fresh)
+
+
+def save_playlist_watch(data: dict):
+    _save_json(PLAYLIST_WATCH_FILE, data)
 
 
 def load_comments(fresh: bool = False) -> dict:

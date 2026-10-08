@@ -8,6 +8,8 @@ import os
 import re
 import secrets
 import shutil
+import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -21,6 +23,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template, request, Response, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import playlist_parse
 import scraper
 import storage
 import webpush
@@ -1731,6 +1734,69 @@ def _fetch_playlist_thumbs(todo: list[tuple[str, str]]):
         flush()
 
 
+def _store_playlist_items(groups: list[tuple[str, list[dict]]], category_name: str, username: str,
+                          move_existing: bool) -> dict:
+    """บันทึกตอนลง playlist ตามชื่อเรื่อง (ไม่มีก็สร้าง) — item: {"url", "title", "episode" (None = ต่อท้ายตอนล่าสุด), "image"}
+    move_existing=False: คลิปที่มีในคลังแล้วไม่แตะ (ใช้กับเพิ่มตอนใหม่อัตโนมัติ) ห้ามยิงเน็ตในนี้ (อยู่ใน state_lock)"""
+    now = datetime.now(timezone.utc).isoformat()
+    added = moved = 0
+    items_out: list[dict] = []
+    thumbs: list[tuple[str, str]] = []
+    with storage.state_lock:
+        category_id = None
+        if category_name:  # หมวดตามชื่อ (เช่น "ซีรีส์จีน") ไม่มีก็สร้างให้
+            categories = storage.load_video_categories(fresh=True)
+            category = next((c for c in categories if c["name"] == category_name), None)
+            if not category:
+                category = {"id": secrets.token_hex(4), "name": category_name}
+                categories.append(category)
+                storage.save_video_categories(categories)
+            category_id = category["id"]
+        playlists = storage.load_video_playlists(fresh=True)
+        videos = storage.load_videos(fresh=True)
+        by_key = {v.get("canonical_key"): v for v in videos}
+        for name, items in groups:
+            playlist = next((p for p in playlists if p["name"] == name), None)
+            created = not playlist
+            if created:
+                playlist = {"id": secrets.token_hex(4), "name": name, "created_at": now}
+                playlists.append(playlist)
+            if category_id and (created or move_existing):
+                playlist["category_id"] = category_id
+            for item in items:
+                key = hashlib.sha256(item["url"].encode("utf-8")).hexdigest()[:20]
+                video = by_key.get(key)
+                if video and not move_existing:
+                    items_out.append({"title": item["title"], "playlist": name, "status": "exists"})
+                    continue
+                episode = item["episode"]
+                if episode is None:  # ไม่มีเลขตอน: ต่อท้ายตอนล่าสุดของเรื่อง
+                    episode = float(int(max((v.get("episode") or 0 for v in videos
+                                             if v.get("playlist_id") == playlist["id"]), default=0)) + 1)
+                if video:
+                    moved += video.get("playlist_id") != playlist["id"] or video.get("episode") != episode
+                else:
+                    video = {
+                        "id": key, "canonical_key": key, "title": item["title"], "facebook_url": item["url"],
+                        "thumbnail_url": None, "duration_seconds": None, "external": False,
+                        "added_by": username, "created_at": now,
+                    }
+                    videos.append(video)
+                    by_key[key] = video
+                    added += 1
+                video["playlist_id"] = playlist["id"]
+                video["episode"] = episode
+                items_out.append({"title": item["title"], "playlist": name, "episode": episode,
+                                  "status": "added", "new_playlist": created})
+                if not video.get("thumbnail_url") and item["image"]:
+                    thumbs.append((key, item["image"]))
+        storage.save_video_playlists(playlists)
+        storage.save_videos(videos)
+    if thumbs:
+        threading.Thread(target=_fetch_playlist_thumbs, args=(thumbs,), daemon=True).start()
+    return {"added": added, "moved": moved, "thumbs_queued": len(thumbs), "items": items_out}
+
+
 @app.route("/api/video-playlists/import", methods=["POST"])
 @require_admin
 def import_video_playlists():
@@ -1766,53 +1832,8 @@ def import_video_playlists():
     if total > MAX_PLAYLIST_IMPORT:
         return jsonify({"error": f"นำเข้าได้ครั้งละไม่เกิน {MAX_PLAYLIST_IMPORT} ตอน"}), 400
 
-    username = current_username() or "local"
-    now = datetime.now(timezone.utc).isoformat()
-    added = moved = 0
-    thumbs: list[tuple[str, str]] = []
-    with storage.state_lock:
-        category_id = None
-        if category_name:  # หมวดตามชื่อ (เช่น "ซีรีส์จีน") ไม่มีก็สร้างให้
-            categories = storage.load_video_categories(fresh=True)
-            category = next((c for c in categories if c["name"] == category_name), None)
-            if not category:
-                category = {"id": secrets.token_hex(4), "name": category_name}
-                categories.append(category)
-                storage.save_video_categories(categories)
-            category_id = category["id"]
-        playlists = storage.load_video_playlists(fresh=True)
-        videos = storage.load_videos(fresh=True)
-        by_key = {v.get("canonical_key"): v for v in videos}
-        for name, items in parsed:
-            playlist = next((p for p in playlists if p["name"] == name), None)
-            if not playlist:
-                playlist = {"id": secrets.token_hex(4), "name": name, "created_at": now}
-                playlists.append(playlist)
-            if category_id:
-                playlist["category_id"] = category_id
-            for item in items:
-                key = hashlib.sha256(item["url"].encode("utf-8")).hexdigest()[:20]
-                video = by_key.get(key)
-                if video:
-                    moved += video.get("playlist_id") != playlist["id"] or video.get("episode") != item["episode"]
-                else:
-                    video = {
-                        "id": key, "canonical_key": key, "title": item["title"], "facebook_url": item["url"],
-                        "thumbnail_url": None, "duration_seconds": None, "external": False,
-                        "added_by": username, "created_at": now,
-                    }
-                    videos.append(video)
-                    by_key[key] = video
-                    added += 1
-                video["playlist_id"] = playlist["id"]
-                video["episode"] = item["episode"]
-                if not video.get("thumbnail_url") and item["image"]:
-                    thumbs.append((key, item["image"]))
-        storage.save_video_playlists(playlists)
-        storage.save_videos(videos)
-    if thumbs:
-        threading.Thread(target=_fetch_playlist_thumbs, args=(thumbs,), daemon=True).start()
-    return jsonify({"ok": True, "added": added, "moved": moved, "thumbs_queued": len(thumbs)})
+    result = _store_playlist_items(parsed, category_name, current_username() or "local", move_existing=True)
+    return jsonify({"ok": True, "added": result["added"], "moved": result["moved"], "thumbs_queued": result["thumbs_queued"]})
 
 
 @app.route("/api/video-playlists/<playlist_id>", methods=["PATCH"])
@@ -1863,6 +1884,191 @@ def delete_video_playlist(playlist_id):
     for vid in gone:
         storage.video_thumb_path(vid).unlink(missing_ok=True)
     return jsonify({"ok": True, "deleted": len(gone)})
+
+
+# ---------- เพิ่มตอนใหม่เข้า playlist: วางลิงก์ (แอดมิน) / เช็คเพจอัตโนมัติทุก 2 ชม. ----------
+MAX_ADD_LINKS = 30
+_REEL_LINK_RE = re.compile(r"https://(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.watch)/[^\s\"'<>]+")
+
+
+def _reel_title(og_title: str) -> str:
+    """og:title = "ยอดดู … | ชื่อคลิป | ชื่อเพจ" → ชื่อคลิปที่ตัดแฮชแท็ก/เครดิตแล้ว"""
+    title = re.sub(r"\s*\|\s*Facebook\s*$", "", _clean_video_title(og_title))
+    if "|" in title:
+        title = title.rsplit("|", 1)[0]  # ชื่อเพจท้ายสุด
+    return playlist_parse.clean_title(title)
+
+
+def _add_reels_to_playlists(urls: list[str], category_name: str, username: str,
+                            forced_playlist: str | None = None) -> list[dict]:
+    """ลิงก์ reel (เก่า→ใหม่) → อ่านชื่อจาก Facebook → แยกเรื่อง/ตอน → บันทึก คืนผลรายลิงก์
+    ยิงเน็ตทั้งหมดก่อนเข้า lock; คลิปที่มีในคลังแล้วข้าม"""
+    known = {v.get("canonical_key") for v in storage.load_videos()}
+    results: list[dict] = []
+    todo: list[str] = []
+    for raw in urls:
+        resolved = _resolve_facebook_share(raw) if "/share/" in raw else raw
+        facebook_url, error = _canonical_facebook_video_url(resolved or raw)
+        if error:
+            results.append({"url": raw, "status": "error", "error": error})
+        elif hashlib.sha256(facebook_url.encode("utf-8")).hexdigest()[:20] in known:
+            results.append({"url": facebook_url, "status": "exists"})
+        elif facebook_url not in todo:
+            todo.append(facebook_url)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        metas = list(pool.map(_facebook_page_meta, todo))
+    names = [p["name"] for p in storage.load_video_playlists()]
+    groups: dict[str, list[dict]] = {}
+    for facebook_url, meta in zip(todo, metas):
+        title = _reel_title(meta.get("title") or "")
+        if not title:
+            results.append({"url": facebook_url, "status": "error", "error": "อ่านชื่อคลิปไม่ได้ (คลิปไม่สาธารณะ?)"})
+            continue
+        if forced_playlist:
+            parsed = playlist_parse.parse_episode(title)
+            target = (forced_playlist, parsed[1] if parsed else None)
+        else:
+            target = playlist_parse.assign(title, names)
+        if not target:
+            results.append({"url": facebook_url, "title": title, "status": "skipped", "error": "ไม่ใช่ตอนของซีรีส์"})
+            continue
+        name, episode = target
+        if name not in names:
+            names.append(name)  # ตอนอื่นของเรื่องใหม่ในชุดเดียวกันจะได้เข้าเรื่องเดียวกัน
+        groups.setdefault(name, []).append({"url": facebook_url, "title": title[:MAX_VIDEO_TITLE],
+                                            "episode": episode, "image": meta.get("image") or ""})
+    if groups:
+        stored = _store_playlist_items(list(groups.items()), category_name, username, move_existing=False)
+        results.extend(stored["items"])
+    return results
+
+
+@app.route("/api/video-playlists/add-links", methods=["POST"])
+@require_admin
+def add_playlist_links():
+    """body: {"links": "ข้อความที่มีลิงก์ reel/แชร์", "playlist_id": (ไม่ใส่ = แยกเรื่องจากชื่อคลิป), "category": ชื่อหมวด}"""
+    body = request.get_json(force=True, silent=True) or {}
+    urls = list(dict.fromkeys(_REEL_LINK_RE.findall(str(body.get("links") or ""))))
+    if not urls:
+        return jsonify({"error": "ไม่พบลิงก์ Facebook"}), 400
+    if len(urls) > MAX_ADD_LINKS:
+        return jsonify({"error": f"วางได้ครั้งละไม่เกิน {MAX_ADD_LINKS} ลิงก์"}), 400
+    forced = None
+    if body.get("playlist_id"):
+        playlist = next((p for p in storage.load_video_playlists() if p["id"] == body["playlist_id"]), None)
+        if not playlist:
+            return jsonify({"error": "ไม่พบ playlist"}), 404
+        forced = playlist["name"]
+    category = " ".join(str(body.get("category") or "").split())[:40]
+    results = _add_reels_to_playlists(urls, category, current_username() or "local", forced)
+    return jsonify({"ok": True, "results": results})
+
+
+PLAYLIST_WATCH_INTERVAL = 2 * 60 * 60
+PLAYLIST_WATCH_TIMEOUT = 150
+_playlist_watch_lock = threading.Lock()
+_playlist_watch_started = False
+
+
+def _newest_page_reels(page_url: str) -> list[str]:
+    """ลิงก์ reel ล่าสุดของเพจ (ใหม่→เก่า) จาก fb_reels_watch.py — Chromium รันเป็น process แยก มี timeout
+    ไม่ให้เว็บค้างถ้า Facebook ไม่ตอบ"""
+    proc = subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("fb_reels_watch.py")), page_url],
+        capture_output=True, text=True, encoding="utf-8", timeout=PLAYLIST_WATCH_TIMEOUT,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if proc.returncode != 0:
+        err = (proc.stderr or "").strip().splitlines()
+        message = err[-1] if err else f"exit {proc.returncode}"
+        if "No module named 'playwright'" in message or "Executable doesn't exist" in message:
+            message = "ยังไม่ได้ติดตั้ง playwright/chromium บนเซิร์ฟเวอร์"
+        raise RuntimeError(message[:300])
+    return json.loads(proc.stdout.strip().splitlines()[-1])["reels"]
+
+
+def run_playlist_watch() -> bool:
+    """เช็คทุกเพจที่ติดตาม 1 รอบ (False = มีรอบอื่นกำลังทำอยู่)"""
+    if not _playlist_watch_lock.acquire(blocking=False):
+        return False
+    try:
+        report = []
+        for source in storage.load_playlist_watch().get("sources", []):
+            entry = {"url": source["url"], "checked_at": datetime.now(timezone.utc).isoformat(), "found": 0, "added": []}
+            try:
+                reels = _newest_page_reels(source["url"])
+                entry["found"] = len(reels)
+                results = _add_reels_to_playlists(list(reversed(reels)), source.get("category") or "", "auto")
+                entry["added"] = [f"{r['playlist']} ตอนที่ {r['episode']:g}" for r in results if r.get("status") == "added"]
+                entry["skipped"] = [r.get("title") or r["url"] for r in results if r.get("status") in ("skipped", "error")]
+                if not reels:
+                    entry["error"] = "ไม่เจอคลิปในหน้าเพจ (Facebook อาจบล็อก/เปลี่ยนหน้า)"
+            except Exception as e:
+                entry["error"] = str(e) or e.__class__.__name__
+            print(f"[playlist-watch] {entry['url']} พบ {entry['found']} เพิ่ม {len(entry['added'])}"
+                  f"{' ⚠️ ' + entry['error'] if entry.get('error') else ''}", flush=True)
+            report.append(entry)
+        with storage.state_lock:
+            data = storage.load_playlist_watch(fresh=True)
+            data["last_run"] = datetime.now(timezone.utc).isoformat()
+            data["last_result"] = report
+            storage.save_playlist_watch(data)
+        return True
+    finally:
+        _playlist_watch_lock.release()
+
+
+def _playlist_watch_loop():
+    time.sleep(120)  # ให้เว็บเริ่มเสร็จก่อน
+    while True:
+        try:
+            if storage.load_playlist_watch().get("sources"):
+                run_playlist_watch()
+        except Exception as e:
+            print(f"⚠️ playlist-watch ล้ม: {e}", flush=True)
+        time.sleep(PLAYLIST_WATCH_INTERVAL)
+
+
+@app.before_request
+def _start_playlist_watch():
+    # เริ่ม loop ครั้งเดียวต่อ process ตอนมี request แรก (import app เฉย ๆ เช่นตอนทดสอบ ไม่เริ่ม)
+    global _playlist_watch_started
+    if not _playlist_watch_started:
+        _playlist_watch_started = True
+        threading.Thread(target=_playlist_watch_loop, daemon=True).start()
+
+
+@app.route("/api/video-playlists/watch", methods=["GET"])
+@require_admin
+def get_playlist_watch():
+    return jsonify({**storage.load_playlist_watch(), "running": _playlist_watch_lock.locked(),
+                    "interval_hours": PLAYLIST_WATCH_INTERVAL / 3600})
+
+
+@app.route("/api/video-playlists/watch", methods=["PUT"])
+@require_admin
+def save_playlist_watch_sources():
+    sources = []
+    for raw in (request.get_json(force=True, silent=True) or {}).get("sources") or []:
+        url = str((raw or {}).get("url") or "").strip()
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or (parsed.hostname or "").lower() not in FACEBOOK_VIDEO_HOSTS:
+            return jsonify({"error": "ลิงก์เพจต้องเป็น https://www.facebook.com/..."}), 400
+        sources.append({"url": url, "category": " ".join(str(raw.get("category") or "").split())[:40]})
+    with storage.state_lock:
+        data = storage.load_playlist_watch(fresh=True)
+        data["sources"] = sources
+        storage.save_playlist_watch(data)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/video-playlists/watch/run", methods=["POST"])
+@require_admin
+def run_playlist_watch_now():
+    if _playlist_watch_lock.locked():
+        return jsonify({"started": False, "error": "กำลังเช็คอยู่"})
+    threading.Thread(target=run_playlist_watch, daemon=True).start()
+    return jsonify({"started": True})
 
 
 # ---------- หน้าแอดมิน: สถานะระบบ / สถิติ / จัดการเนื้อหา ----------

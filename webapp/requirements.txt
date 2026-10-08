@@ -12,3 +12,6 @@ pywebpush>=2.0
 # gunicorn รันบน Windows ไม่ได้ (ต้องพึ่ง fork ของ Unix) ใช้ตัวไหนอัตโนมัติตาม OS
 gunicorn==22.0.0; platform_system != "Windows"
 waitress==3.0.0; platform_system == "Windows"
+# เช็คตอนใหม่ของเพจ Facebook อัตโนมัติ (fb_reels_watch.py) — ติดตั้งแล้วต้องรัน `python -m playwright install chromium`
+# ไม่ติดตั้ง: เว็บทำงานปกติ แค่หน้าแอดมินขึ้นว่ายังไม่ได้ติดตั้ง (ปุ่มวางลิงก์ยังใช้ได้)
+playwright>=1.42

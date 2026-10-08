@@ -3132,6 +3132,87 @@ function renderVideoManage() {
     </div></li>`).join("");
 }
 
+// ---------- ติดตามเพจ / เพิ่มตอนจากลิงก์ ----------
+let playlistWatch = { sources: [] };
+let watchPollTimer = null;
+
+async function loadPlaylistWatch() {
+  try { playlistWatch = await getJSON("/api/video-playlists/watch"); } catch (e) { return; }
+  renderPlaylistWatch();
+  clearTimeout(watchPollTimer);
+  // กำลังเช็คอยู่: ถามสถานะซ้ำจนเสร็จ แล้วโหลดคลังใหม่ (ตอนที่เพิ่งเพิ่มจะได้ขึ้น)
+  if (playlistWatch.running) watchPollTimer = setTimeout(async () => {
+    await loadPlaylistWatch();
+    if (!playlistWatch.running) { await loadVideos(); renderVideoManage(); }
+  }, 3000);
+}
+
+function renderPlaylistWatch() {
+  const cats = state.videoCategories || [];
+  el("#watchSourceCategory").innerHTML = ['<option value="">— ไม่มีหมวด —</option>', ...cats.map((c) =>
+    `<option value="${escapeHtml(c.name)}"${c.name === "ซีรีส์จีน" ? " selected" : ""}>${escapeHtml(c.name)}</option>`)].join("");
+  el("#addLinksPlaylist").innerHTML = ['<option value="">แยกเรื่องจากชื่อคลิปอัตโนมัติ</option>', ...(state.videoPlaylists || []).map((p) =>
+    `<option value="${escapeHtml(p.id)}">เข้า: ${escapeHtml(p.name)}</option>`)].join("");
+  const sources = playlistWatch.sources || [];
+  el("#watchSourceList").innerHTML = sources.map((s, i) => `<li class="video-manage-row"><div class="grow"><div class="watch-url">${escapeHtml(s.url)}</div>
+    <div class="video-manage-meta"><small>หมวด: ${escapeHtml(s.category || "—")}</small><button class="link-btn danger-text" data-remove-watch="${i}">เลิกติดตาม</button></div></div></li>`).join("");
+  el("#watchRunBtn").disabled = !sources.length || playlistWatch.running;
+  const lines = (playlistWatch.last_result || []).map((r) => r.error
+    ? `⚠️ ${r.error}`
+    : `พบ ${r.found} คลิปล่าสุด · เพิ่ม ${r.added.length} ตอน${r.added.length ? `: ${r.added.join(", ")}` : ""}`);
+  el("#watchStatus").textContent = playlistWatch.running ? "กำลังเช็ค..."
+    : playlistWatch.last_run ? `เช็คล่าสุด ${timeAgo(playlistWatch.last_run, "เมื่อสักครู่")} — ${lines.join(" / ")}`
+    : sources.length ? "ยังไม่เคยเช็ค (จะเช็คเองภายใน 2 ชม. หรือกด เช็คตอนนี้)" : "";
+}
+
+async function saveWatchSources(sources) {
+  try { await sendJSON("PUT", "/api/video-playlists/watch", { sources }); }
+  catch (e) { alert(e.message || "บันทึกไม่สำเร็จ"); }
+  await loadPlaylistWatch();
+}
+
+function initPlaylistWatch() {
+  el("#watchSourceForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const url = el("#watchSourceUrl").value.trim();
+    await saveWatchSources([...(playlistWatch.sources || []), { url, category: el("#watchSourceCategory").value }]);
+    el("#watchSourceUrl").value = "";
+  });
+  el("#watchSourceList").addEventListener("click", (event) => {
+    const i = event.target.closest("[data-remove-watch]")?.dataset.removeWatch;
+    if (i === undefined || !confirm("เลิกติดตามเพจนี้? (ตอนที่เพิ่มไปแล้วยังอยู่)")) return;
+    saveWatchSources(playlistWatch.sources.filter((_, idx) => idx !== Number(i)));
+  });
+  el("#watchRunBtn").addEventListener("click", async () => {
+    try { await sendJSON("POST", "/api/video-playlists/watch/run"); } catch (e) { alert(e.message); }
+    loadPlaylistWatch();
+  });
+  el("#addLinksBtn").addEventListener("click", async (event) => {
+    const btn = event.currentTarget;
+    const msg = el("#addLinksMsg");
+    btn.disabled = true;
+    msg.classList.remove("error");
+    msg.textContent = "กำลังอ่านลิงก์...";
+    try {
+      const data = await sendJSON("POST", "/api/video-playlists/add-links", {
+        links: el("#addLinksText").value, playlist_id: el("#addLinksPlaylist").value || null, category: "ซีรีส์จีน" });
+      const label = { exists: "มีอยู่แล้ว", skipped: "ข้าม", error: "ผิดพลาด" };
+      msg.textContent = data.results.map((r) => r.status === "added"
+        ? `✓ ${r.playlist} ตอนที่ ${r.episode}${r.new_playlist ? " (เรื่องใหม่)" : ""}`
+        : `${label[r.status]}: ${r.title || r.url}${r.error ? ` — ${r.error}` : ""}`).join("\n");
+      if (data.results.some((r) => r.status === "added")) {
+        el("#addLinksText").value = "";
+        await loadVideos();
+        renderVideoManage();
+        renderPlaylistWatch();
+      }
+    } catch (e) {
+      msg.classList.add("error");
+      msg.textContent = e.message || "เพิ่มไม่สำเร็จ";
+    } finally { btn.disabled = false; }
+  });
+}
+
 async function patchVideo(id, body) {
   try {
     const updated = await sendJSON("PATCH", `/api/videos/${encodeURIComponent(id)}`, body);
@@ -3145,7 +3226,7 @@ function initAdminPanels() {
   els(".sub-tab-btn").forEach((btn) => btn.addEventListener("click", () => {
     if (btn.dataset.subtab === "systemManage") loadSystemStatus();
     if (btn.dataset.subtab === "commentManage") loadCommentManage();
-    if (btn.dataset.subtab === "videoManage") loadVideos().then(renderVideoManage);
+    if (btn.dataset.subtab === "videoManage") loadVideos().then(() => { renderVideoManage(); loadPlaylistWatch(); });
   }));
   el("#systemRefreshBtn").addEventListener("click", loadSystemStatus);
   el("#commentManageList").addEventListener("click", async (event) => {
@@ -3357,6 +3438,7 @@ function init() {
   initComments();
   initContinue();
   initAdminPanels();
+  initPlaylistWatch();
   initAppShell();
   initEdgeSwipe();
   initAndroidBack();

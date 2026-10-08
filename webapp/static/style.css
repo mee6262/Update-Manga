@@ -1017,3 +1017,7 @@ button, .nav-item, .home-tab, .video-tab, .continue-tile { -webkit-user-select: 
 .episode-nav[hidden] { display: none; }
 .episode-nav span { font-size: 0.9rem; font-weight: 600; }
 .episode-sub { font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.watch-status { white-space: pre-line; }
+.watch-url { font-size: 0.85rem; word-break: break-all; }
+#addLinksText { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 9px 12px; border-radius: 8px; font-size: 0.9rem; font-family: inherit; resize: vertical; }
+.form-select { font: inherit; font-size: 0.9rem; padding: 8px 10px; border-radius: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); max-width: 100%; }

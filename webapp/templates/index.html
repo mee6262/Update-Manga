@@ -245,6 +245,22 @@
             <button id="checkVideosBtn" class="btn">ตรวจไฟล์คลิปทั้งหมด</button>
           </div>
           <div id="checkVideosMsg" class="form-msg"></div>
+          <form id="watchSourceForm" class="add-form">
+            <h2>ติดตามเพจ — เช็คตอนใหม่อัตโนมัติทุก 2 ชม.</h2>
+            <input type="url" id="watchSourceUrl" placeholder="ลิงก์หน้า Reels ของเพจ Facebook" required />
+            <select id="watchSourceCategory" class="form-select"></select>
+            <button type="submit" class="btn primary">+ ติดตาม</button>
+          </form>
+          <ul id="watchSourceList" class="settings-list"></ul>
+          <div class="manage-actions"><button id="watchRunBtn" class="btn">เช็คตอนนี้</button></div>
+          <div id="watchStatus" class="form-msg watch-status"></div>
+          <div class="add-form">
+            <h2>เพิ่มตอนจากลิงก์ (reel / ลิงก์แชร์ หลายลิงก์ได้)</h2>
+            <textarea id="addLinksText" rows="3" placeholder="วางลิงก์ทีละบรรทัด"></textarea>
+            <select id="addLinksPlaylist" class="form-select"></select>
+            <button type="button" id="addLinksBtn" class="btn primary">เพิ่มตอน</button>
+          </div>
+          <div id="addLinksMsg" class="form-msg watch-status"></div>
           <div class="manage-actions">
             <label class="btn">นำเข้า Playlist (ไฟล์ .json)<input type="file" id="playlistImportFile" accept=".json,application/json" hidden /></label>
           </div>
