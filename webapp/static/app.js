@@ -3034,11 +3034,13 @@ function chapterResume(all) {
 }
 
 function chapterTileHtml(c, { fresh = false } = {}) {
-  const cur = c.url === lastReadUrl && lastScrollInfo && lastScrollInfo.url === c.url && lastScrollInfo.fraction > 0;
-  const done = c.is_read && !cur;
+  // ป้าย "อ่านถึง" ติดตอนล่าสุดที่อ่านเสมอ (อ่านจบแล้วก็ยังติด) — แถบความคืบหน้าเฉพาะตอนที่อ่านค้าง
+  const last = !!lastReadUrl && c.url === lastReadUrl;
+  const cur = last && lastScrollInfo && lastScrollInfo.url === c.url && lastScrollInfo.fraction > 0;
+  const done = c.is_read && !last;
   const label = c.num !== null && c.num !== undefined ? String(c.num) : c.text;
-  const cls = ["ep-tile", done ? "done" : "", cur ? "cur" : "", c.num === null || c.num === undefined ? "has-sub" : ""].filter(Boolean).join(" ");
-  return `<button class="${cls}" data-url="${escapeHtml(c.url)}" title="${escapeHtml(c.text)}${c.date ? ` · ${escapeHtml(c.date)}` : ""}"><span class="ep-num">${escapeHtml(label)}</span>${done ? '<span class="ep-check" aria-label="อ่านแล้ว">✓</span>' : ""}${fresh ? '<span class="ep-new">NEW</span>' : ""}${cur ? `<span class="ep-pg" style="width:${(lastScrollInfo.fraction * 100).toFixed(1)}%"></span>` : ""}</button>`;
+  const cls = ["ep-tile", done ? "done" : "", last ? "cur" : "", c.num === null || c.num === undefined ? "has-sub" : ""].filter(Boolean).join(" ");
+  return `<button class="${cls}" data-url="${escapeHtml(c.url)}" title="${escapeHtml(c.text)}${c.date ? ` · ${escapeHtml(c.date)}` : ""}">${last ? '<span class="ep-here">อ่านถึง</span>' : ""}<span class="ep-num">${escapeHtml(label)}</span>${done ? '<span class="ep-check" aria-label="อ่านแล้ว">✓</span>' : ""}${fresh && !last ? '<span class="ep-new">NEW</span>' : ""}${cur ? `<span class="ep-pg" style="width:${(lastScrollInfo.fraction * 100).toFixed(1)}%"></span>` : ""}</button>`;
 }
 
 function mangaSubscribed(id) {
