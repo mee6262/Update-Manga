@@ -785,17 +785,17 @@ function ytBadge(item) {
 function playlistCardHtml(p) {
   const eps = playlistEpisodes(p.id);
   const resume = eps.some((v) => episodeProgress(v).watched_at) ? playlistResume(eps) : null;
-  return `<div class="video-item playlist-item"><button class="video-card playlist-card" data-playlist-id="${escapeHtml(p.id)}"><span class="video-media">${thumbHtml(p.thumbnail_url).replace("<img ", '<img class="video-thumb" ')}${ytBadge(p)}${playlistBadge(p, eps)}<span class="video-time">${eps.length} ตอน</span></span><span class="video-card-info"><span class="video-card-title">${escapeHtml(p.name)}</span>${seriesInfoHtml(p)}<span class="video-card-meta">${resume ? `ดูต่อ ${episodeLabel(resume)}` : "ยังไม่เคยดู"}</span></span></button>${playlistSaveButton(p)}</div>`;
+  return `<div class="video-item playlist-item"><button class="video-card playlist-card" data-playlist-id="${escapeHtml(p.id)}"><span class="video-media">${thumbHtml(p.thumbnail_url).replace("<img ", '<img class="video-thumb" ')}${ytBadge(p)}${playlistBadge(p, eps)}<span class="video-time">${eps.length} ตอน</span></span><span class="video-card-info"><span class="video-card-title">${escapeHtml(p.name)}</span><span class="video-card-meta series-info">${seriesInfoHtml(p)}<span>${resume ? `ดูต่อ ${episodeLabel(resume)}` : "ยังไม่เคยดู"}</span></span></span></button>${playlistSaveButton(p)}</div>`;
 }
 
-// บรรทัดใต้ชื่อเรื่อง: "ซีซั่น 1–4 · พากย์ ซับ" — เฉพาะเรื่องที่มีหลายซีซั่น หรือรู้ภาษา (เรื่องธรรมดาไม่มีบรรทัดนี้)
+// ต้นบรรทัดใต้ชื่อเรื่อง (บรรทัดเดียวกับ "ยังไม่เคยดู" — ยาวเกินขึ้นบรรทัดใหม่เอง): "ซีซั่น 1–4 · พากย์ ซับ" — เฉพาะเรื่องที่มีหลายซีซั่น หรือรู้ภาษา (เรื่องธรรมดาไม่มีบรรทัดนี้)
 function seriesInfoHtml(p) {
   const seasons = [...new Set(allPlaylistEpisodes(p.id).map((v) => v.season || 1))].sort((a, b) => a - b);
   const langs = seriesLangs(p);
   if (seasons.length < 2 && !langs.length) return "";
   const season = seasons.length > 1 ? `<span class="series-seasons">ซีซั่น ${seasons[0]}–${seasons[seasons.length - 1]}</span>` : "";
   const tags = langs.length ? langs.map((l) => `<span class="series-lang">${LANG_LABEL[l].replace("ไทย", "")}</span>`).join("") : "";
-  return `<span class="video-card-meta series-info">${season}${season && tags ? " · " : ""}${tags}</span>`;
+  return `${season}${season && tags ? " · " : ""}${tags}<span aria-hidden="true">·</span>`;
 }
 
 // ---------- หน้าเรื่อง: หัวเรื่อง + ปุ่มดูต่อ + ตารางเลขตอน ----------
