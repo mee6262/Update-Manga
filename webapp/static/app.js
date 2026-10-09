@@ -4790,10 +4790,9 @@ function guessSeason(name) {
 function ytSheetHtml(p) {
   const tracks = p.tracks || [];
   const seasons = [...new Set(allPlaylistEpisodes(p.id).map((v) => v.season || 1))].sort((a, b) => a - b);
-  if (!tracks.length && seasons.length < 2) return "";
   const starts = (p.season_starts || []).map((n) => Number(n)).join(", ");
-  const split = tracks.length ? `<label class="vm-field">แบ่งซีซั่นเอง: ตอนที่เริ่มซีซั่นใหม่ (คั่นด้วย ,)<input id="sheetSeasonStarts" value="${escapeHtml(starts)}" placeholder="เช่น 13 หรือ 13, 25 (ว่าง = ดูจากชื่อคลิป)" inputmode="decimal" /></label>
-    <div class="hint">ใช้เมื่อชื่อคลิปไม่บอกซีซั่น (เช่น ตอนที่ 1–24 ต่อกันแต่เป็น 2 ซีซั่น) — ตอนใหม่ที่ดึงมาทีหลังเข้าซีซั่นตามนี้ด้วย</div>` : "";
+  const split = `<label class="vm-field">แบ่งซีซั่นเอง: ตอนที่เริ่มซีซั่นใหม่ (คั่นด้วย ,)<input id="sheetSeasonStarts" value="${escapeHtml(starts)}" placeholder="เช่น 13 หรือ 13, 25 (ว่าง = ดูจากชื่อคลิป)" inputmode="decimal" /></label>
+    <div class="hint">ใช้เมื่อชื่อคลิปไม่บอกซีซั่น (เช่น ตอนที่ 1–24 ต่อกันแต่เป็น 2 ซีซั่น) — ตอนใหม่ที่ดึงมาทีหลังเข้าซีซั่นตามนี้ด้วย</div>`;
   const rows = tracks.map((t) => {
     const status = t.error ? `<span class="status-dot bad"></span><span class="status-bad">${escapeHtml(t.error)}</span>`
       : `<span class="status-dot ok"></span>เช็ค ${timeAgo(t.checked_at, "เมื่อสักครู่")}`;

@@ -1994,6 +1994,9 @@ def _store_playlist_items(groups: list[tuple[str, list[dict]]], category_name: s
                 video["episode"] = episode
                 if alias and alias.get("season"):
                     video["season"] = alias["season"]
+                elif playlist.get("season_starts"):  # แอดมินแบ่งซีซั่นเองไว้ — ตอนใหม่จากเพจเข้าซีซั่นตามจุดแบ่ง
+                    video["season_base"] = 1  # ล้างจุดแบ่งทีหลัง = กลับเป็นซีซั่น 1
+                    video["season"] = _season_of(item["title"], episode, playlist["season_starts"])
                 if alias and alias.get("lang"):
                     video["lang"] = alias["lang"]
                 items_out.append({"title": item["title"], "playlist": name, "episode": episode,
@@ -2104,8 +2107,11 @@ def update_video_playlist(playlist_id):
             playlist["season_starts"] = starts
             videos = storage.load_videos(fresh=True)
             for video in videos:
-                if video.get("playlist_id") == playlist_id and video.get("provider") == "youtube":
-                    video["season"] = _season_of(video["title"], video.get("episode"), starts)
+                if video.get("playlist_id") != playlist_id:
+                    continue
+                # ซีซั่นก่อนแบ่งเอง (เช่น ได้จากการรวมภาค) จำไว้ — ล้างจุดแบ่งแล้วกลับไปค่านี้
+                video.setdefault("season_base", video.get("season") or 1)
+                video["season"] = _season_of(video["title"], video.get("episode"), starts, video["season_base"])
             storage.save_videos(videos)
         if "track" in body:  # {"list_id", "follow": bool}
             item = body.get("track") or {}
@@ -2441,6 +2447,7 @@ def _store_youtube_items(list_id: str, info: dict, *, playlist_id: str | None, n
                 "episode": episode if episode is not None else float(item["index"]),
                 "season": _season_of(item["title"], episode if episode is not None else float(item["index"]),
                                      playlist.get("season_starts") or [], default_season),
+                "season_base": default_season,
                 "lang": youtube.detect_lang(item["title"]) or track.get("lang"),
             })
             if first_import:
