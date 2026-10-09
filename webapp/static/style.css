@@ -1299,3 +1299,28 @@ button, .nav-item, .home-tab, .video-tab { -webkit-user-select: none; user-selec
 .toast { position: fixed; left: 50%; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 12px); transform: translateX(-50%); z-index: 460; width: max-content; max-width: calc(100% - 32px); padding: 11px 16px; border-radius: 12px; background: var(--text); color: var(--bg); font-size: 0.88rem; line-height: 1.45; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3); white-space: pre-line; animation: slide-up 0.18s ease-out; }
 .toast.error { background: var(--danger); color: #fff; }
 .toast[hidden] { display: none; }
+
+/* YouTube: ตัวเล่น + ป้ายบนการ์ด + เลือกพากย์/ซับในหน้าเรื่อง */
+.yt-wrap { position: relative; width: 100%; max-width: 900px; aspect-ratio: 16 / 9; justify-self: center; background: #000; border-radius: 6px; overflow: hidden; }
+.yt-wrap iframe, .yt-wrap #ytMount { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.yt-open { justify-self: center; margin-top: 10px; color: var(--text-dim); font-size: 0.82rem; text-decoration: underline; padding: 10px; }
+.yt-error { justify-self: center; margin-top: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; color: var(--text); font-size: 0.88rem; }
+.yt-error[hidden] { display: none; }
+.video-player.mini .yt-wrap { width: 128px; height: 72px; aspect-ratio: auto; border-radius: 0; }
+.video-player.mini .yt-open, .video-player.mini .yt-error { display: none; }
+.yt-badge { position: absolute; left: 6px; bottom: 6px; z-index: 2; background: #e0302b; color: #fff; font-size: 0.6rem; font-weight: 700; line-height: 1; padding: 3px 5px; border-radius: 4px; pointer-events: none; }
+.pl-lang { display: flex; gap: 4px; padding: 4px; margin: 12px 0 4px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; }
+.pl-lang button { flex: 1; min-height: 40px; border: 0; border-radius: 9px; background: none; color: var(--text-dim); font: inherit; font-size: 0.9rem; cursor: pointer; }
+.pl-lang button.active { background: var(--accent); color: #0a0f0c; font-weight: 600; }
+.ep-tile.na { border-style: dashed; background: none; color: var(--text-dim); }
+.ep-tile.na .ep-num { font-weight: 500; }
+.pl-hint { margin-top: 12px; }
+.yt-add-row { display: flex; gap: 8px; }
+.yt-add-row input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 9px 12px; border-radius: 8px; font: inherit; font-size: 1rem; }
+.yt-preview { display: flex; gap: 10px; align-items: center; }
+.yt-preview .name { font-weight: 700; }
+.yt-preview .meta { font-size: 0.78rem; color: var(--text-dim); }
+.switch-label { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 0.88rem; }
+.tag-lang { display: inline-block; font-size: 0.7rem; padding: 1px 6px; border-radius: 4px; background: var(--bg); border: 1px solid var(--border); color: var(--text-dim); }
+.season-name { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 0.85rem; color: var(--text-dim); }
+.season-name input { flex: 1; }

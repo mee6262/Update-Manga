@@ -339,7 +339,17 @@
           </div>
           <div id="vmAdd" class="vm-pane" hidden>
             <div class="vm-card">
-              <h3>🔗 วางลิงก์</h3>
+              <h3>▶ YouTube</h3>
+              <form id="ytAddForm" class="yt-add-row">
+                <input type="url" id="ytAddUrl" placeholder="ลิงก์คลิป / playlist / รายการของช่อง" required />
+                <button type="submit" class="btn">ดูข้อมูล</button>
+              </form>
+              <div id="ytPreview"></div>
+              <div id="ytAddMsg" class="form-msg"></div>
+              <div class="hint">playlist ที่ชื่อเรื่องตรงกับเรื่องเดิม (เช่น พากย์ไทย + ซับไทย) รวมเป็นเรื่องเดียว เลือกภาษาได้ในหน้าเรื่อง</div>
+            </div>
+            <div class="vm-card">
+              <h3>🔗 วางลิงก์ Facebook</h3>
               <textarea id="addLinksText" rows="3" placeholder="วางลิงก์ reel / ลิงก์แชร์ ทีละบรรทัด"></textarea>
               <div id="addLinksMode" class="pl-controls">
                 <button class="video-chip active" data-add-mode="auto">อัตโนมัติ</button>
@@ -429,7 +439,7 @@
     <div class="modal-content">
       <h2>เพิ่มคลิปเข้า MeeMovie</h2>
       <form id="videoForm" class="video-form">
-        <input name="facebook_url" type="url" placeholder="ลิงก์ Facebook Video, Reel หรือ fb.watch" required />
+        <input name="facebook_url" type="url" placeholder="ลิงก์ YouTube หรือ Facebook (Video, Reel, fb.watch)" required />
         <div id="videoFormMsg" class="form-msg"></div>
         <div class="modal-actions"><button type="button" class="btn" data-close-video-form>ยกเลิก</button><button class="btn primary">เพิ่มคลิป</button></div>
       </form>
