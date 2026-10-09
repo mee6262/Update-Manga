@@ -353,10 +353,13 @@ function pickHeroPlaylists() {
   return picked;
 }
 
+// รางสไลด์ = [สำเนาเรื่องสุดท้าย, เรื่อง 1..n, สำเนาเรื่องแรก] — เลื่อนเลยท้ายไปเจอสำเนาเรื่องแรก แล้วกระโดดกลับ
+// ตำแหน่งจริงแบบไม่มีแอนิเมชัน (ภาพเหมือนกัน จึงดูเหมือนวนต่อกันไม่สะดุด) ปัดย้อนจากเรื่องแรกก็ใช้วิธีเดียวกัน
 function heroCarouselHtml(list) {
   if (list.length === 1) return heroHtml(list[0]);
   heroIndex = Math.min(heroIndex, list.length - 1);
-  return `<div class="mm-hero-carousel"><div class="mm-hero-track">${list.map(heroHtml).join("")}</div>
+  const clone = (p) => heroHtml(p).replace('<div class="mm-hero"', '<div class="mm-hero" aria-hidden="true" data-hero-clone');
+  return `<div class="mm-hero-carousel"><div class="mm-hero-track">${clone(list[list.length - 1])}${list.map(heroHtml).join("")}${clone(list[0])}</div>
     <div class="mm-hero-dots">${list.map((_, i) => `<button class="${i === heroIndex ? "active" : ""}" data-hero-dot="${i}" aria-label="เรื่องที่ ${i + 1}"></button>`).join("")}</div></div>`;
 }
 
@@ -365,13 +368,19 @@ function heroTrack() {
   return track && track.offsetParent ? track : null;
 }
 
+function renderHeroDots() {
+  els("#videoHome [data-hero-dot]").forEach((d, k) => d.classList.toggle("active", k === heroIndex));
+}
+
+// i = ลำดับเรื่อง (0..n-1) / i = n = ไปสำเนาเรื่องแรกท้ายราง (เลื่อนไปข้างหน้าต่อจากเรื่องสุดท้าย)
 function showHeroSlide(i, smooth = true) {
   const track = heroTrack();
   if (!track) return;
-  const n = track.children.length;
+  const n = track.children.length - 2;
+  const pos = Math.max(0, Math.min(n + 1, i + 1));
   heroIndex = ((i % n) + n) % n;
-  track.scrollTo({ left: heroIndex * track.clientWidth, behavior: smooth ? "smooth" : "auto" });
-  els("#videoHome [data-hero-dot]").forEach((d, k) => d.classList.toggle("active", k === heroIndex));
+  track.scrollTo({ left: pos * track.clientWidth, behavior: smooth ? "smooth" : "auto" });
+  renderHeroDots();
 }
 
 // หลังวาดหน้าหลักใหม่: กลับไปสไลด์เดิม + ฟังการปัดของผู้ใช้ (ตัว track เป็นของใหม่ทุกครั้งที่วาด)
@@ -383,9 +392,14 @@ function initHeroCarousel() {
   track.addEventListener("scroll", () => {
     clearTimeout(settle);
     settle = setTimeout(() => {
-      heroIndex = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
-      els("#videoHome [data-hero-dot]").forEach((d, k) => d.classList.toggle("active", k === heroIndex));
-    }, 80);
+      const w = Math.max(1, track.clientWidth);
+      const n = track.children.length - 2;
+      const pos = Math.round(track.scrollLeft / w);
+      if (pos === 0) track.scrollLeft = n * w;           // สำเนาเรื่องสุดท้าย → เรื่องสุดท้ายจริง
+      else if (pos === n + 1) track.scrollLeft = w;      // สำเนาเรื่องแรก → เรื่องแรกจริง
+      heroIndex = pos === 0 ? n - 1 : pos === n + 1 ? 0 : pos - 1;
+      renderHeroDots();
+    }, 120);
   }, { passive: true });
   const pause = () => { heroPausedUntil = Date.now() + 8000; };
   track.addEventListener("touchstart", pause, { passive: true });
