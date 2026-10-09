@@ -668,13 +668,18 @@ function initVideoInfiniteScroll() {
 }
 
 // ตอนทั้งหมดของเรื่อง (ทุกภาษา) จัดกลุ่มตามเรื่องครั้งเดียวต่อชุดข้อมูล — เรื่องหนึ่งมีได้หลายร้อยตอน
-let episodeIndex = { source: null, size: 0, map: new Map() };
+let episodeIndex = { source: null, size: 0, map: new Map(), seasons: new Map() };
 function allPlaylistEpisodes(playlistId) {
   if (episodeIndex.source !== state.videos || episodeIndex.size !== state.videos.length) {
     const map = new Map();
     for (const v of state.videos) if (v.playlist_id) (map.get(v.playlist_id) || map.set(v.playlist_id, []).get(v.playlist_id)).push(v);
-    for (const list of map.values()) list.sort((a, b) => (a.episode || 0) - (b.episode || 0));
-    episodeIndex = { source: state.videos, size: state.videos.length, map };
+    // เรียงซีซั่นก่อน — บางเรื่องเริ่มตอนที่ 1 ใหม่ทุกซีซั่น เรียงแค่เลขตอนแล้วตอนคนละซีซั่นปนกัน (14, 14, 15, 15)
+    const seasons = new Map();
+    for (const [id, list] of map) {
+      list.sort((a, b) => (a.season || 1) - (b.season || 1) || (a.episode || 0) - (b.episode || 0));
+      seasons.set(id, new Set(list.map((v) => v.season || 1)).size);
+    }
+    episodeIndex = { source: state.videos, size: state.videos.length, map, seasons };
   }
   return episodeIndex.map.get(playlistId) || [];
 }
@@ -734,8 +739,18 @@ function seasonLabel(p, season) {
   return (p.season_names || {})[String(season)] || `ซีซั่น ${season}`;
 }
 
+// เรื่องที่มีหลายซีซั่น บอกซีซั่นด้วย ("ซีซั่น 3 ตอนที่ 14") — เลขตอนอย่างเดียวซ้ำกันได้ข้ามซีซั่น
 function episodeLabel(video) {
+  if (video.playlist_id && (allPlaylistEpisodes(video.playlist_id), episodeIndex.seasons.get(video.playlist_id) > 1)) {
+    const p = playlistById(video.playlist_id);
+    return `${p ? seasonLabel(p, video.season || 1) : `ซีซั่น ${video.season || 1}`} ตอนที่ ${Number(video.episode)}`;
+  }
   return `ตอนที่ ${Number(video.episode)}`;
+}
+
+// ตอนในซีซั่นเดียวกับคลิป (แถบเลขตอนใต้คลิป / ตัวนับ "ตอนที่ x / y")
+function seasonEpisodesLike(video) {
+  return episodesLike(video).filter((v) => (v.season || 1) === (video.season || 1));
 }
 
 // ชื่อตอน (ถ้ามี) = ชื่อคลิปที่ตัดชื่อเรื่อง/เลขตอนออก เช่น "THE4 โดนซองขาว" → "โดนซองขาว"
@@ -864,7 +879,7 @@ function renderPlaylistView() {
   const tiles = shown.map((x) => episodeTileHtml(x.v, playlist, { fresh: fresh.has(x.v.id), na: x.na })).join("");
   const langSeg = lang ? `<div class="pl-lang" role="tablist">${seriesLangs(playlist).map((l) =>
     `<button class="${l === lang ? "active" : ""}" data-pl-lang="${l}" role="tab" aria-selected="${l === lang}">${LANG_LABEL[l] || l}</button>`).join("")}</div>` : "";
-  const resumeWhere = `${seasons.length > 1 ? `${seasonLabel(playlist, resume.season || 1)} ` : ""}${episodeLabel(resume)}${lang ? ` · ${LANG_LABEL[lang]}` : ""}`;
+  const resumeWhere = `${episodeLabel(resume)}${lang ? ` · ${LANG_LABEL[lang]}` : ""}`;
   el("#playlistBody").innerHTML = `<div class="pl-cover">${thumbHtml(resume.thumbnail_url || playlist.thumbnail_url)}${ytBadge(playlist)}${playlistBadge(playlist, episodes)}</div>
     <h2 class="pl-name">${escapeHtml(playlist.name)}</h2>
     <div class="pl-meta">${seasons.length > 1 ? `${seasons.length} ซีซั่น · ` : ""}${episodes.length} ตอน · อัปเดต ${timeAgo(playlist.updated_at, "เมื่อสักครู่")} · ดูไป ${watched}/${episodes.length}</div>
@@ -887,7 +902,7 @@ function renderEpisodeNav(video) {
   nav.hidden = !video.playlist_id;
   renderPlayerEpisodes(video);
   if (nav.hidden) return;
-  const episodes = episodesLike(video);
+  const episodes = seasonEpisodesLike(video);
   el("#episodeLabel").textContent = `${episodeLabel(video)} / ${episodes.length}${video.lang ? ` · ${LANG_LABEL[video.lang].replace("ไทย", "")}` : ""}`;
   renderAutoNext();
   el("#episodePrev").disabled = !neighborEpisode(video, -1);
@@ -900,7 +915,7 @@ function renderPlayerEpisodes(video) {
   const playlist = video.playlist_id && playlistById(video.playlist_id);
   box.hidden = !playlist;
   if (!playlist) return;
-  const episodes = episodesLike(video);
+  const episodes = seasonEpisodesLike(video);
   const fresh = new Set(newEpisodes(playlist, episodes).map((v) => v.id));
   const scroll = box.scrollLeft;
   box.innerHTML = episodes.map((v) => episodeTileHtml(v, playlist, { fresh: fresh.has(v.id), playing: v.id === video.id })).join("");
