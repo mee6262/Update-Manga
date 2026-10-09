@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60">
+  <rect width="60" height="60" fill="#121614"/>
+  <rect x="6" y="7" width="22" height="20" rx="3" fill="none" stroke="#4bdd9e" stroke-width="2.4"/>
+  <path d="M14 12l8 5-8 5z" fill="#4bdd9e"/>
+  <rect x="32" y="7" width="22" height="20" rx="3" fill="#4bdd9e"/>
+  <path d="M36 13h14M36 17h14M36 21h9" stroke="#0a0f0c" stroke-width="2" stroke-linecap="round"/>
+  <text x="5.5" y="49" font-family="Arial Rounded MT Bold, Arial, sans-serif" font-weight="700" font-size="16" fill="#fff">Mee</text>
+  <path d="M49.5 38.5v9M45 43h9" stroke="#4bdd9e" stroke-width="3.2" stroke-linecap="round"/>
+</svg>

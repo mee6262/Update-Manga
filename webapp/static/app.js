@@ -4360,7 +4360,7 @@ function renderInstallBanner() {
   banner.hidden = el("#installBtn").hidden || installBannerDismissed();
   if (banner.hidden) return;
   const direct = !!installPromptEvent; // Android/Chrome ติดตั้งได้ทันที
-  el("#installBannerTitle").textContent = direct ? "ติดตั้ง MeeManga" : "เพิ่มไปหน้าจอโฮม";
+  el("#installBannerTitle").textContent = direct ? "ติดตั้ง Mee+" : "เพิ่มไปหน้าจอโฮม";
   el("#installBannerDesc").textContent = direct ? "ไม่ต้องเปิดเบราว์เซอร์ทุกครั้ง" : "เปิดเร็วเหมือนแอป + แจ้งเตือนตอนใหม่";
   el("#installBannerBtn").textContent = direct ? "ติดตั้ง" : "วิธีเพิ่ม";
 }

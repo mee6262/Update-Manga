@@ -139,7 +139,7 @@ def push_test():
         return jsonify({"error": "unauthorized"}), 401
     sent = webpush.send_to_user(
         current_username(),
-        {"title": "MeeManga", "body": "เปิดแจ้งเตือนเรียบร้อย จะแจ้งเมื่อเรื่องที่ติดตามมีตอนใหม่หรือมีคนตอบคอมเมนต์", "tag": "test", "url": "/"},
+        {"title": "Mee+", "body": "เปิดแจ้งเตือนเรียบร้อย จะแจ้งเมื่อเรื่องที่ติดตามมีตอนใหม่หรือมีคนตอบคอมเมนต์", "tag": "test", "url": "/"},
         wait=True,
     )
     return jsonify({"sent": sent})
@@ -1713,7 +1713,7 @@ def _notify_comment(comment: dict, parent: dict | None, thread: list[dict], body
     for username, kind in recipients.items():
         text = f"{author} {verbs[kind]}ใน {comment['label']}: {snippet}"
         if _add_notification(username, {"type": kind, "target": comment["target"], "text": text, "url": url}):
-            webpush.send_to_user(username, {"title": "MeeManga", "body": text, "tag": f"comment-{comment['target']}", "url": url})
+            webpush.send_to_user(username, {"title": "Mee+", "body": text, "tag": f"comment-{comment['target']}", "url": url})
 
 
 @app.route("/api/notifications", methods=["GET"])

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MeeManga</title>
+  <title>Mee+</title>
   <meta name="theme-color" content="#0f1115" />
   <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}" />
   <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="any" />
@@ -11,7 +11,7 @@
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="MeeManga" />
+  <meta name="apple-mobile-web-app-title" content="Mee+" />
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
   <script>window.__BOOT__ = {{ boot|tojson }};</script>
   <script>
@@ -28,10 +28,10 @@
 <body>
   <header class="topbar">
     <div class="topbar-row">
-      <h1 class="topbar-title" data-for="list">📚 MeeManga</h1>
+      <h1 class="topbar-title brand-title" data-for="list"><img class="brand-icon" src="{{ url_for('static', filename='icon-192.png') }}" alt="" /><span>Mee<span class="brand-plus">+</span></span></h1>
       <h1 class="topbar-title" data-for="catalog" hidden>📖 ทั้งหมด</h1>
       <h1 class="topbar-title" data-for="search" hidden>ค้นหา</h1>
-      <h1 class="topbar-title" data-for="videos" hidden>🎬 MeeMovie</h1>
+      <h1 class="topbar-title brand-title" data-for="videos" hidden><img class="brand-icon" src="{{ url_for('static', filename='icon-192.png') }}" alt="" /><span>Mee<span class="brand-plus">+</span></span><span class="brand-sub">ดูหนัง</span></h1>
       <h1 class="topbar-title" data-for="settings" hidden>ตั้งค่า</h1>
       <button id="installBtn" class="icon-btn" title="เพิ่มไปยังหน้าจอโฮม" hidden>
         <svg viewBox="0 0 24 24" width="20" height="20"><rect x="6" y="2" width="12" height="20" rx="2.5" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 8v7M8.5 11.5h7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -437,7 +437,7 @@
 
   <div id="videoFormModal" class="modal" hidden>
     <div class="modal-content">
-      <h2>เพิ่มคลิปเข้า MeeMovie</h2>
+      <h2>เพิ่มคลิปเข้า Mee+</h2>
       <form id="videoForm" class="video-form">
         <input name="facebook_url" type="url" placeholder="ลิงก์ YouTube หรือ Facebook (Video, Reel, fb.watch)" required />
         <div id="videoFormMsg" class="form-msg"></div>

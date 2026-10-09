@@ -1346,3 +1346,11 @@ button, .nav-item, .home-tab, .video-tab { -webkit-user-select: none; user-selec
 .mm-hero-dots button { width: 22px; height: 22px; padding: 0; border: 0; background: none; cursor: pointer; display: grid; place-items: center; }
 .mm-hero-dots button::before { content: ""; width: 7px; height: 7px; border-radius: 999px; background: rgba(255, 255, 255, 0.5); transition: width 0.2s, background 0.2s; }
 .mm-hero-dots button.active::before { width: 18px; background: #fff; }
+
+/* แบรนด์ Mee+ (หัวแอป / หน้า login) */
+.brand-title { display: flex; align-items: center; gap: 8px; }
+.brand-icon { width: 28px; height: 28px; border-radius: 7px; flex: none; }
+.brand-plus { color: var(--accent); }
+.brand-sub { font-weight: 600; color: var(--text-dim); font-size: 0.95rem; }
+.login-logo { display: block; width: 72px; height: 72px; border-radius: 16px; margin: 0 auto 10px; }
+.login-tagline { text-align: center; color: var(--text-dim); font-size: 0.85rem; margin: -2px 0 14px; }
