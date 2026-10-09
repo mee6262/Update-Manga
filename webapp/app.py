@@ -2084,6 +2084,12 @@ def update_video_playlist(playlist_id):
             name = " ".join(str(body.get("name") or "").split())
             if not name or len(name) > MAX_PLAYLIST_NAME:
                 return jsonify({"error": f"ชื่อ playlist ต้องมี 1-{MAX_PLAYLIST_NAME} ตัวอักษร"}), 400
+            if name != playlist["name"]:
+                # ชื่อเก่าเป็นชื่อแฝง — เพจยังลงคลิปชื่อเดิม ("…ตัน1 ตอนใหม่") ตัวเช็คเพจจะได้เข้าเรื่องนี้ ไม่สร้างเรื่องชื่อเก่าขึ้นใหม่
+                aliases = [a for a in playlist.get("aliases", []) if a["name"] != name]
+                if not any(a["name"] == playlist["name"] for a in aliases):
+                    aliases.append({"name": playlist["name"], "season": None, "lang": None, "episode_offset": 0})
+                playlist["aliases"] = aliases
             playlist["name"] = name
         if "category_id" in body:
             category_id = body.get("category_id") or None
