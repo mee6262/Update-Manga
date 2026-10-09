@@ -1324,3 +1324,7 @@ button, .nav-item, .home-tab, .video-tab { -webkit-user-select: none; user-selec
 .tag-lang { display: inline-block; font-size: 0.7rem; padding: 1px 6px; border-radius: 4px; background: var(--bg); border: 1px solid var(--border); color: var(--text-dim); }
 .season-name { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 0.85rem; color: var(--text-dim); }
 .season-name input { flex: 1; }
+/* สวิตช์ในช่อง .vm-field ไม่ใช้กติกา "ช่องกรอกเต็มความกว้าง" (เดิมยืดจนล้นแถว) */
+.vm-field input.switch { width: 46px; height: 28px; padding: 0; border: 0; border-radius: 999px; background: var(--border); }
+.vm-field input.switch:checked { background: var(--accent); }
+.switch-label { flex: none; white-space: nowrap; }
