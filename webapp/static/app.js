@@ -94,6 +94,7 @@ function showTab(tab, fromBack = false) {
   if (tab === "list") {
     loadHistory();
     loadVideos();
+    refreshHomeIfStale(30 * 1000);
   }
   if (tab === "catalog") {
     renderCatalog(filterCatalog());
@@ -2032,13 +2033,35 @@ function initSubTabs() {
 }
 
 // ---------- List view ----------
+let lastMangaLoadAt = Date.now(); // ข้อมูลชุดแรกฝังมากับหน้าเว็บ (BOOT)
+
 async function loadManga() {
   try {
     state.manga = await getJSON("/api/manga");
+    lastMangaLoadAt = Date.now();
     renderGrid();
   } catch (e) {
     // ใช้ข้อมูลเดิมที่วาดไว้แล้วต่อไป
   }
+}
+
+// หน้าหลักโหลดของใหม่เอง: กลับมาที่แอป (สลับแอป/ปลดล็อกจอ), กดแท็บหน้าหลัก, และทุก 5 นาทีที่เปิดค้าง
+// — เซิร์ฟเวอร์เช็คตอนใหม่ทุก 30 นาทีอยู่แล้ว ฝั่งนี้แค่ดึงผลล่าสุด (เบา ไม่ยิงเว็บมังงะ)
+function refreshHomeIfStale(maxAgeMs) {
+  if (Date.now() - lastMangaLoadAt < maxAgeMs) return;
+  lastMangaLoadAt = Date.now(); // กันยิงซ้อนระหว่างรอ
+  loadManga();
+  loadHistory();
+}
+
+function initHomeAutoRefresh() {
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && state.tab === "list") refreshHomeIfStale(30 * 1000);
+  });
+  window.addEventListener("pageshow", (e) => { if (e.persisted) refreshHomeIfStale(0); });
+  setInterval(() => {
+    if (!document.hidden && state.tab === "list" && el("#reader").hidden) refreshHomeIfStale(5 * 60 * 1000);
+  }, 60 * 1000);
 }
 
 function mangaById(id) {
@@ -2088,8 +2111,13 @@ function renderGrid() {
 }
 
 // เวลาที่ตอนล่าสุดออก: วันที่จากเว็บต้นทางก่อน ไม่มีค่อยใช้เวลาที่ระบบเจอตอนใหม่
+// latest_chapter_date ของเว็บต้นทางมีแค่วันที่ (ไม่มีเวลา) และถ้าตอนล่าสุดยังไม่มีวันที่กำกับ จะได้วันที่ของ
+// ตอนก่อนหน้าแทน (ตอนใหม่เมื่อเช้าเลยขึ้นว่า "2-3 วันที่แล้ว") → ใช้ค่าที่ใหม่กว่าระหว่างวันที่เว็บต้นทาง
+// กับเวลาที่ระบบเจอตอนใหม่จริง (last_updated_at)
 function mangaDate(m) {
-  return m.latest_chapter_date || m.last_updated_at || null;
+  const source = m.latest_chapter_date, found = m.last_updated_at;
+  if (!source || !found) return source || found || null;
+  return new Date(found) >= new Date(source) ? found : source;
 }
 
 // "ตอนที่ 175" → "ต.175" (ไม่มีเลข = ข้อความเดิม)
@@ -2437,7 +2465,7 @@ function sortCatalog(items) {
     // (last_updated_at) เพราะเรื่องที่พึ่งเพิ่มเข้าระบบจะโดนตราว่า "อัพเดตตอนนี้เลย" ทั้งที่ตอน
     // ล่าสุดของเรื่องนั้นอาจลงมานานแล้วก็ได้ ใช้ last_updated_at เป็น fallback เผื่อเว็บนั้นไม่มี
     // วันที่ให้แปลงได้
-    const key = (m) => m.latest_chapter_date || m.last_updated_at || "";
+    const key = (m) => { const d = mangaDate(m); return d ? new Date(d).toISOString() : ""; };
     sorted.sort((a, b) => key(b).localeCompare(key(a)));
   }
   return sorted;
@@ -4766,6 +4794,7 @@ function init() {
   initPlaylistWatch();
   initLibrary();
   initSettingsPanes();
+  initHomeAutoRefresh();
   initAdminSearch();
   initAppShell();
   initEdgeSwipe();
