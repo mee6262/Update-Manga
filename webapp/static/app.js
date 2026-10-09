@@ -23,6 +23,44 @@ function proxied(url, width = 0) {
 const COVER_WIDTH = 400;
 const THUMB_WIDTH = 120;
 
+// ---------- ข้อความลอย / แผ่นยืนยัน (แทน alert/confirm ของระบบ ที่บน iPhone เป็นกล่องเทา ๆ ไม่เข้ากับแอป) ----------
+let toastTimer = null;
+function toast(message, { error = false } = {}) {
+  const box = el("#toast");
+  box.textContent = message;
+  box.classList.toggle("error", error);
+  box.hidden = false;
+  clearTimeout(toastTimer);
+  // ข้อความยาวอยู่นานขึ้น พออ่านทัน
+  toastTimer = setTimeout(() => { box.hidden = true; }, Math.min(9000, 2500 + message.length * 45));
+}
+
+let confirmResolve = null;
+function askConfirm(message) {
+  // ปุ่มยืนยันใช้คำกริยาแรกของคำถาม ("ลบ", "ย้าย", ...) — คำสั่งที่ย้อนไม่ได้เป็นปุ่มแดง
+  const verb = (message.match(/^(ลบ|ย้าย|รีเซ็ต|ปิด|เลิกติดตาม)/) || [])[1] || "ยืนยัน";
+  el("#confirmText").textContent = message;
+  el("#confirmOk").textContent = verb;
+  el("#confirmOk").classList.toggle("danger", /^(ลบ|รีเซ็ต|เลิกติดตาม)/.test(message));
+  el("#confirmSheet").hidden = false;
+  if (confirmResolve) confirmResolve(false);
+  return new Promise((resolve) => { confirmResolve = resolve; });
+}
+
+function closeConfirm(result) {
+  el("#confirmSheet").hidden = true;
+  const resolve = confirmResolve;
+  confirmResolve = null;
+  if (resolve) resolve(result);
+}
+
+function initConfirmSheet() {
+  el("#confirmOk").addEventListener("click", () => closeConfirm(true));
+  el("#confirmCancel").addEventListener("click", () => closeConfirm(false));
+  el("#confirmSheet").addEventListener("click", (e) => { if (e.target === e.currentTarget) closeConfirm(false); });
+  el("#toast").addEventListener("click", () => { el("#toast").hidden = true; });
+}
+
 // หลุดจากระบบ (session หมดอายุ/รหัสถูกเปลี่ยน) → พาไปหน้า login แทนที่จะเห็นหน้าว่างเหมือนข้อมูลหาย
 let goingToLogin = false;
 const nativeFetch = window.fetch.bind(window);
@@ -589,7 +627,7 @@ async function togglePlaylistSave(id, btn) {
     const data = await sendJSON("POST", `/api/video-playlists/${encodeURIComponent(id)}/save`, { saved: !p.saved_at });
     p.saved_at = data.saved_at || null;
     renderVideos();
-  } catch (e) { alert(e.message || "บันทึกไม่สำเร็จ"); btn.disabled = false; }
+  } catch (e) { toast(e.message || "บันทึกไม่สำเร็จ", { error: true }); btn.disabled = false; }
 }
 
 // เลื่อนใกล้ท้ายหน้า: เติมการ์ดเรื่องก่อนจนครบ แล้วค่อยเติมคลิป
@@ -1234,11 +1272,11 @@ function initPictureInPicture(v) {
       } else if (active) await document.exitPictureInPicture();
       else await v.requestPictureInPicture();
     } catch (e) {
-      alert(`เปิดจอลอยไม่ได้: ${e.name || ""} ${e.message || e}`);
+      toast(`เปิดจอลอยไม่ได้: ${e.name || ""} ${e.message || e}`, { error: true });
     }
     // สั่งแล้วไม่เข้าจอลอย (ระบบเงียบ ๆ ไม่ยอม) → บอกผู้ใช้ แทนที่ปุ่มจะดูเหมือนไม่ทำงาน
     setTimeout(() => {
-      if (!active && !pipState(v).active) alert("เครื่องนี้ไม่ยอมเปิดจอลอยจากเว็บนี้ — บน iPhone ลองเปิดเว็บผ่าน Safari (ไม่ใช่ไอคอนหน้าจอโฮม) แล้วกดอีกครั้ง");
+      if (!active && !pipState(v).active) toast("เครื่องนี้ไม่ยอมเปิดจอลอยจากเว็บนี้ — บน iPhone ลองเปิดเว็บผ่าน Safari (ไม่ใช่ไอคอนหน้าจอโฮม) แล้วกดอีกครั้ง", { error: true });
     }, 1200);
   });
   ["enterpictureinpicture", "leavepictureinpicture", "webkitpresentationmodechanged", "loadedmetadata"].forEach((name) =>
@@ -1435,7 +1473,7 @@ function initVideos() {
         const data = await sendJSON("POST", `/api/videos/${encodeURIComponent(item.id)}/save`, { saved: !item.saved_at });
         item.saved_at = data.saved_at || null;
         renderVideos();
-      } catch (e) { alert(e.message || "บันทึกไม่สำเร็จ"); saveBtn.disabled = false; }
+      } catch (e) { toast(e.message || "บันทึกไม่สำเร็จ", { error: true }); saveBtn.disabled = false; }
       return;
     }
     const card = event.target.closest(".video-card");
@@ -1443,9 +1481,9 @@ function initVideos() {
     if (event.target.closest("[data-delete-video]")) {
       event.preventDefault();
       const target = state.videos.find((item) => item.id === card?.dataset.videoId);
-      if (!target || !confirm(`ลบคลิป "${target.title}"?\n(ทุกคนจะไม่เห็นคลิปนี้อีก)`)) return;
+      if (!target || !(await askConfirm(`ลบคลิป "${target.title}"?\n(ทุกคนจะไม่เห็นคลิปนี้อีก)`))) return;
       try { await sendJSON("DELETE", `/api/videos/${encodeURIComponent(target.id)}`); }
-      catch (e) { alert(e.message || "ลบคลิปไม่สำเร็จ"); return; }
+      catch (e) { toast(e.message || "ลบคลิปไม่สำเร็จ", { error: true }); return; }
       await loadVideos();
       return;
     }
@@ -1562,13 +1600,13 @@ function initVideos() {
   });
   el("#videoDeleteBtn").addEventListener("click", async (event) => {
   const video = activeVideo;
-  if (!video || !confirm(`ลบคลิป "${video.title}"?\n(ทุกคนจะไม่เห็นคลิปนี้อีก)`)) return;
+  if (!video || !(await askConfirm(`ลบคลิป "${video.title}"?\n(ทุกคนจะไม่เห็นคลิปนี้อีก)`))) return;
   const btn = event.currentTarget;
   btn.disabled = true;
   try {
     await sendJSON("DELETE", `/api/videos/${encodeURIComponent(video.id)}`);
   } catch (e) {
-    alert(e.message || "ลบคลิปไม่สำเร็จ");
+    toast(e.message || "ลบคลิปไม่สำเร็จ", { error: true });
     return;
   } finally {
     btn.disabled = false;
@@ -1938,10 +1976,52 @@ function renderSearchVideos(q) {
   return total;
 }
 
+// ประวัติคำค้นหา (8 คำล่าสุด) เก็บในค่าตั้งของบัญชี — ซิงค์ทุกเครื่องของคนเดียวกัน
+const SEARCH_HISTORY_MAX = 8;
+function searchHistory() {
+  return Array.isArray(state.prefs.search_history) ? state.prefs.search_history : [];
+}
+
+function recordSearch(q) {
+  q = q.trim().slice(0, 60);
+  if (q.length < 2) return;
+  const list = [q, ...searchHistory().filter((x) => x.toLowerCase() !== q.toLowerCase())].slice(0, SEARCH_HISTORY_MAX);
+  savePref("search_history", list);
+  renderSearchHistory();
+}
+
+function renderSearchHistory() {
+  const list = searchHistory();
+  el("#searchHistory").hidden = !list.length;
+  el("#searchHistoryChips").innerHTML = list.map((q) =>
+    `<span class="search-chip"><button type="button" class="search-chip-text" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button><button type="button" class="search-chip-x" data-remove="${escapeHtml(q)}" aria-label="ลบ ${escapeHtml(q)}">×</button></span>`).join("");
+}
+
 function initSearch() {
   el("#searchInput").addEventListener("input", debounce(renderSearch, 120));
-  // กด "ค้นหา" บนแป้นมือถือ = ปิดแป้น ให้เห็นผลเต็มจอ
-  el("#searchInput").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
+  // กด "ค้นหา" บนแป้นมือถือ = ปิดแป้น ให้เห็นผลเต็มจอ (และจำคำค้นไว้)
+  el("#searchInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { recordSearch(e.target.value); e.target.blur(); }
+  });
+  // แตะผลลัพธ์ = คำนี้ใช้ได้จริง จำไว้ด้วย (ส่วนใหญ่พิมพ์แล้วแตะผลเลย ไม่ได้กด Enter)
+  el("#searchResults").addEventListener("click", (e) => {
+    if (e.target.closest("[data-id], .video-card, .playlist-card")) recordSearch(el("#searchInput").value);
+  }, true);
+  el("#searchHistoryChips").addEventListener("click", (e) => {
+    const remove = e.target.closest("[data-remove]");
+    if (remove) {
+      savePref("search_history", searchHistory().filter((x) => x !== remove.dataset.remove));
+      renderSearchHistory();
+      return;
+    }
+    const chip = e.target.closest("[data-q]");
+    if (!chip) return;
+    el("#searchInput").value = chip.dataset.q;
+    recordSearch(chip.dataset.q);
+    renderSearch();
+  });
+  el("#searchHistoryClear").addEventListener("click", () => { savePref("search_history", []); renderSearchHistory(); });
+  renderSearchHistory();
 }
 
 // ---------- แท็บย่อยในหน้าตั้งค่า (จัดการเรื่อง / จัดการสมาชิก) ----------
@@ -2396,7 +2476,7 @@ function renderSettings() {
       const sourceLabel =
         sourceCount > 1 ? `${escapeHtml(m.source)} +${sourceCount - 1} แหล่ง` : escapeHtml(m.source);
       const status = m.refresh_error
-        ? `<span class="status-dot bad"></span><span class="status-bad">ดึงไม่สำเร็จทุกแหล่ง · ${timeAgo(m.refresh_error.at, "เมื่อสักครู่")}</span>`
+        ? `<span class="status-dot bad"></span><span class="status-bad">ดึงไม่สำเร็จทุกแหล่ง ตั้งแต่ ${timeAgo(m.refresh_error.since || m.refresh_error.at, "เมื่อสักครู่")}</span>`
         : `<span class="status-dot ok"></span>${m.last_checked_at ? `เช็ค ${timeAgo(m.last_checked_at, "เมื่อสักครู่")}` : "ยังไม่เคยเช็ค"}`;
       return `
         <li class="settings-row" data-id="${escapeHtml(m.id)}">
@@ -2460,7 +2540,7 @@ async function refreshOne(id, btn) {
 }
 
 async function deleteManga(id, name) {
-  if (!confirm(`ลบ "${name}" ออกจากระบบ? (ทุกคนจะติดตามไม่ได้อีก)`)) return;
+  if (!(await askConfirm(`ลบ "${name}" ออกจากระบบ? (ทุกคนจะติดตามไม่ได้อีก)`))) return;
   await fetch(`/api/manga/${id}`, { method: "DELETE" });
   await Promise.all([loadManga(), loadCatalog()]);
   renderSettings();
@@ -2755,7 +2835,7 @@ function initCategoryAdmin() {
         if (editCategoryId) el(`.category-item[data-id="${CSS.escape(id)}"] input[name="name"]`).focus();
         return;
       } else if (action === "delete") {
-        if (!confirm(`ลบหมวด "${cat.name}"? (เรื่องในหมวดนี้ไม่ถูกลบ แค่ไม่อยู่ในหมวดนี้แล้ว)`)) return;
+        if (!(await askConfirm(`ลบหมวด "${cat.name}"? (เรื่องในหมวดนี้ไม่ถูกลบ แค่ไม่อยู่ในหมวดนี้แล้ว)`))) return;
         await sendJSON("DELETE", `/api/categories/${id}`);
         categoryMsg(`ลบหมวด "${cat.name}" แล้ว`);
       }
@@ -2815,7 +2895,7 @@ function initUserAdmin() {
     const btn = e.target.closest('[data-action="reset-password"]');
     if (!btn) return;
     const username = btn.closest("[data-user]").dataset.user;
-    if (!confirm(`รีเซ็ตรหัสผ่านของ "${username}"?\n\nระบบจะสุ่มรหัสชั่วคราวให้ ส่งรหัสนั้นให้สมาชิก แล้วสมาชิกต้องเปลี่ยนรหัสเองที่หน้าตั้งค่า (ทุกเครื่องของสมาชิกคนนี้จะต้อง login ใหม่)`)) return;
+    if (!(await askConfirm(`รีเซ็ตรหัสผ่านของ "${username}"?\n\nระบบจะสุ่มรหัสชั่วคราวให้ ส่งรหัสนั้นให้สมาชิก แล้วสมาชิกต้องเปลี่ยนรหัสเองที่หน้าตั้งค่า (ทุกเครื่องของสมาชิกคนนี้จะต้อง login ใหม่)`))) return;
     const msg = el("#addUserMsg");
     try {
       const data = await sendJSON("POST", `/api/users/${encodeURIComponent(username)}/reset_password`);
@@ -3841,7 +3921,7 @@ function renderPushCard() {
 // ---------- แผงการแจ้งเตือน (กดกระดิ่ง) ----------
 let notifItems = [];
 let notifFilter = "all";
-const NOTIF_ICON = { chapter: "📚", reply: "💬", mention: "📣", thread: "🗨️" };
+const NOTIF_ICON = { chapter: "📚", reply: "💬", mention: "📣", thread: "🗨️", system: "⚠️" };
 
 function setNotifBadge(unread) {
   const badge = el("#notifBadge");
@@ -4059,7 +4139,7 @@ async function togglePush() {
     if (isIOS && !isStandalone) {
       toggleNotifPanel(false);
       showInstallSheet({ forPush: true });
-    } else alert("เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน ลองเปิดด้วย Chrome หรือ Safari เวอร์ชันล่าสุด");
+    } else toast("เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน ลองเปิดด้วย Chrome หรือ Safari เวอร์ชันล่าสุด", { error: true });
     return;
   }
   const btn = el("#pushCardBtn");
@@ -4068,7 +4148,7 @@ async function togglePush() {
     const reg = await pushRegistration();
     const existing = await reg.pushManager.getSubscription();
     if (existing && Notification.permission === "granted") {
-      if (!confirm("ปิดแจ้งเตือนตอนใหม่บนเครื่องนี้?")) return;
+      if (!(await askConfirm("ปิดแจ้งเตือนตอนใหม่บนเครื่องนี้?"))) return;
       await postJSON("/api/push/unsubscribe", { endpoint: existing.endpoint }).catch(() => {});
       await existing.unsubscribe();
       setPushButton(false);
@@ -4077,11 +4157,11 @@ async function togglePush() {
     // ต้องขออนุญาตจากการกดของผู้ใช้โดยตรงเท่านั้น (iOS/Chrome บล็อกถ้าขอเองตอนโหลดหน้า)
     const permission = await Notification.requestPermission();
     if (permission !== "granted") {
-      alert(
+      toast(
         permission === "denied"
           ? "เครื่องนี้ถูกตั้งไม่ให้เว็บนี้แจ้งเตือน ต้องไปเปิดในตั้งค่าของเบราว์เซอร์/ตั้งค่าแจ้งเตือนของเครื่องก่อน"
           : "ยังไม่ได้อนุญาตการแจ้งเตือน"
-      );
+      , { error: true });
       return;
     }
     const sub =
@@ -4092,9 +4172,9 @@ async function togglePush() {
     setPushButton(true);
     // ส่งแจ้งเตือนทดสอบทันที ผู้ใช้จะได้เห็นว่าใช้ได้จริง
     const test = await postJSON("/api/push/test", {}).then((r) => r.json()).catch(() => ({}));
-    if (!test.sent) alert("เปิดแจ้งเตือนแล้ว แต่ส่งแจ้งเตือนทดสอบไม่สำเร็จ ลองใหม่อีกครั้งภายหลัง");
+    if (!test.sent) toast("เปิดแจ้งเตือนแล้ว แต่ส่งแจ้งเตือนทดสอบไม่สำเร็จ ลองใหม่อีกครั้งภายหลัง", { error: true });
   } catch (e) {
-    alert("เปิดแจ้งเตือนไม่สำเร็จ: " + (e.message || e));
+    toast("เปิดแจ้งเตือนไม่สำเร็จ: " + (e.message || e), { error: true });
   } finally {
     btn.disabled = false;
   }
@@ -4128,6 +4208,15 @@ function openFromUrl(url) {
   if (url.searchParams.get("comments")) {
     history.replaceState(null, "", "/");
     openCommentsFromUrl(url.searchParams);
+    return;
+  }
+  if (url.searchParams.get("admin") === "manga-problem" && state.currentUser.is_admin) {
+    // แจ้งเตือน "เว็บต้นทางมีปัญหา" → หน้าจัดการเรื่อง กรองเฉพาะที่ดึงไม่สำเร็จ
+    history.replaceState(null, "", "/");
+    el("#reader").hidden = true;
+    mangaAdminFilter = "problem";
+    // ตอนเปิดแอปจากแจ้งเตือน ฟังก์ชันนี้ถูกเรียกก่อน init ตั้งแท็บ/หน้าตั้งค่าเสร็จ — รอให้ init จบก่อนค่อยสลับ
+    setTimeout(() => { showTab("settings"); openAdminPage("mangaManage"); }, 0);
     return;
   }
   const id = url.searchParams.get("manga");
@@ -4201,9 +4290,9 @@ function closeComments() {
 }
 
 async function deleteCommentById(id) {
-  if (!confirm("ลบความคิดเห็นนี้?")) return false;
+  if (!(await askConfirm("ลบความคิดเห็นนี้?"))) return false;
   try { await sendJSON("DELETE", `/api/comments/${encodeURIComponent(id)}`); return true; }
-  catch (e) { alert(e.message || "ลบไม่สำเร็จ"); return false; }
+  catch (e) { toast(e.message || "ลบไม่สำเร็จ", { error: true }); return false; }
 }
 
 function initComments() {
@@ -4221,7 +4310,7 @@ function initComments() {
       commentReplyTo = null;
       const data = await getJSON(`/api/comments?${commentQuery(commentTarget)}`);
       renderCommentList(data.items);
-    } catch (e) { alert(e.message || "ส่งไม่สำเร็จ"); }
+    } catch (e) { toast(e.message || "ส่งไม่สำเร็จ", { error: true }); }
     finally { btn.disabled = false; }
   });
   el("#commentList").addEventListener("click", async (event) => {
@@ -4500,7 +4589,7 @@ async function vmSheetAction(e) {
     } else if (e.target.closest("[data-sheet-merge]")) {
       const target = playlistById(el("#sheetMergeTarget").value);
       const p = playlistById(id);
-      if (!target || !confirm(`ย้ายทั้ง ${p.count} ตอนของ "${p.name}" เข้า "${target.name}" แล้วลบ "${p.name}"?`)) return;
+      if (!target || !(await askConfirm(`ย้ายทั้ง ${p.count} ตอนของ "${p.name}" เข้า "${target.name}" แล้วลบ "${p.name}"?`))) return;
       const res = await sendJSON("POST", `/api/video-playlists/${encodeURIComponent(id)}/merge`, { into: target.id });
       await refresh();
       openVmSheet(`pl:${target.id}`, { episodes: true });
@@ -4514,11 +4603,11 @@ async function vmSheetAction(e) {
     } else if (e.target.closest("[data-sheet-delete]")) {
       if (kind === "pl") {
         const p = playlistById(id);
-        if (!confirm(`ลบ "${p.name}" พร้อมทั้ง ${p.count} ตอน?\n(ทุกคนจะไม่เห็นอีก)`)) return;
+        if (!(await askConfirm(`ลบ "${p.name}" พร้อมทั้ง ${p.count} ตอน?\n(ทุกคนจะไม่เห็นอีก)`))) return;
         await sendJSON("DELETE", `/api/video-playlists/${encodeURIComponent(id)}`);
       } else {
         const v = state.videos.find((x) => x.id === id);
-        if (!confirm(`ลบคลิป "${v.title}"?`)) return;
+        if (!(await askConfirm(`ลบคลิป "${v.title}"?`))) return;
         await sendJSON("DELETE", `/api/videos/${encodeURIComponent(id)}`);
       }
       closeVmSheet();
@@ -4567,7 +4656,7 @@ function renderPlaylistWatch() {
 
 async function saveWatchSources(sources) {
   try { await sendJSON("PUT", "/api/video-playlists/watch", { sources }); }
-  catch (e) { alert(e.message || "บันทึกไม่สำเร็จ"); }
+  catch (e) { toast(e.message || "บันทึกไม่สำเร็จ", { error: true }); }
   await loadPlaylistWatch();
 }
 
@@ -4578,13 +4667,13 @@ function initPlaylistWatch() {
     await saveWatchSources([...(playlistWatch.sources || []), { url, category: el("#watchSourceCategory").value }]);
     el("#watchSourceUrl").value = "";
   });
-  el("#watchSourceList").addEventListener("click", (event) => {
+  el("#watchSourceList").addEventListener("click", async (event) => {
     const i = event.target.closest("[data-remove-watch]")?.dataset.removeWatch;
-    if (i === undefined || !confirm("เลิกติดตามเพจนี้? (ตอนที่เพิ่มไปแล้วยังอยู่)")) return;
+    if (i === undefined || !(await askConfirm("เลิกติดตามเพจนี้? (ตอนที่เพิ่มไปแล้วยังอยู่)"))) return;
     saveWatchSources(playlistWatch.sources.filter((_, idx) => idx !== Number(i)));
   });
   el("#watchRunBtn").addEventListener("click", async () => {
-    try { await sendJSON("POST", "/api/video-playlists/watch/run"); } catch (e) { alert(e.message); }
+    try { await sendJSON("POST", "/api/video-playlists/watch/run"); } catch (e) { toast(e.message, { error: true }); }
     loadPlaylistWatch();
   });
   el("#watchAddToggle").addEventListener("click", () => {
@@ -4675,14 +4764,14 @@ function initAdminPanels() {
     const ren = event.target.closest("[data-rename-video-category]")?.dataset.renameVideoCategory;
     try {
       if (del) {
-        if (!confirm("ลบหมวดนี้? (คลิปและเรื่องในหมวดจะกลายเป็นไม่มีหมวด)")) return;
+        if (!(await askConfirm("ลบหมวดนี้? (คลิปและเรื่องในหมวดจะกลายเป็นไม่มีหมวด)"))) return;
         await sendJSON("DELETE", `/api/video-categories/${encodeURIComponent(del)}`);
       } else if (ren) {
         const name = prompt("ชื่อหมวดใหม่", categoryName(ren));
         if (!name || !name.trim()) return;
         await sendJSON("PATCH", `/api/video-categories/${encodeURIComponent(ren)}`, { name: name.trim() });
       } else return;
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message, { error: true }); }
     await loadVideos();
     renderVideoManage();
   });
@@ -4713,7 +4802,7 @@ function initAdminPanels() {
       const v = state.videos.find((x) => x.id === input.dataset.epId);
       if (v) v.episode = Number(input.value);
       input.classList.add("saved");
-    } catch (e) { alert(e.message || "บันทึกไม่สำเร็จ"); }
+    } catch (e) { toast(e.message || "บันทึกไม่สำเร็จ", { error: true }); }
   });
   el("#checkVideosBtn").addEventListener("click", async (event) => {
     const btn = event.currentTarget;
@@ -4743,6 +4832,7 @@ function initAppShell() {
 // (Safari ปกติมีท่าปัดย้อนของตัวเอง, Android ใช้ขอบจอเป็นปุ่มย้อนของระบบ ทำซ้อนจะชนกัน)
 // ย้อนทีละชั้น: แผงแจ้งเตือน → คอมเมนต์ → ฟอร์ม → ตัวอ่าน → ตัวเล่น → รายชื่อตอน → แท็บก่อนหน้า
 function goBack() {
+  if (!el("#confirmSheet").hidden) return closeConfirm(false), true;
   if (!el("#notifPanel").hidden) return toggleNotifPanel(false), true;
   if (!el("#commentSheet").hidden) return closeComments(), true;
   if (!el("#vmSheet").hidden) return closeVmSheet(), true;
@@ -4859,6 +4949,7 @@ function init() {
   initPlaylistWatch();
   initLibrary();
   initSettingsPanes();
+  initConfirmSheet();
   initHomeAutoRefresh();
   initPullToRefresh();
   initAdminSearch();

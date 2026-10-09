@@ -108,6 +108,13 @@
         <input type="search" id="searchInput" placeholder="ลองหาเรื่อง, หมวดหมู่, คลิปวิดีโอ และอื่น ๆ" autocomplete="off" enterkeyhint="search" />
       </label>
       <div id="searchHome">
+        <div id="searchHistory" class="search-history" hidden>
+          <div class="search-history-head">
+            <h2 class="section-title">ค้นหาล่าสุด</h2>
+            <button type="button" class="link-btn" id="searchHistoryClear">ล้าง</button>
+          </div>
+          <div id="searchHistoryChips" class="search-history-chips"></div>
+        </div>
         <h2 class="section-title">เรื่องที่ทุกคนกำลังตาม</h2>
         <div id="popularRow" class="cover-row"></div>
         <h2 class="section-title">อัปเดตล่าสุด</h2>
@@ -490,6 +497,14 @@
       <div class="install-sheet-actions"><button id="installSheetOk" class="btn primary">เข้าใจแล้ว</button><button id="installSheetNever" class="btn">ไม่ต้องเตือนอีก</button></div>
     </div>
   </div>
+
+  <div id="confirmSheet" class="sheet-backdrop confirm-backdrop" hidden>
+    <div class="sheet confirm-sheet" role="alertdialog" aria-modal="true" aria-labelledby="confirmText"><div class="sheet-grip" aria-hidden="true"></div>
+      <p id="confirmText" class="confirm-text"></p>
+      <div class="confirm-actions"><button id="confirmOk" class="btn primary"></button><button id="confirmCancel" class="btn">ยกเลิก</button></div>
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <div id="vmSheet" class="sheet-backdrop" hidden>
     <div class="sheet" role="dialog" aria-modal="true"><div class="sheet-grip" aria-hidden="true"></div><div id="vmSheetBody"></div></div>

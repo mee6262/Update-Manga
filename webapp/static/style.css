@@ -1281,3 +1281,21 @@ button, .nav-item, .home-tab, .video-tab { -webkit-user-select: none; user-selec
 .hist-action { min-height: 40px; }
 .link-btn { position: relative; }
 .link-btn::after { content: ""; position: absolute; inset: -12px -8px; }
+
+/* ค้นหาล่าสุด */
+.search-history { margin-bottom: 8px; }
+.search-history-head { display: flex; align-items: baseline; justify-content: space-between; }
+.search-history-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.search-chip { display: inline-flex; align-items: center; max-width: 100%; background: var(--bg-card); border: 1px solid var(--border); border-radius: 999px; }
+.search-chip-text { min-height: 40px; padding: 0 4px 0 14px; background: none; border: 0; color: var(--text); font: inherit; font-size: 0.85rem; cursor: pointer; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-chip-x { min-width: 36px; min-height: 40px; background: none; border: 0; color: var(--text-dim); font-size: 1.1rem; cursor: pointer; }
+
+/* แผ่นยืนยัน + ข้อความลอย (แทน confirm/alert) — อยู่บนสุดเหนือหน้าอ่าน/ตัวเล่น/แผ่นอื่น */
+.confirm-backdrop { z-index: 450; }
+.confirm-text { margin: 4px 0 16px; font-size: 0.95rem; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
+.confirm-actions { display: flex; gap: 8px; }
+.confirm-actions .btn { flex: 1; justify-content: center; min-height: 44px; }
+.confirm-actions .btn.primary.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.toast { position: fixed; left: 50%; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 12px); transform: translateX(-50%); z-index: 460; width: max-content; max-width: calc(100% - 32px); padding: 11px 16px; border-radius: 12px; background: var(--text); color: var(--bg); font-size: 0.88rem; line-height: 1.45; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3); white-space: pre-line; animation: slide-up 0.18s ease-out; }
+.toast.error { background: var(--danger); color: #fff; }
+.toast[hidden] { display: none; }
