@@ -621,32 +621,6 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
   box-sizing: border-box;
 }
 
-.chapter-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  margin-bottom: 8px;
-  cursor: pointer;
-  /* เรื่องหนึ่งมีได้เป็นพันตอน — ข้ามการ render แถวที่ยังไม่เลื่อนมาถึง */
-  content-visibility: auto;
-  contain-intrinsic-size: auto 46px;
-}
-
-.chapter-row:hover { border-color: var(--accent); }
-.chapter-row.read { opacity: 0.55; }
-.chapter-row.last-read {
-  opacity: 1;
-  border-color: var(--accent);
-  background: rgba(75, 221, 158, 0.08);
-}
-.chapter-row .chapter-text { flex: 1; font-size: 0.9rem; font-weight: 600; }
-.chapter-row .chapter-date { font-size: 0.75rem; color: var(--text-dim); }
-.chapter-row .new-badge { position: static; }
-.chapter-row .bookmark-icon { color: var(--accent); flex-shrink: 0; }
 
 @media (max-width: 640px) {
   .topbar { gap: 8px; }
@@ -885,19 +859,6 @@ a.video-card { display: block; text-decoration: none; }
   .video-save-btn { font-size: 0.76rem; padding: 5px 8px; }
 }
 
-/* ---------- ดูต่อ / อ่านต่อ (หน้าหลัก) ---------- */
-.continue-section { margin-bottom: 18px; }
-.continue-section .section-title { margin-top: 0; }
-.continue-row { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
-.continue-tile { flex: 0 0 auto; display: flex; flex-direction: column; gap: 3px; background: none; border: 0; padding: 0; color: var(--text); text-align: left; cursor: pointer; scroll-snap-align: start; font: inherit; }
-.continue-tile.manga { width: 96px; }
-.continue-tile.manga img { width: 96px; height: 128px; object-fit: cover; border-radius: 8px; background: var(--img-bg); }
-.continue-tile.video { width: 200px; }
-.continue-media { position: relative; display: block; width: 200px; height: 112px; border-radius: 8px; overflow: hidden; background: var(--img-bg); }
-.continue-media img, .continue-media .video-placeholder { width: 100%; height: 100%; object-fit: cover; aspect-ratio: auto; }
-.continue-name { font-size: 0.8rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.continue-meta { font-size: 0.7rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
 /* ---------- ตัวเล่น: แตะสองครั้งข้าม / ความเร็ว / ตั้งเวลาปิด ---------- */
 .native-wrap { position: relative; width: 100%; max-width: 900px; justify-self: center; }
 .native-wrap .native-video { display: block; }
@@ -908,7 +869,6 @@ a.video-card { display: block; text-decoration: none; }
 .seek-bubble.left { left: 12%; }
 .seek-bubble.right { right: 12%; }
 .seek-bubble[hidden] { display: none; }
-.video-quality-btn.active { border-color: var(--accent); color: var(--accent); }
 
 /* ---------- คอมเมนต์ ---------- */
 .comment-btn { position: relative; font-size: 1.05rem; }
@@ -967,12 +927,12 @@ a.video-card { display: block; text-decoration: none; }
 .offline-banner[hidden] { display: none; }
 html { -webkit-tap-highlight-color: transparent; }
 body { overscroll-behavior-y: none; }
-button, .nav-item, .home-tab, .video-tab, .continue-tile { -webkit-user-select: none; user-select: none; touch-action: manipulation; }
+button, .nav-item, .home-tab, .video-tab { -webkit-user-select: none; user-select: none; touch-action: manipulation; }
 /* แท็บย่อยแอดมินมี 6 อัน: เลื่อนแนวนอนแทนการบีบจนตัวหนังสือหัก */
 .sub-tabs { overflow-x: auto; scrollbar-width: none; }
-.sub-tabs::-webkit-scrollbar, .continue-row::-webkit-scrollbar, .video-chips::-webkit-scrollbar { display: none; }
+.sub-tabs::-webkit-scrollbar, .video-chips::-webkit-scrollbar { display: none; }
 .sub-tab-btn { flex: 0 0 auto; white-space: nowrap; }
-.continue-row, .video-chips { scrollbar-width: none; }
+.video-chips { scrollbar-width: none; }
 .host-row .grow, .video-manage-row .grow { flex: 1; min-width: 0; }
 
 /* ---------- แผงการแจ้งเตือน (กดกระดิ่ง) ---------- */
@@ -1309,3 +1269,15 @@ button, .nav-item, .home-tab, .video-tab, .continue-tile { -webkit-user-select: 
 .install-step-word { font-weight: 700; font-size: 0.85rem; color: #0a84ff; }
 .install-sheet-actions { display: flex; gap: 8px; }
 .install-sheet-actions .btn { flex: 1; justify-content: center; }
+
+/* ดึงลงเพื่อรีเฟรช */
+.pull-refresh { position: fixed; top: calc(env(safe-area-inset-top) + 6px); left: 50%; z-index: 60; width: 38px; height: 38px; margin-top: -44px; border-radius: 50%; display: grid; place-items: center; background: var(--bg-elevated); color: var(--text-dim); border: 1px solid var(--border); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); opacity: 0; transform: translate(-50%, 0); pointer-events: none; }
+.pull-refresh.ready, .pull-refresh.spinning { color: var(--accent); }
+.pull-refresh.spinning svg { animation: spin 0.8s linear infinite; }
+
+/* พื้นที่แตะอย่างน้อย ~40px บนมือถือ (ปุ่มเล็กเดิมสูง 16-30px แตะพลาดง่าย) */
+.video-quality-btn, .video-chip { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; }
+.video-quality-btn[hidden], .video-chip[hidden] { display: none; }
+.hist-action { min-height: 40px; }
+.link-btn { position: relative; }
+.link-btn::after { content: ""; position: absolute; inset: -12px -8px; }

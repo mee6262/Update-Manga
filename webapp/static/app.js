@@ -23,9 +23,33 @@ function proxied(url, width = 0) {
 const COVER_WIDTH = 400;
 const THUMB_WIDTH = 120;
 
-// ดึง JSON แบบไม่ให้ค้างถาวรถ้าเน็ตแกว่ง และคืน null เมื่อพลาด (ผู้เรียกใช้ของเดิมต่อได้)
-async function getJSON(url) {
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
+// หลุดจากระบบ (session หมดอายุ/รหัสถูกเปลี่ยน) → พาไปหน้า login แทนที่จะเห็นหน้าว่างเหมือนข้อมูลหาย
+let goingToLogin = false;
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (input, init) => {
+  const res = await nativeFetch(input, init);
+  const url = typeof input === "string" ? input : input.url;
+  if (res.status === 401 && !goingToLogin && new URL(url, location.href).pathname.startsWith("/api/")) {
+    goingToLogin = true;
+    location.href = "/login?next=" + encodeURIComponent(location.pathname + location.search);
+  }
+  return res;
+};
+
+// เน็ตมือถือค้าง fetch จะรอไม่มีกำหนด → ตัดเองตามเวลา ให้หน้าขึ้น "ลองใหม่" แทน "กำลังโหลด..." ค้าง
+function fetchWithTimeout(url, init = {}, ms = 25000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...init, signal: ctrl.signal })
+    .catch((e) => {
+      if (e.name === "AbortError") throw Object.assign(new Error("timeout"), { body: { error: "เน็ตช้าหรือเซิร์ฟเวอร์ไม่ตอบ ลองใหม่อีกครั้ง" } });
+      throw Object.assign(e, { body: { error: "เชื่อมต่อไม่ได้ ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่" } });
+    })
+    .finally(() => clearTimeout(timer));
+}
+
+async function getJSON(url, { timeout = 25000 } = {}) {
+  const res = await fetchWithTimeout(url, { headers: { Accept: "application/json" } }, timeout);
   if (!res.ok) throw Object.assign(new Error("request failed"), { status: res.status, body: await res.json().catch(() => ({})) });
   return res.json();
 }
@@ -201,7 +225,6 @@ function renderVideos() {
   // ผลค้นหาในหน้าค้นหาใช้ข้อมูลคลิปชุดเดียวกัน — บันทึก/ลบ/ดูค้างแล้วต้องอัปเดตตามด้วย
   if (el("#searchInput").value.trim()) renderSearch();
   renderVideoCategoryChips();
-  renderContinue();
   el("#videoToolbar").hidden = videoTab !== "home";
   el("#videoHome").hidden = !rows;
   if (rows) renderVideoHome();
@@ -1256,7 +1279,7 @@ async function openVideo(video, { autoplay = false } = {}) {
   try {
     const [progress, sources] = await Promise.all([
       getJSON(`/api/videos/${encodeURIComponent(video.id)}/progress`),
-      getJSON(`/api/videos/${encodeURIComponent(video.id)}/sources`).catch(() => ({})),
+      getJSON(`/api/videos/${encodeURIComponent(video.id)}/sources`, { timeout: 45000 }).catch(() => ({})),
     ]);
     if (!activeVideo || activeVideo.id !== video.id) return;
     const position = Number(progress.position_seconds) || 0;
@@ -1581,7 +1604,6 @@ function setHomeMode(mode) {
   el("#historyView").hidden = mode !== "history";
   el("#followHead").hidden = mode !== "grid" || !state.manga.length;
   renderMangaHome();
-  renderContinue();
   if (mode === "history") {
     renderHistory();
     loadHistory();
@@ -1622,7 +1644,6 @@ async function loadHistory() {
     state.history = (await getJSON("/api/history")).items;
     renderHistory();
     renderMangaHome();
-    renderContinue();
   } catch (e) {
     // ใช้ของเดิมต่อ
   }
@@ -2095,6 +2116,52 @@ function initHomeAutoRefresh() {
   }, 60 * 1000);
 }
 
+// ดึงหน้าลงที่บนสุดของหน้าหลัก/วิดีโอ = โหลดของใหม่ (เว็บแอปหน้าจอโฮมไม่มีปุ่มรีโหลด)
+// ไม่เริ่มจากขอบซ้าย (ท่าปัดย้อนกลับ) และยกเลิกเมื่อลากไปทางข้างมากกว่าลงล่าง (แถวการ์ดเลื่อนข้าง)
+const PULL_TRIGGER = 70;
+function initPullToRefresh() {
+  const ind = document.createElement("div");
+  ind.className = "pull-refresh";
+  ind.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round"/><path d="M21 3v6h-6" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  document.body.appendChild(ind);
+  let startX = 0, startY = 0, pulling = false, dist = 0, busy = false;
+  const reset = () => { ind.style.transform = ""; ind.style.opacity = ""; ind.classList.remove("ready"); };
+  const canPull = () => (state.tab === "list" || state.tab === "videos") && window.scrollY <= 0 && document.body.style.overflow !== "hidden";
+  window.addEventListener("touchstart", (e) => {
+    pulling = false;
+    if (busy || e.touches.length !== 1 || !canPull()) return;
+    const t = e.touches[0];
+    if (t.clientX < 30) return;
+    startX = t.clientX; startY = t.clientY; dist = 0; pulling = true;
+  }, { passive: true });
+  window.addEventListener("touchmove", (e) => {
+    if (!pulling) return;
+    const t = e.touches[0];
+    const dy = t.clientY - startY, dx = Math.abs(t.clientX - startX);
+    if (dy <= 0 || dx > dy || window.scrollY > 0) { pulling = false; reset(); return; }
+    dist = Math.min(dy * 0.5, 110);
+    ind.style.opacity = String(Math.min(1, dist / PULL_TRIGGER));
+    ind.style.transform = `translate(-50%, ${dist}px) rotate(${dist * 4}deg)`;
+    ind.classList.toggle("ready", dist >= PULL_TRIGGER);
+  }, { passive: true });
+  window.addEventListener("touchend", async () => {
+    if (!pulling) return;
+    pulling = false;
+    if (dist < PULL_TRIGGER) { reset(); return; }
+    busy = true;
+    ind.classList.add("spinning");
+    ind.style.transform = `translate(-50%, ${PULL_TRIGGER}px)`;
+    try {
+      if (state.tab === "videos") await loadVideos();
+      else await Promise.all([loadManga(), loadHistory()]);
+    } finally {
+      busy = false;
+      ind.classList.remove("spinning");
+      reset();
+    }
+  });
+}
+
 function mangaById(id) {
   return state.manga.find((m) => m.id === id) || state.catalog.find((m) => m.id === id);
 }
@@ -2278,6 +2345,10 @@ async function refreshAll() {
   try {
     const res = await fetch("/api/refresh_all", { method: "POST" });
     const data = await res.json();
+    if (data.busy) {
+      status.textContent = "รอบดึงอัตโนมัติกำลังทำงานอยู่ ลองใหม่อีกสักครู่";
+      return;
+    }
     state.manga = data.items;
     renderGrid();
     loadCatalog().then(renderSettings); // ตอนล่าสุดในรายการจัดการเรื่องเปลี่ยนตาม
@@ -2536,7 +2607,12 @@ let openCategoryId = null; // หมวดที่กำลังกางร�
 let editCategoryId = null; // หมวดที่กำลังแก้ชื่อ/ตั้งค่าพิเศษอยู่
 
 async function sendJSON(method, url, body) {
-  const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  let res;
+  try {
+    res = await fetchWithTimeout(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }, 60000);
+  } catch (e) {
+    throw new Error(e.body?.error || "บันทึกไม่สำเร็จ");
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "บันทึกไม่สำเร็จ");
   return data;
@@ -2739,12 +2815,12 @@ function initUserAdmin() {
     const btn = e.target.closest('[data-action="reset-password"]');
     if (!btn) return;
     const username = btn.closest("[data-user]").dataset.user;
-    if (!confirm(`รีเซ็ตรหัสผ่านของ "${username}" เป็น 00000000?\n\nทุกเครื่องของสมาชิกคนนี้จะต้อง login ใหม่ด้วยรหัส 00000000 แล้วไปเปลี่ยนรหัสเองที่หน้าตั้งค่า`)) return;
+    if (!confirm(`รีเซ็ตรหัสผ่านของ "${username}"?\n\nระบบจะสุ่มรหัสชั่วคราวให้ ส่งรหัสนั้นให้สมาชิก แล้วสมาชิกต้องเปลี่ยนรหัสเองที่หน้าตั้งค่า (ทุกเครื่องของสมาชิกคนนี้จะต้อง login ใหม่)`)) return;
     const msg = el("#addUserMsg");
     try {
-      await sendJSON("POST", `/api/users/${encodeURIComponent(username)}/reset_password`);
+      const data = await sendJSON("POST", `/api/users/${encodeURIComponent(username)}/reset_password`);
       msg.className = "form-msg success";
-      msg.textContent = `รีเซ็ตรหัสผ่านของ "${username}" เป็น 00000000 แล้ว`;
+      msg.textContent = `รหัสชั่วคราวของ "${username}": ${data.temp_password} (จดไว้ส่งให้สมาชิก — จะไม่แสดงอีก)`;
       renderUserList();
     } catch (err) {
       msg.className = "form-msg error";
@@ -2929,9 +3005,6 @@ let mangaListStale = false; // อ่านตอนใหม่ไปแล้�
 // รายชื่อตอนที่เคยโหลดแล้ว (ต่อเรื่อง) ไว้โชว์ทันทีตอนเปิดซ้ำ แล้วค่อยเช็คของใหม่ทีหลัง
 const chapterListCache = new Map();
 
-const BOOKMARK_ICON =
-  '<svg class="bookmark-icon" viewBox="0 0 24 24" width="16" height="16"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" fill="currentColor"/></svg>';
-
 function openChapterList(manga) {
   if (!manga) return;
   readerFromHistory = false;
@@ -3000,9 +3073,14 @@ async function renderChapterList({ keepScroll = false } = {}) {
     if (keepScroll && scrollTop > 0) body.scrollTop = scrollTop;
     else scrollToLastRead();
   } catch (e) {
+    if (!currentManga || currentManga.id !== mangaId) return; // เปลี่ยนเรื่องไปแล้ว ห้ามเอา error มาทับ
     if (currentChapters.length > 0) return; // มีของเดิมโชว์อยู่แล้ว ไม่ต้องล้างทิ้งเพราะเน็ตสะดุด
     currentChapters = [];
-    body.innerHTML = `<div class="reader-msg">${escapeHtml(e.body?.error || "โหลดไม่สำเร็จ")}</div>`;
+    body.innerHTML = `<div class="reader-msg">${escapeHtml(e.body?.error || "โหลดไม่สำเร็จ")}<br><br><button class="btn primary" id="chapterListRetry">ลองใหม่</button></div>`;
+    el("#chapterListRetry").addEventListener("click", () => {
+      body.innerHTML = '<div class="reader-msg">กำลังโหลด...</div>';
+      renderChapterList();
+    });
   }
 }
 
@@ -3215,7 +3293,7 @@ async function retryChapterFromOtherSource() {
   const mangaId = readerMangaId;
   const url = currentChapterData.url;
   try {
-    const data = await getJSON(`/api/manga/${mangaId}/chapter?url=${encodeURIComponent(url)}&peek=1`);
+    const data = await getJSON(`/api/manga/${mangaId}/chapter?url=${encodeURIComponent(url)}&peek=1`, { timeout: 60000 });
     if (currentChapterData.url !== url || !(data.images || []).length) return; // ผู้ใช้เปลี่ยนตอนไปแล้ว
     const body = el("#readerBody");
     const oldImgs = [...body.querySelectorAll("img")];
@@ -3379,7 +3457,7 @@ async function prefetchNextChapter() {
   if (!url || prefetchedChapters.has(url) || prefetchingUrl === url) return;
   prefetchingUrl = url;
   try {
-    const data = await getJSON(`/api/manga/${readerMangaId}/chapter?url=${encodeURIComponent(url)}&peek=1`);
+    const data = await getJSON(`/api/manga/${readerMangaId}/chapter?url=${encodeURIComponent(url)}&peek=1`, { timeout: 60000 });
     prefetchedChapters.set(url, data);
     for (const src of (data.images || []).slice(0, 3)) new Image().src = proxied(src);
   } catch (e) {
@@ -3447,6 +3525,8 @@ function renderChapter(data, chapterUrl, restoreFraction) {
   mangaListStale = true;
 }
 
+let chapterLoadSeq = 0;
+
 async function loadChapter(mangaId, chapterUrl, restoreFraction = null) {
   const reader = el("#reader");
   const body = el("#readerBody");
@@ -3475,6 +3555,7 @@ async function loadChapter(mangaId, chapterUrl, restoreFraction = null) {
     // มีข้อมูลตอนนี้อยู่แล้วจากที่โหลดล่วงหน้าไว้ — วาดทันที แล้วค่อยแจ้งเซิร์ฟเวอร์ว่าอ่านแล้ว
     // เบื้องหลัง (ครั้งนี้ไม่ใส่ peek) หน้าอ่านจึงเปลี่ยนตอนได้โดยไม่มีจังหวะค้างรอเน็ตเลย
     prefetchedChapters.delete(chapterUrl);
+    chapterLoadSeq++;
     renderChapter(prefetched, chapterUrl, restoreFraction);
     autoAdvancing = false;
     fetch(`/api/manga/${mangaId}/chapter?url=${encodeURIComponent(chapterUrl)}`).catch(() => {});
@@ -3484,13 +3565,18 @@ async function loadChapter(mangaId, chapterUrl, restoreFraction = null) {
 
   body.innerHTML = '<div class="reader-msg">กำลังโหลด...</div>';
   const qs = chapterUrl ? `?url=${encodeURIComponent(chapterUrl)}` : "";
+  // กดเปลี่ยนตอนรัว ๆ / ปิดหน้าอ่านระหว่างรอ: คำตอบของคำขอเก่าห้ามมาวาดทับตอนใหม่ (ตำแหน่งอ่านจะบันทึกผิดตอน)
+  const seq = ++chapterLoadSeq;
   try {
-    const data = await getJSON(`/api/manga/${mangaId}/chapter${qs}`);
+    // เซิร์ฟเวอร์อาจไล่ลองหลายแหล่งก่อนตอบ ให้เวลามากกว่าคำขอทั่วไป
+    const data = await getJSON(`/api/manga/${mangaId}/chapter${qs}`, { timeout: 60000 });
+    if (seq !== chapterLoadSeq || reader.hidden) return;
     renderChapter(data, chapterUrl, restoreFraction);
   } catch (e) {
+    if (seq !== chapterLoadSeq || reader.hidden) return;
     showChapterError(e.body?.error || String(e), mangaId, chapterUrl, restoreFraction);
   } finally {
-    autoAdvancing = false;
+    if (seq === chapterLoadSeq) autoAdvancing = false;
   }
 }
 
@@ -3670,6 +3756,7 @@ function initReaderAutoHide() {
 }
 
 async function closeReader() {
+  chapterLoadSeq++;
   // saveScrollPosition จำตำแหน่งไว้ในหน้าเว็บทันที (ก่อนส่งเซิร์ฟเวอร์) หน้าเลือกตอนด้านล่างจึงวาดจากค่าที่
   // ถูกต้องได้เลย ไม่ต้องรอ — ส่วนการโหลดรายชื่อตอนใหม่จากเซิร์ฟเวอร์ต้องรอให้บันทึกเสร็จก่อนเสมอ ไม่งั้น
   // สองคำขอวิ่งชนกันและได้ค่าเก่ากลับมา
@@ -4090,8 +4177,10 @@ async function openComments(target, title, countEl) {
   el("#commentSheet").hidden = false;
   try {
     const data = await getJSON(`/api/comments?${commentQuery(target)}`);
+    if (commentTarget !== target) return; // ปิด/เปิดของอื่นไปแล้วระหว่างรอ
     renderCommentList(data.items);
   } catch (e) {
+    if (commentTarget !== target) return;
     el("#commentList").innerHTML = `<li class="comment-empty">${escapeHtml(e.body?.error || "โหลดคอมเมนต์ไม่สำเร็จ")}</li>`;
   }
 }
@@ -4160,55 +4249,6 @@ function initComments() {
     if (!activeVideo) return;
     openComments({ kind: "video", id: activeVideo.id }, `💬 ${activeVideo.title}`, el("#videoCommentCount"));
   });
-}
-
-// ---------- หน้าหลัก: แถว "ดูต่อ / อ่านต่อ" (มังงะที่อ่านล่าสุด + คลิปที่ดูค้าง เรียงตามเวลาล่าสุด) ----------
-function continueItems() {
-  const manga = withoutSpecial(state.history).filter((h) => h.chapter_url)
-    .map((h) => ({ kind: "manga", at: h.last_read_at || "", item: h }));
-  const videos = state.videos.filter((v) => !v.external && Number(v.position_seconds) > 0)
-    .map((v) => ({ kind: "video", at: v.watched_at || "", item: v }));
-  return manga.concat(videos).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 12);
-}
-
-function continueTileHtml({ kind, item }) {
-  if (kind === "manga") {
-    const pct = item.fraction ? ` · ${Math.round(item.fraction * 100)}%` : "";
-    return `<button class="continue-tile manga" data-kind="manga" data-id="${escapeHtml(item.id)}">
-      <img src="${proxied(item.cover_url, COVER_WIDTH)}" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0" />
-      <span class="continue-name">${escapeHtml(item.name)}</span>
-      <span class="continue-meta">📚 ${escapeHtml(item.chapter_text || "")}${pct}</span></button>`;
-  }
-  const pos = Number(item.position_seconds) || 0;
-  const dur = Number(item.duration_seconds) || 0;
-  const pct = dur ? Math.min(100, Math.max(3, (pos / dur) * 100)) : 0;
-  const at = `${Math.floor(pos / 60)}.${String(Math.floor(pos % 60)).padStart(2, "0")}`;
-  const image = item.thumbnail_url ? `<img src="${escapeHtml(item.thumbnail_url)}" alt="" loading="lazy" />` : '<span class="video-placeholder">▶</span>';
-  return `<button class="continue-tile video" data-kind="video" data-id="${escapeHtml(item.id)}">
-    <span class="continue-media">${image}<span class="video-time">${at}${dur ? `/${Math.max(1, Math.round(dur / 60))}` : ""} นาที</span>${pct ? `<span class="video-progress"><span style="width:${pct.toFixed(1)}%"></span></span>` : ""}</span>
-    <span class="continue-name">${escapeHtml(item.title)}</span>
-    <span class="continue-meta">🎬 ดูค้างไว้${dur ? ` ${Math.round((pos / dur) * 100)}%` : ""}</span></button>`;
-}
-
-// แถว "ดูต่อ / อ่านต่อ" แบบเดิมเลิกใช้ — หน้าหลักมังงะมี "อ่านค้างไว้" และ MeeMovie มี "ดูต่อ" ของตัวเอง
-function renderContinue() {
-  el("#continueSection").hidden = true;
-}
-
-function initContinue() {
-  el("#continueRow").addEventListener("click", (event) => {
-    const tile = event.target.closest(".continue-tile");
-    if (!tile) return;
-    if (tile.dataset.kind === "manga") {
-      const item = state.history.find((h) => h.id === tile.dataset.id);
-      if (item) resumeReading(item);
-    } else {
-      const video = state.videos.find((v) => v.id === tile.dataset.id);
-      if (video) openVideo(video);
-    }
-  });
-  loadHistory();
-  loadVideos();
 }
 
 // ---------- หมวดคลิป (แอดมินตั้ง) — ชิปกรองในแท็บหน้าหลักของ MeeMovie ----------
@@ -4591,15 +4631,6 @@ function initPlaylistWatch() {
   });
 }
 
-async function patchVideo(id, body) {
-  try {
-    const updated = await sendJSON("PATCH", `/api/videos/${encodeURIComponent(id)}`, body);
-    const v = state.videos.find((x) => x.id === id);
-    if (v) Object.assign(v, { title: updated.title, category_id: updated.category_id });
-    renderVideos();
-  } catch (e) { alert(e.message || "บันทึกไม่สำเร็จ"); renderVideoManage(); }
-}
-
 function initAdminPanels() {
   els(".sub-tab-btn").forEach((btn) => btn.addEventListener("click", () => {
     if (btn.dataset.subtab === "systemManage") loadSystemStatus();
@@ -4822,12 +4853,14 @@ function init() {
   initAddUserForm();
   initVideos();
   initComments();
-  initContinue();
+  loadHistory();
+  loadVideos();
   initAdminPanels();
   initPlaylistWatch();
   initLibrary();
   initSettingsPanes();
   initHomeAutoRefresh();
+  initPullToRefresh();
   initAdminSearch();
   initAppShell();
   initEdgeSwipe();
@@ -4843,6 +4876,12 @@ function init() {
     if (e.target.closest(".end-next")) goNextChapter();
     else if (e.target.closest(".end-list")) openChapterListFromReader();
     else if (e.target.closest(".end-comments")) el("#readerComments").click();
+    else if (!e.target.closest("button, a, input, .reader-msg")) {
+      // แตะที่รูป = โชว์/ซ่อนแถบบน-ล่าง (เดิมต้องเลื่อนขึ้นถึงจะเห็นแถบ เสียตำแหน่งที่อ่านอยู่)
+      const hide = !el("#readerTopbar").classList.contains("nav-hidden");
+      el("#readerTopbar").classList.toggle("nav-hidden", hide);
+      el("#readerBottombar").classList.toggle("nav-hidden", hide);
+    }
   });
   el("#chapterListClose").addEventListener("click", closeChapterList);
   el("#readerPrev").addEventListener("click", goPrevChapter);
