@@ -337,13 +337,65 @@ function progressBarHtml(pos, dur) {
 // ---------- หน้าหลักแบบแถว: แบนเนอร์ + ดูต่อ / ตอนใหม่ล่าสุด / แต่ละหมวด / คลิปเดี่ยว ----------
 const HOME_ROW_LIMIT = 10;
 
-// แบนเนอร์: เรื่องที่มีของใหม่ก่อน (ลำดับจากเซิร์ฟเวอร์ = อัปเดตล่าสุดก่อน) → เรื่องที่ดูค้างล่าสุด → เรื่องอัปเดตล่าสุด
-function pickHeroPlaylist() {
+// แบนเนอร์สไลด์ 5 เรื่อง: เรื่องที่มีป้าย NEW / NEW EP ก่อน (ลำดับจากเซิร์ฟเวอร์ = อัปเดตล่าสุดก่อน) → เรื่องที่เพิ่มล่าสุด
+const HERO_COUNT = 5;
+const HERO_INTERVAL = 5000;
+let heroIndex = 0;       // สไลด์ที่โชว์อยู่ — หน้าหลักถูกวาดใหม่บ่อย (บันทึก/ดูค้าง) ต้องกลับมาที่เดิม ไม่เด้งไปเรื่องแรก
+let heroPausedUntil = 0; // ผู้ใช้เลื่อนเอง → หยุดเลื่อนอัตโนมัติชั่วคราว
+let heroTimer = null;
+
+function pickHeroPlaylists() {
   const lists = state.videoPlaylists || [];
-  const withNew = lists.find((p) => playlistBadge(p, playlistEpisodes(p.id)));
-  if (withNew) return withNew;
-  const last = state.videos.filter((v) => v.playlist_id && v.watched_at).sort((a, b) => b.watched_at.localeCompare(a.watched_at))[0];
-  return (last && playlistById(last.playlist_id)) || lists[0] || null;
+  const picked = [];
+  const add = (p) => { if (p && !picked.includes(p) && picked.length < HERO_COUNT) picked.push(p); };
+  lists.filter((p) => playlistBadge(p, playlistEpisodes(p.id))).forEach(add);
+  [...lists].sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || ""))).forEach(add);
+  return picked;
+}
+
+function heroCarouselHtml(list) {
+  if (list.length === 1) return heroHtml(list[0]);
+  heroIndex = Math.min(heroIndex, list.length - 1);
+  return `<div class="mm-hero-carousel"><div class="mm-hero-track">${list.map(heroHtml).join("")}</div>
+    <div class="mm-hero-dots">${list.map((_, i) => `<button class="${i === heroIndex ? "active" : ""}" data-hero-dot="${i}" aria-label="เรื่องที่ ${i + 1}"></button>`).join("")}</div></div>`;
+}
+
+function heroTrack() {
+  const track = document.querySelector("#videoHome .mm-hero-track");
+  return track && track.offsetParent ? track : null;
+}
+
+function showHeroSlide(i, smooth = true) {
+  const track = heroTrack();
+  if (!track) return;
+  const n = track.children.length;
+  heroIndex = ((i % n) + n) % n;
+  track.scrollTo({ left: heroIndex * track.clientWidth, behavior: smooth ? "smooth" : "auto" });
+  els("#videoHome [data-hero-dot]").forEach((d, k) => d.classList.toggle("active", k === heroIndex));
+}
+
+// หลังวาดหน้าหลักใหม่: กลับไปสไลด์เดิม + ฟังการปัดของผู้ใช้ (ตัว track เป็นของใหม่ทุกครั้งที่วาด)
+function initHeroCarousel() {
+  const track = heroTrack();
+  if (!track) return;
+  showHeroSlide(heroIndex, false);
+  let settle = null;
+  track.addEventListener("scroll", () => {
+    clearTimeout(settle);
+    settle = setTimeout(() => {
+      heroIndex = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+      els("#videoHome [data-hero-dot]").forEach((d, k) => d.classList.toggle("active", k === heroIndex));
+    }, 80);
+  }, { passive: true });
+  const pause = () => { heroPausedUntil = Date.now() + 8000; };
+  track.addEventListener("touchstart", pause, { passive: true });
+  track.addEventListener("pointerdown", pause);
+  if (!heroTimer) {
+    heroTimer = setInterval(() => {
+      if (document.hidden || state.tab !== "videos" || Date.now() < heroPausedUntil || !el("#videoPlayer").hidden && !isVideoMini()) return;
+      if (heroTrack()) showHeroSlide(heroIndex + 1);
+    }, HERO_INTERVAL);
+  }
 }
 
 function heroHtml(p) {
@@ -379,8 +431,8 @@ function videoNameAndEp(v) {
 function renderVideoHome() {
   const playlists = state.videoPlaylists || [];
   const parts = [];
-  const hero = pickHeroPlaylist();
-  if (hero) parts.push(heroHtml(hero));
+  const heroes = pickHeroPlaylists();
+  if (heroes.length) parts.push(heroCarouselHtml(heroes));
   const cont = state.videos.filter((v) => !v.external && Number(v.position_seconds) > 0)
     .sort((a, b) => String(b.watched_at || "").localeCompare(String(a.watched_at || ""))).slice(0, 12);
   if (cont.length) {
@@ -418,6 +470,7 @@ function renderVideoHome() {
     }).join(""), more));
   }
   el("#videoHome").innerHTML = parts.join("") || '<div class="empty-state">ยังไม่มีคลิปในคลัง</div>';
+  initHeroCarousel();
 }
 
 // ---------- คลังของฉัน: บันทึกไว้ / ประวัติการดู ----------
@@ -1761,6 +1814,8 @@ function initVideos() {
     window.scrollTo(0, 0);
   }));
   el("#videoHome").addEventListener("click", (event) => {
+    const dot = event.target.closest("[data-hero-dot]")?.dataset.heroDot;
+    if (dot !== undefined) { heroPausedUntil = Date.now() + 8000; return showHeroSlide(Number(dot)); }
     const play = event.target.closest("[data-hero-play]")?.dataset.heroPlay;
     if (play) {
       const v = state.videos.find((x) => x.id === play);

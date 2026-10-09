@@ -1336,3 +1336,13 @@ button, .nav-item, .home-tab, .video-tab { -webkit-user-select: none; user-selec
 .series-lang { font-size: 0.68rem; line-height: 1.4; padding: 0 5px; border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
 .pl-lang-one { display: flex; align-items: center; gap: 8px; margin: 10px 0 2px; font-size: 0.8rem; color: var(--text-dim); }
 .pl-lang-one .series-lang { font-size: 0.8rem; padding: 2px 8px; }
+
+/* แบนเนอร์สไลด์ (หน้า MeeMovie) — ปัดได้เอง + เลื่อนอัตโนมัติทุก 5 วิ */
+.mm-hero-carousel { position: relative; margin-bottom: 18px; }
+.mm-hero-track { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; border-radius: 14px; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+.mm-hero-track::-webkit-scrollbar { display: none; }
+.mm-hero-track > .mm-hero { flex: 0 0 100%; margin-bottom: 0; border-radius: 0; scroll-snap-align: start; scroll-snap-stop: always; }
+.mm-hero-dots { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 2px; }
+.mm-hero-dots button { width: 22px; height: 22px; padding: 0; border: 0; background: none; cursor: pointer; display: grid; place-items: center; }
+.mm-hero-dots button::before { content: ""; width: 7px; height: 7px; border-radius: 999px; background: rgba(255, 255, 255, 0.5); transition: width 0.2s, background 0.2s; }
+.mm-hero-dots button.active::before { width: 18px; background: #fff; }
