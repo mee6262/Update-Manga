@@ -77,7 +77,14 @@ def serve():
     log = _setup_logging("webapp.log")
     sys.stdout = _PrintToLog(logging.getLogger("app"), logging.INFO)
     sys.stderr = _PrintToLog(logging.getLogger("app"), logging.ERROR)
-    dump_file = open(LOG_DIR / "hang-dumps.log", "a", encoding="utf-8")
+    dump_path = LOG_DIR / "hang-dumps.log"
+    # หมุนไฟล์ตอนเริ่ม (ไฟล์นี้เขียนตรง ไม่ผ่าน RotatingFileHandler) — เก็บของเก่าไว้ 1 ชุด
+    try:
+        if dump_path.stat().st_size > 5_000_000:
+            dump_path.replace(dump_path.with_suffix(".log.1"))
+    except OSError:
+        pass
+    dump_file = open(dump_path, "a", encoding="utf-8")
 
     def watch_dump_requests():
         # thread แยกของตัวเอง ทำงานได้แม้ thread ของ waitress จะค้างหมดทุกตัว

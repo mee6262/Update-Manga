@@ -184,6 +184,44 @@ def is_outage(exc: Exception) -> bool:
     return resp is not None and resp.status_code >= 500
 
 
+# เพดานต่อหน้า: timeout ของ requests นับแค่ช่วงรอระหว่างข้อมูลแต่ละก้อน เว็บที่หยดข้อมูลมาทีละนิดจะยึด thread
+# ไว้ได้ไม่จำกัด — วัดจริง (ต.ค. 2026) หน้าเรื่อง/หน้าตอนของทุกเว็บที่ใช้ ใหญ่สุด 342 KB ใช้เวลาไม่เกิน 1.2 วิ
+MAX_PAGE_BYTES = 10 * 1024 * 1024
+
+
+class PageTooLarge(requests.RequestException):
+    pass
+
+
+def read_limited(resp: requests.Response, max_seconds: float, max_bytes: int = MAX_PAGE_BYTES) -> bytes:
+    """อ่านเนื้อหา (stream=True) พร้อมเพดานเวลารวม/ขนาด — เกินเวลา = Timeout (นับเป็นเว็บล่ม ไปลองแหล่งสำรองต่อ)"""
+    deadline = time.monotonic() + max_seconds
+    chunks, size = [], 0
+    # read1 คืนข้อมูลเท่าที่มาถึงทันที — iter_content รอจนเต็มก้อนก่อน เว็บที่หยดทีละไม่กี่ไบต์จึงไม่เคยถึงจุดเช็คเวลา
+    # (urllib3 รุ่นเก่าไม่มี read1 → ใช้ก้อนเล็ก 1 KB แทน ยังเช็คเวลาได้บ่อยพอ)
+    if hasattr(resp.raw, "read1"):
+        pieces = iter(lambda: resp.raw.read1(64 * 1024, decode_content=True), b"")
+    else:
+        pieces = resp.iter_content(chunk_size=1024)
+    try:
+        for chunk in pieces:
+            chunks.append(chunk)
+            size += len(chunk)
+            if size > max_bytes:
+                raise PageTooLarge(f"ข้อมูลใหญ่เกิน {max_bytes // (1024 * 1024)} MB: {resp.url}")
+            if time.monotonic() > deadline:
+                raise requests.Timeout(f"ส่งข้อมูลช้าเกิน {max_seconds:.0f} วิ: {resp.url}")
+    finally:
+        resp.close()
+    return b"".join(chunks)
+
+
+def _read_body(resp: requests.Response, max_seconds: float) -> str:
+    # เว็บกลุ่มนี้ไม่ระบุ charset ใน Content-Type ทำให้ requests เดาเป็น ISO-8859-1
+    # (ค่า default ตาม RFC 2616) แล้วข้อความไทยจะเพี้ยน ต้องบังคับเป็น utf-8 เสมอ
+    return read_limited(resp, max_seconds).decode("utf-8", errors="replace")
+
+
 def fetch(url: str, referer: str | None = None, min_interval: float = 0.0, timeout: float = TIMEOUT) -> str:
     headers = dict(HEADERS)
     if referer:
@@ -193,17 +231,17 @@ def fetch(url: str, referer: str | None = None, min_interval: float = 0.0, timeo
         throttle(url, min_interval)
     try:
         # เชื่อมต่อไม่ได้ใน 5 วิ = เว็บล่ม ไม่ต้องรอครบ timeout เต็ม (ค่านั้นเผื่อไว้สำหรับรอข้อมูล)
-        resp = session().get(url, headers=headers, timeout=(min(5, timeout), timeout))
+        resp = session().get(url, headers=headers, timeout=(min(5, timeout), timeout), stream=True)
         resp.raise_for_status()
+        text = _read_body(resp, max_seconds=max(15, timeout * 2))
     except requests.RequestException as e:
+        if e.response is not None:
+            e.response.close()  # stream=True: ตอบ 4xx/5xx แล้วต้องคืน connection เอง
         if is_outage(e):
             _mark_host(url, down=True)
         raise
     _mark_host(url, down=False)
-    # เว็บกลุ่มนี้ไม่ระบุ charset ใน Content-Type ทำให้ requests เดาเป็น ISO-8859-1
-    # (ค่า default ตาม RFC 2616) แล้วข้อความไทยจะเพี้ยน ต้องบังคับเป็น utf-8 เสมอ
-    resp.encoding = "utf-8"
-    return resp.text
+    return text
 
 
 def _extract_balanced_json(text: str, marker: str) -> dict | None:
@@ -377,14 +415,14 @@ def fetch_madara_chapters(manga_url: str, min_interval: float = 0.0) -> list[dic
     if min_interval:
         throttle(endpoint, min_interval)
     try:
-        resp = session().post(endpoint, headers=headers, timeout=TIMEOUT)
+        resp = session().post(endpoint, headers=headers, timeout=(5, TIMEOUT), stream=True)
         resp.raise_for_status()
+        text = _read_body(resp, max_seconds=TIMEOUT * 2)
     except requests.RequestException:
         return []
-    resp.encoding = "utf-8"
 
     chapters = []
-    for li in BeautifulSoup(resp.text, "html.parser").select("li.wp-manga-chapter"):
+    for li in BeautifulSoup(text, "html.parser").select("li.wp-manga-chapter"):
         anchor = li.find("a", href=True)
         if not anchor:
             continue

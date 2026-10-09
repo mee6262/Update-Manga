@@ -355,9 +355,23 @@ def chapter_cache_path(manga_id: str, chapter_url: str) -> Path:
     return CHAPTERS_DIR / f"{manga_id}__{key}.json"
 
 
+def _touch_if_stale(path: Path):
+    """แคชที่ยังมีคนเปิด เลื่อนเวลาไฟล์ไว้ (วันละครั้งพอ) — prune_caches ลบเฉพาะที่ไม่มีใครเปิดนานแล้ว
+    (ไม่พึ่ง atime: Windows ปิดการอัปเดต atime ไว้เป็นค่าเริ่มต้นในหลายเครื่อง)"""
+    try:
+        if time.time() - path.stat().st_mtime > 86400:
+            os.utime(path)
+    except OSError:
+        pass
+
+
 def load_chapter_cache(manga_id: str, chapter_url: str) -> dict | None:
     # อ่านจากดิสก์ตรง ๆ ทุกครั้ง (ไม่เข้า memory cache) เพราะมีได้เป็นพัน ๆ ไฟล์ และ caller แก้ dict ต่อ
-    return _read_json(chapter_cache_path(manga_id, chapter_url), None)
+    path = chapter_cache_path(manga_id, chapter_url)
+    data = _read_json(path, None)
+    if data is not None:
+        _touch_if_stale(path)
+    return data
 
 
 def save_chapter_cache(manga_id: str, chapter_url: str, data: dict):
@@ -372,10 +386,38 @@ def cover_cache_path(src: str, width: int) -> Path:
 
 
 def load_cover_cache(src: str, width: int) -> bytes | None:
+    path = cover_cache_path(src, width)
     try:
-        return cover_cache_path(src, width).read_bytes()
+        data = path.read_bytes()
     except FileNotFoundError:
         return None
+    _touch_if_stale(path)
+    return data
+
+
+CACHE_KEEP_DAYS = 30
+
+
+def prune_caches(keep_days: int = CACHE_KEEP_DAYS) -> dict:
+    """ลบแคชตอน/ปกที่ไม่มีใครเปิดเกิน keep_days วัน + แคชตอนของเรื่องที่ถูกลบไปแล้ว + ไฟล์ .tmp ค้าง
+    (ลบแล้วไม่เสียอะไร มีคนเปิดอีกก็ดึงจากเว็บต้นทางใหม่) คืนจำนวนไฟล์/ขนาดที่ลบ"""
+    cutoff = time.time() - keep_days * 86400
+    known = {m["id"] for m in load_manga()}
+    removed = {"chapters": 0, "covers": 0, "bytes": 0}
+    for folder, kind in ((CHAPTERS_DIR, "chapters"), (COVERS_DIR, "covers")):
+        for path in folder.iterdir():
+            try:
+                st = path.stat()
+                # known ว่าง = อ่าน manga.json ไม่ได้ชั่วคราว ห้ามตีความว่าทุกเรื่องถูกลบ
+                orphan = bool(known) and kind == "chapters" and path.suffix == ".json" and path.name.split("__", 1)[0] not in known
+                stale_tmp = path.suffix == ".tmp" and st.st_mtime < time.time() - 86400
+                if st.st_mtime < cutoff or orphan or stale_tmp:
+                    path.unlink()
+                    removed[kind] += 1
+                    removed["bytes"] += st.st_size
+            except OSError:
+                continue
+    return removed
 
 
 def save_cover_cache(src: str, width: int, data: bytes):

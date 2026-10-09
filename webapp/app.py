@@ -2258,6 +2258,23 @@ def _playlist_watch_loop():
         time.sleep(PLAYLIST_WATCH_INTERVAL)
 
 
+MAINTENANCE_INTERVAL = 24 * 60 * 60
+
+
+def _maintenance_loop():
+    """งานดูแลวันละครั้ง: ลบแคชตอน/ปกที่ไม่มีใครเปิดเกิน 30 วัน (โฟลเดอร์พวกนี้โตไม่หยุดถ้าไม่ลบ)"""
+    time.sleep(300)
+    while True:
+        try:
+            removed = storage.prune_caches()
+            if removed["chapters"] or removed["covers"]:
+                print(f"🧹 ลบแคชเก่า: ตอน {removed['chapters']} ไฟล์, ปก {removed['covers']} ไฟล์ "
+                      f"({removed['bytes'] / 1024 / 1024:.1f} MB)", flush=True)
+        except Exception as e:
+            print(f"⚠️ ลบแคชเก่าไม่สำเร็จ: {e}", flush=True)
+        time.sleep(MAINTENANCE_INTERVAL)
+
+
 @app.before_request
 def _start_playlist_watch():
     # เริ่ม loop ครั้งเดียวต่อ process ตอนมี request แรก (import app เฉย ๆ เช่นตอนทดสอบ ไม่เริ่ม)
@@ -2265,6 +2282,7 @@ def _start_playlist_watch():
     if not _playlist_watch_started:
         _playlist_watch_started = True
         threading.Thread(target=_playlist_watch_loop, daemon=True).start()
+        threading.Thread(target=_maintenance_loop, daemon=True).start()
 
 
 @app.route("/api/video-playlists/watch", methods=["GET"])
@@ -2732,6 +2750,19 @@ def _sources_of(manga: dict) -> list[dict]:
     return manga.get("sources") or [{"url": manga["url"]}]
 
 
+SOURCE_DOWN_ALERT_AFTER = timedelta(days=1)
+
+
+def _notify_admins_source_down(names: list[str]):
+    """เรื่องที่ดึงไม่ได้จากทุกแหล่งเกิน 1 วัน → แจ้งแอดมินทางกระดิ่ง + push (รวมเป็นข้อความเดียว)"""
+    shown = ", ".join(names[:5]) + (f" และอีก {len(names) - 5} เรื่อง" if len(names) > 5 else "")
+    text = f"{len(names)} เรื่องดึงตอนใหม่ไม่ได้เกิน 1 วัน: {shown}"
+    url = "/?admin=manga-problem"
+    for username in admin_usernames():
+        _add_notification(username, {"type": "system", "target": "system:source-down", "text": text, "url": url})
+        webpush.send_to_user(username, {"title": "⚠️ เว็บต้นทางมีปัญหา", "body": text, "tag": "source-down", "url": url})
+
+
 def _commit_refreshes(results: dict[str, dict], failed_ids: set[str] | None = None) -> list[str]:
     """บันทึกผลดึงข้อมูลหลายเรื่องลงไฟล์ครั้งเดียว — โหลดไฟล์ใหม่ตอนจะบันทึก (ไม่ใช้ชุดที่โหลดไว้
     ก่อนเริ่มดึง ซึ่งอาจนานหลายนาที) กันทับเรื่องที่ถูกเพิ่ม/แก้/ลบระหว่างนั้น แล้วค่อยแจ้งเตือน
@@ -2741,12 +2772,23 @@ def _commit_refreshes(results: dict[str, dict], failed_ids: set[str] | None = No
     if not results and not failed_ids:
         return []
     # ล็อกช่วงโหลด→บันทึก กันชนกับแอดมินที่กำลังแก้/ลบเรื่อง (ไม่มีเน็ตในช่วงนี้ ผลดึงได้มาก่อนแล้ว)
+    now = datetime.now(timezone.utc)
+    long_down = []
     with storage.state_lock:
         manga_items = storage.load_manga(fresh=True)
         changed = []
         for manga in manga_items:
             if manga["id"] in failed_ids:
-                manga["refresh_error"] = {"at": now_iso(), "error": "ดึงข้อมูลไม่สำเร็จจากทุกแหล่งที่มา"}
+                prev = manga.get("refresh_error") or {}
+                # since = เริ่มดึงไม่ได้ตั้งแต่เมื่อไร (คงค่าเดิมไว้ทุกรอบที่ยังพลาด) — at = รอบล่าสุดที่พลาด
+                error = {"at": now_iso(), "since": prev.get("since") or prev.get("at") or now_iso(),
+                         "error": "ดึงข้อมูลไม่สำเร็จจากทุกแหล่งที่มา"}
+                if prev.get("notified"):
+                    error["notified"] = True
+                elif now - datetime.fromisoformat(error["since"]) >= SOURCE_DOWN_ALERT_AFTER:
+                    error["notified"] = True  # แจ้งครั้งเดียวต่อการล่มหนึ่งรอบ (ดึงสำเร็จแล้ว refresh_error ถูกลบ)
+                    long_down.append(manga["name"])
+                manga["refresh_error"] = error
                 continue
             parsed = results.get(manga["id"])
             if not parsed:
@@ -2756,6 +2798,9 @@ def _commit_refreshes(results: dict[str, dict], failed_ids: set[str] | None = No
             if _is_new_chapter(prev_chapter, parsed.get("latest_chapter")):
                 changed.append((manga, prev_chapter))
         storage.save_manga(manga_items)
+
+    if long_down:
+        _notify_admins_source_down(long_down)
 
     for manga, prev_chapter in changed:
         # แจ้งเตือนเฉพาะตอนที่เคยรู้ตอนล่าสุดมาก่อนแล้วเปลี่ยน (ไม่แจ้งตอนเพิ่งเพิ่มเรื่องใหม่)
@@ -3289,27 +3334,29 @@ def proxy_image():
                     "Referer": f"https://{netloc}/",
                 },
                 timeout=IMAGE_TIMEOUT,
-                stream=not width,
+                stream=True,
             )
         resp.raise_for_status()
+        # ปกต้องมีไฟล์ครบก่อนถึงย่อได้ — อ่านทั้งก้อนแบบมีเพดานเวลา/ขนาด (เดิมโหลดไม่จำกัดเวลา)
+        body = scraper.read_limited(resp, IMAGE_STREAM_MAX_SECONDS, MAX_RESIZE_BYTES) if width else None
     except Exception as e:
         # จำไว้ว่าเซิร์ฟเวอร์รูปนี้ล่ม หน้าอ่านจะได้ขอรายการรูปใหม่จากแหล่งสำรองแทน (ดู get_chapter)
         if scraper.is_outage(e):
             scraper.mark_host_down(src)
         return f"fetch failed: {e}", 502
 
-    # เฉพาะ path นี้ที่โหลดทั้งรูปเข้าหน่วยความจำ (stream=False ด้านบน) เพราะต้องมีไฟล์ครบก่อนถึงย่อได้
-    if width and len(resp.content) <= MAX_RESIZE_BYTES:
-        resized = _resize_cover(resp.content, width)
-        if resized:
-            storage.save_cover_cache(src, width, resized)
-            return Response(resized, content_type="image/webp", headers=IMAGE_HEADERS)
-
     content_type = resp.headers.get("Content-Type", "image/jpeg")
     if not content_type.lower().startswith("image/"):
         # โดเมนที่อนุญาตรวมถึงตัวเว็บมังงะเองด้วย กันไม่ให้ใช้ proxy นี้เสิร์ฟหน้า HTML/สคริปต์ของเว็บอื่น
         # ภายใต้โดเมนเรา (แท็ก <img> ยังแสดงรูปได้ปกติ แม้ CDN บางเจ้าจะส่ง type มาไม่ตรง)
         content_type = "application/octet-stream"
+
+    if width:
+        resized = _resize_cover(body, width)
+        if resized:
+            storage.save_cover_cache(src, width, resized)
+            return Response(resized, content_type="image/webp", headers=IMAGE_HEADERS)
+        return Response(body, content_type=content_type, headers=IMAGE_HEADERS)
 
     headers = dict(IMAGE_HEADERS)
     if resp.headers.get("Content-Length") and not resp.headers.get("Content-Encoding"):
@@ -3320,7 +3367,12 @@ def proxy_image():
         # requests นับแค่ช่วงรอระหว่างก้อน เว็บที่ส่งมาช้า ๆ ทีละนิดจะยึด thread ไว้ได้ไม่จำกัด
         deadline = time.monotonic() + IMAGE_STREAM_MAX_SECONDS
         try:
-            for chunk in resp.iter_content(chunk_size=64 * 1024):
+            # read1: ส่งต่อเท่าที่มาถึง ไม่รอจนเต็มก้อน 64 KB (ไม่งั้นรูปที่หยดมาช้า ๆ ไม่เคยถึงจุดเช็คเวลา)
+            if hasattr(resp.raw, "read1"):
+                pieces = iter(lambda: resp.raw.read1(64 * 1024, decode_content=True), b"")
+            else:
+                pieces = resp.iter_content(chunk_size=8 * 1024)
+            for chunk in pieces:
                 yield chunk
                 if time.monotonic() > deadline:
                     print(f"⚠️ ตัดการส่งรูปที่ช้าเกิน {IMAGE_STREAM_MAX_SECONDS} วิ: {src}")
