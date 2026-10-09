@@ -3,8 +3,11 @@ Scraper สำหรับกลุ่มเว็บที่ใช้ธีม
 ใช้ requests ธรรมดา (ไม่ต้องใช้ playwright) เพราะข้อมูลที่ต้องการ render มาใน HTML/JS อยู่แล้ว
 """
 import functools
+import ipaddress
 import json
+import os
 import re
+import socket
 import threading
 import time
 from urllib.parse import urljoin, urlparse
@@ -34,6 +37,51 @@ TIMEOUT = 20
 
 _local = threading.local()
 
+# กันใช้เซิร์ฟเวอร์ยิงเข้าที่อยู่ภายใน (127.0.0.1, 192.168.x, 169.254.169.254 ฯลฯ) ผ่านลิงก์ที่ผู้ใช้ส่งมา
+# หรือที่เว็บต้นทางฝังไว้ — ตั้ง ALLOW_PRIVATE_FETCH=1 ตอนทดสอบกับเว็บจำลองบนเครื่องตัวเอง
+ALLOW_PRIVATE_FETCH = os.environ.get("ALLOW_PRIVATE_FETCH") == "1"
+_public_host_memo: dict[str, tuple[bool, float]] = {}
+
+
+def is_public_url(url: str) -> bool:
+    """http(s) และชื่อโฮสต์ resolve แล้วเป็นที่อยู่สาธารณะทั้งหมด (จำผลไว้ 10 นาที)"""
+    try:
+        parts = urlparse(url)
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https") or not host:
+        return False
+    if ALLOW_PRIVATE_FETCH:
+        return True
+    now = time.monotonic()
+    memo = _public_host_memo.get(host)
+    if memo and memo[1] > now:
+        return memo[0]
+    try:
+        infos = socket.getaddrinfo(host, None)
+        ok = bool(infos) and all(ipaddress.ip_address(info[4][0].split("%")[0]).is_global for info in infos)
+    except (OSError, ValueError):
+        ok = False
+    _public_host_memo[host] = (ok, now + 600)
+    return ok
+
+
+class BlockedURL(requests.exceptions.InvalidURL):
+    pass
+
+
+def check_public(url: str):
+    if not is_public_url(url):
+        raise BlockedURL(f"ไม่อนุญาตให้เข้าถึงที่อยู่นี้: {urlparse(url).hostname}")
+
+
+def guard_redirect(resp, *args, **kwargs):
+    """hook ของ requests — ถูกเรียกกับทุกคำตอบรวมถึง 302 ก่อนตามไป: ปลายทางต้องเป็นที่อยู่สาธารณะด้วย"""
+    if resp.is_redirect:
+        check_public(urljoin(resp.url, resp.headers.get("Location", "")))
+    return resp
+
 
 def session() -> requests.Session:
     """Session ต่อ thread (requests.Session ไม่ thread-safe เต็มที่) ใช้ keep-alive ซ้ำกับเว็บ/CDN
@@ -44,6 +92,7 @@ def session() -> requests.Session:
         adapter = HTTPAdapter(pool_connections=16, pool_maxsize=16)
         s.mount("http://", adapter)
         s.mount("https://", adapter)
+        s.hooks["response"].append(guard_redirect)
         _local.session = s
     return s
 
@@ -139,6 +188,7 @@ def fetch(url: str, referer: str | None = None, min_interval: float = 0.0, timeo
     headers = dict(HEADERS)
     if referer:
         headers["Referer"] = referer
+    check_public(url)
     if min_interval:
         throttle(url, min_interval)
     try:
@@ -320,6 +370,8 @@ def fetch_madara_chapters(manga_url: str, min_interval: float = 0.0) -> list[dic
     ขอลิสต์เต็มแยกอีกทีที่ {manga_url}/ajax/chapters/ — และต้องเป็น POST เท่านั้น
     ถ้ายิง GET เว็บจะคืนหน้าเพจปกติมาแทน ไม่ใช่รายชื่อตอน"""
     endpoint = manga_url.rstrip("/") + "/ajax/chapters/"
+    if not is_public_url(endpoint):
+        return []
     headers = dict(HEADERS)
     headers["X-Requested-With"] = "XMLHttpRequest"
     if min_interval:

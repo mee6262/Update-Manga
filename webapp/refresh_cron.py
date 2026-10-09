@@ -19,6 +19,9 @@ def main():
     try:
         headers = {"X-Cron-Token": CRON_TOKEN} if CRON_TOKEN else {}
         resp = requests.post(f"{BASE_URL}/api/refresh_all", headers=headers, timeout=300)
+        if resp.status_code == 409:
+            print("ข้าม: มีรอบดึงตอนใหม่ทำงานอยู่แล้ว (แอดมินกดเอง)")
+            return
         resp.raise_for_status()
         data = resp.json()
         print(f"อัปเดตใหม่ {len(data['updated_ids'])} เรื่อง, ผิดพลาด {len(data['failed'])} เรื่อง")

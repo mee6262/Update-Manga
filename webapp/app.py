@@ -54,6 +54,8 @@ app = MangaApp(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 app.permanent_session_lifetime = timedelta(days=90)
 app.config.update(
+    # ไฟล์ใหญ่สุดที่ส่งเข้ามาจริงคือไฟล์นำเข้า playlist (~1 MB) — กันคำขอยักษ์ทำหน่วยความจำเต็ม
+    MAX_CONTENT_LENGTH=8 * 1024 * 1024,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=True,
@@ -209,6 +211,14 @@ WEB_PASSWORD = os.environ.get("WEB_PASSWORD")
 # เช็คแค่ IP จะเท่ากับเปิดช่องให้ใครก็ได้จากอินเทอร์เน็ตข้าม login ได้)
 CRON_TOKEN = os.environ.get("CRON_TOKEN")
 
+# ไม่มีบัญชีในระบบ = ปล่อยเข้าไม่ต้อง login เฉพาะเมื่อตั้ง DEV_NO_AUTH=1 (dev บนเครื่องตัวเอง) — เดิมปล่อยผ่านเองเมื่อ
+# users.json หาย/ว่าง ถ้าเกิดบน VPS ใครก็เข้าได้ในสิทธิ์ admin
+DEV_NO_AUTH = os.environ.get("DEV_NO_AUTH") == "1"
+
+
+def auth_disabled() -> bool:
+    return DEV_NO_AUTH and not storage.load_users()
+
 REQUEST_DELAY = 1.0  # เว้นระยะคำขอไปเว็บเดียวกันตอน refresh ทั้งหมด กันโดน block
 REFRESH_WORKERS = 4  # เว็บต่างกันดึงพร้อมกันได้ (เว็บเดียวกันยังเว้นระยะตาม REQUEST_DELAY)
 
@@ -269,7 +279,7 @@ def require_admin(view):
     def wrapper(*args, **kwargs):
         # ไม่มีผู้ใช้ในระบบเลย (dev บนเครื่องตัวเอง ไม่เคยตั้ง WEB_USERNAME/WEB_PASSWORD) ปล่อยผ่าน
         # เหมือน require_login ไม่งั้น dev mode จะใช้ปุ่ม admin อะไรไม่ได้เลยสักอย่าง
-        if not storage.load_users():
+        if auth_disabled():
             return view(*args, **kwargs)
         if not is_admin():
             return jsonify({"error": "เฉพาะ admin เท่านั้น"}), 403
@@ -284,7 +294,7 @@ def require_login():
         return None
     # ถ้ายังไม่มีผู้ใช้ในระบบเลย (เช่น dev บนเครื่องตัวเอง ไม่เคยตั้ง WEB_USERNAME/WEB_PASSWORD)
     # ปล่อยผ่านไม่บังคับ login
-    if not storage.load_users():
+    if auth_disabled():
         return None
     if (
         request.endpoint == "refresh_all"
@@ -311,10 +321,30 @@ def require_login():
 USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,19}$")
 EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]+\.[^@\s]{2,}$")
 MIN_PASSWORD = 8
-RESET_PASSWORD = "00000000"
 REGISTER_LIMIT = 5              # สมัครได้ไม่เกินกี่บัญชี
 REGISTER_WINDOW = 3600          # ต่อ IP ต่อชั่วโมง (กันบอทสมัครรัว ๆ)
 _register_log: dict[str, list[float]] = {}
+LOGIN_FAIL_LIMIT = 8            # รหัสผิดได้ไม่เกินกี่ครั้ง
+LOGIN_FAIL_WINDOW = 15 * 60     # ต่อ IP ใน 15 นาที (กันเดารหัส)
+_login_fails: dict[str, list[float]] = {}
+_login_fails_lock = threading.Lock()
+
+
+def client_ip() -> str:
+    # หลัง Caddy: remote_addr = 127.0.0.1 เสมอ, Caddy เขียน X-Forwarded-For เป็น IP จริงต่อท้าย —
+    # ใช้ตัวท้ายสุด (ตัวหน้าผู้ใช้ปลอมใส่มาเองได้)
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    return (forwarded.split(",")[-1].strip() if forwarded else "") or request.remote_addr or ""
+
+
+def _recent_login_fails(ip: str, now: float) -> list[float]:
+    with _login_fails_lock:
+        recent = [t for t in _login_fails.get(ip, []) if now - t < LOGIN_FAIL_WINDOW]
+        if recent:
+            _login_fails[ip] = recent
+        else:
+            _login_fails.pop(ip, None)
+        return recent
 
 
 def registration_open() -> bool:
@@ -359,11 +389,20 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
+        ip, now = client_ip(), time.time()
+        if len(_recent_login_fails(ip, now)) >= LOGIN_FAIL_LIMIT:
+            error = "ใส่รหัสผิดหลายครั้งเกินไป รอ 15 นาทีแล้วลองใหม่"
+            return render_template("login.html", error=error, mode="login", form={},
+                                   registration_open=registration_open()), 429
         users = storage.load_users()
         user = users.get(username)
         if user and check_password_hash(user["password_hash"], password):
+            with _login_fails_lock:
+                _login_fails.pop(ip, None)
             _start_session(username, user)
             return redirect(_safe_next(request.args.get("next")))
+        with _login_fails_lock:
+            _login_fails.setdefault(ip, []).append(now)
         error = "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง"
     return render_template("login.html", error=error, mode="login", form={}, registration_open=registration_open())
 
@@ -390,7 +429,7 @@ def register():
     if error:
         return fail(error)
 
-    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
+    ip = client_ip()
     now = time.time()
     recent = [t for t in _register_log.get(ip, []) if now - t < REGISTER_WINDOW]
     if len(recent) >= REGISTER_LIMIT:
@@ -427,8 +466,6 @@ def change_password():
     error = _validate_new_password(new, confirm)
     if error:
         return jsonify({"error": error}), 400
-    if new == RESET_PASSWORD:
-        return jsonify({"error": "รหัสผ่านใหม่ต้องไม่ใช่รหัสเริ่มต้น 00000000"}), 400
     with storage.state_lock:
         users = storage.load_users(fresh=True)
         user = users.get(username)
@@ -448,6 +485,10 @@ def logout():
     return redirect(url_for("login"))
 
 
+PREFS_MAX_KEYS = 40
+PREFS_MAX_BYTES = 4000
+
+
 @app.route("/api/prefs", methods=["POST"])
 def update_prefs():
     # ค่าตั้งค่าส่วนตัว (เช่น ลำดับการเรียงเรื่องทั้งหมด) เก็บแยกบัญชีใครบัญชีมัน — ตอนอ่านไม่มี
@@ -455,10 +496,15 @@ def update_prefs():
     # dev mode ที่ไม่มีบัญชี (current_username()==None) ไม่ต้องจำอะไรเลย
     if not current_username():
         return jsonify({"ok": True})
-    body = request.get_json(force=True) or {}
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "ข้อมูลไม่ถูกต้อง"}), 400
     with storage.state_lock:
         prefs = storage.load_prefs(current_username(), fresh=True)
         prefs.update(body)
+        # ค่าตั้งค่าถูกฝังในหน้าเว็บทุกครั้งที่เปิด — ไม่รับของใหญ่/เยอะผิดปกติ
+        if len(prefs) > PREFS_MAX_KEYS or len(json.dumps(prefs, ensure_ascii=False)) > PREFS_MAX_BYTES:
+            return jsonify({"error": "ค่าตั้งค่าใหญ่เกินไป"}), 400
         storage.save_prefs(current_username(), prefs)
     return jsonify({"ok": True})
 
@@ -499,20 +545,22 @@ def update_site_settings():
 @app.route("/api/users/<username>/reset_password", methods=["POST"])
 @require_admin
 def reset_password(username):
-    """รีเซ็ตรหัสผ่านสมาชิกเป็น 00000000 — ทุกเครื่องของสมาชิกคนนั้นถูกให้ login ใหม่ และจะเห็นแจ้งเตือนให้ไป
-    เปลี่ยนรหัสผ่านที่หน้าตั้งค่าจนกว่าจะเปลี่ยน"""
+    """รีเซ็ตรหัสผ่านสมาชิกเป็นรหัสชั่วคราวแบบสุ่ม (แอดมินเห็นครั้งเดียว ส่งให้สมาชิกเอง) — ทุกเครื่องของสมาชิก
+    คนนั้นถูกให้ login ใหม่ และจะเห็นแจ้งเตือนให้ไปเปลี่ยนรหัสผ่านที่หน้าตั้งค่าจนกว่าจะเปลี่ยน
+    (เดิมใช้ 00000000 ตายตัว — ใครรู้ชื่อสมาชิกที่เพิ่งถูกรีเซ็ตก็เข้าบัญชีได้)"""
+    temp = "".join(secrets.choice("abcdefghjkmnpqrstuvwxyz23456789") for _ in range(10))
     with storage.state_lock:
         users = storage.load_users(fresh=True)
         user = users.get(username)
         if not user:
             return jsonify({"error": "ไม่พบสมาชิกนี้"}), 404
-        user["password_hash"] = generate_password_hash(RESET_PASSWORD)
+        user["password_hash"] = generate_password_hash(temp)
         user["pw_ver"] = user.get("pw_ver", 0) + 1
         user["must_change_password"] = True
         storage.save_users(users)
     if username == current_username():
         session["pw_ver"] = user["pw_ver"]
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "temp_password": temp})
 
 
 @app.route("/api/users", methods=["POST"])
@@ -957,12 +1005,23 @@ def _clean_video_title(title: str) -> str:
     return cleaned or title
 
 
+def _is_facebook_url(url: str) -> bool:
+    """ยิงเน็ตไปเฉพาะโดเมน Facebook — ลิงก์มาจากผู้ใช้ ห้ามให้เซิร์ฟเวอร์เปิดที่อยู่อื่น (เช่น เครื่องในวง LAN)"""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    return parts.scheme == "https" and (parts.hostname or "").lower() in FACEBOOK_VIDEO_HOSTS
+
+
 def _facebook_page_meta(url: str) -> dict:
     """เปิดหน้า Facebook แบบเบราว์เซอร์มือถือ แล้วอ่าน og:url / og:image / og:title — ใช้แปลงลิงก์แชร์
     (/share/v/...) เป็นลิงก์ reel และดึงชื่อ/รูปปกให้อัตโนมัติ ไม่ต้องใช้ App Token พลาดคืน {} (ไม่ล้มทั้งการเพิ่ม)"""
+    if not _is_facebook_url(url):
+        return {}
     try:
         resp = requests.get(url, headers={"User-Agent": FB_META_UA, "Accept-Language": "th,en;q=0.8"},
-                            timeout=(5, 10), allow_redirects=True)
+                            timeout=(5, 10), allow_redirects=True, hooks={"response": scraper.guard_redirect})
         if (urlsplit(resp.url).hostname or "").lower() not in FACEBOOK_VIDEO_HOSTS:
             return {}
         text = resp.text[:600_000]
@@ -1122,6 +1181,8 @@ FB_CRAWLER_UA = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_u
 def _resolve_facebook_share(url: str) -> str | None:
     """ลิงก์แชร์ (/share/v/..., /share/r/...) → ลิงก์คลิปจริง จาก Location ที่ Facebook ตอบ crawler
     — แบบเบราว์เซอร์บางคลิปโดนเด้งไปหน้า login (ไม่มี og:url ให้อ่าน) แต่ crawler ได้ 302 ไป /reel/<id> ทุกครั้ง"""
+    if not _is_facebook_url(url):
+        return None
     try:
         resp = requests.get(url, headers={"User-Agent": FB_CRAWLER_UA}, timeout=(5, 10), allow_redirects=False)
         location = resp.headers.get("Location") or ""
@@ -1188,7 +1249,7 @@ def _fetch_video_thumb(video_id: str, image_url: str) -> bool:
 
 
 def _can_delete_video(video: dict) -> bool:
-    if not storage.load_users():  # dev mode ไม่มีบัญชี
+    if auth_disabled():  # dev mode ไม่มีบัญชี
         return True
     return is_admin() or video.get("added_by") == current_username()
 
@@ -1472,6 +1533,10 @@ def _record_activity(username: str, kind: str | None = None, item_id: str | None
 
 # ---------- คอมเมนต์ (มังงะรายตอน / วิดีโอรายคลิป) ----------
 MAX_COMMENT_LENGTH = 1000
+COMMENT_RATE_LIMIT = 6          # คอมเมนต์ได้ไม่เกินกี่ข้อความ
+COMMENT_RATE_WINDOW = 60        # ต่อคนต่อนาที
+MAX_COMMENTS_PER_TARGET = 500   # เก็บต่อเรื่อง/คลิปไม่เกินนี้ (ตัดอันเก่าสุด) — ไฟล์ถูกเขียนใหม่ทั้งไฟล์ทุกครั้ง
+_comment_log: dict[str, list[float]] = {}
 
 
 def _comment_target(args) -> tuple[str | None, str | None, str | None]:
@@ -1497,7 +1562,7 @@ def _comment_target(args) -> tuple[str | None, str | None, str | None]:
 
 def _public_comment(comment: dict) -> dict:
     username = current_username()
-    can_delete = not storage.load_users() or is_admin() or comment["user"] == username
+    can_delete = auth_disabled() or is_admin() or comment["user"] == username
     return {**comment, "can_delete": can_delete}
 
 
@@ -1518,6 +1583,12 @@ def add_comment():
     text = str(body.get("text") or "").strip()
     if not text or len(text) > MAX_COMMENT_LENGTH:
         return jsonify({"error": f"ข้อความต้องมี 1-{MAX_COMMENT_LENGTH} ตัวอักษร"}), 400
+    now = time.time()
+    who = current_username() or client_ip()
+    recent = [t for t in _comment_log.get(who, []) if now - t < COMMENT_RATE_WINDOW]
+    if len(recent) >= COMMENT_RATE_LIMIT:
+        return jsonify({"error": "ส่งคอมเมนต์ถี่เกินไป รอสักครู่แล้วลองใหม่"}), 429
+    _comment_log[who] = recent + [now]
     comment = {
         "id": secrets.token_hex(8),
         "user": current_username() or "local",
@@ -1533,6 +1604,7 @@ def add_comment():
         if parent:
             comment["reply_to"] = parent["id"]
         comments.setdefault(target, []).append(comment)
+        comments[target] = comments[target][-MAX_COMMENTS_PER_TARGET:]
         storage.save_comments(comments)
     _notify_comment(comment, parent, thread, body)
     return jsonify(_public_comment(comment)), 201
@@ -2404,20 +2476,21 @@ def update_category(category_id):
 @app.route("/api/categories/<category_id>", methods=["DELETE"])
 @require_admin
 def delete_category(category_id):
-    categories = storage.load_categories(fresh=True)
-    remaining = [c for c in categories if c["id"] != category_id]
-    if len(remaining) == len(categories):
-        return jsonify({"error": "ไม่พบหมวดหมู่นี้"}), 404
-    storage.save_categories(remaining)
-    # เอาออกจากทุกเรื่องด้วย กันมี id หมวดที่ไม่มีอยู่จริงค้างใน manga.json
-    manga_items = storage.load_manga(fresh=True)
-    changed = False
-    for m in manga_items:
-        if category_id in (m.get("categories") or []):
-            m["categories"] = [c for c in m["categories"] if c != category_id]
-            changed = True
-    if changed:
-        storage.save_manga(manga_items)
+    with storage.state_lock:
+        categories = storage.load_categories(fresh=True)
+        remaining = [c for c in categories if c["id"] != category_id]
+        if len(remaining) == len(categories):
+            return jsonify({"error": "ไม่พบหมวดหมู่นี้"}), 404
+        storage.save_categories(remaining)
+        # เอาออกจากทุกเรื่องด้วย กันมี id หมวดที่ไม่มีอยู่จริงค้างใน manga.json
+        manga_items = storage.load_manga(fresh=True)
+        changed = False
+        for m in manga_items:
+            if category_id in (m.get("categories") or []):
+                m["categories"] = [c for c in m["categories"] if c != category_id]
+                changed = True
+        if changed:
+            storage.save_manga(manga_items)
     return jsonify({"ok": True})
 
 
@@ -2443,13 +2516,14 @@ def set_category_manga(category_id):
     if not any(c["id"] == category_id for c in storage.load_categories()):
         return jsonify({"error": "ไม่พบหมวดหมู่นี้"}), 404
     wanted = set(manga_ids)
-    manga_items = storage.load_manga(fresh=True)
-    for m in manga_items:
-        cats = [c for c in (m.get("categories") or []) if c != category_id]
-        if m["id"] in wanted:
-            cats.append(category_id)
-        m["categories"] = cats
-    storage.save_manga(manga_items)
+    with storage.state_lock:
+        manga_items = storage.load_manga(fresh=True)
+        for m in manga_items:
+            cats = [c for c in (m.get("categories") or []) if c != category_id]
+            if m["id"] in wanted:
+                cats.append(category_id)
+            m["categories"] = cats
+        storage.save_manga(manga_items)
     return jsonify({"ok": True})
 
 
@@ -2462,12 +2536,13 @@ def set_manga_categories(manga_id):
     if not isinstance(ids, list):
         return jsonify({"error": "ข้อมูลไม่ถูกต้อง"}), 400
     known = {c["id"] for c in storage.load_categories()}
-    manga_items = storage.load_manga(fresh=True)
-    manga = next((m for m in manga_items if m["id"] == manga_id), None)
-    if not manga:
-        return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
-    manga["categories"] = [i for i in dict.fromkeys(ids) if i in known]
-    storage.save_manga(manga_items)
+    with storage.state_lock:
+        manga_items = storage.load_manga(fresh=True)
+        manga = next((m for m in manga_items if m["id"] == manga_id), None)
+        if not manga:
+            return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
+        manga["categories"] = [i for i in dict.fromkeys(ids) if i in known]
+        storage.save_manga(manga_items)
     return jsonify({"categories": manga["categories"]})
 
 
@@ -2563,11 +2638,12 @@ def add_manga():
             new_item["last_updated_at"] = new_item["last_checked_at"]
 
     # โหลดใหม่หลังดึงข้อมูลเสร็จ (ใช้เวลาหลายวินาที) กันทับของที่คนอื่นแก้ระหว่างนั้น
-    manga_items = storage.load_manga(fresh=True)
-    if any(m["id"] == mid for m in manga_items):
-        return jsonify({"error": "มีเรื่องนี้อยู่แล้ว"}), 409
-    manga_items.append(new_item)
-    storage.save_manga(manga_items)
+    with storage.state_lock:
+        manga_items = storage.load_manga(fresh=True)
+        if any(m["id"] == mid for m in manga_items):
+            return jsonify({"error": "มีเรื่องนี้อยู่แล้ว"}), 409
+        manga_items.append(new_item)
+        storage.save_manga(manga_items)
 
     # คนเพิ่มเรื่อง (admin) ให้ติดตามเรื่องนี้เองอัตโนมัติ (ถ้ามี session จริง — dev mode ไม่มี user เลยข้าม)
     if current_username():
@@ -2601,28 +2677,29 @@ def edit_manga(manga_id):
     # (ดึงก่อนโหลดไฟล์มาแก้ ช่วงรอเว็บต้นทางหลายวินาทีจะได้ไม่ทับของที่คนอื่นบันทึกไประหว่างนั้น)
     parsed = refresh_from_sources(sources, manga_id=manga_id)
 
-    manga_items = storage.load_manga(fresh=True)
-    manga = next((m for m in manga_items if m["id"] == manga_id), None)
-    if not manga:
-        return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
-    manga["name"] = name
-    manga["sources"] = sources
-    manga["url"] = urls[0]
-    if parsed:
-        _apply_refresh(manga, parsed)
-
-    storage.save_manga(manga_items)
+    with storage.state_lock:
+        manga_items = storage.load_manga(fresh=True)
+        manga = next((m for m in manga_items if m["id"] == manga_id), None)
+        if not manga:
+            return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
+        manga["name"] = name
+        manga["sources"] = sources
+        manga["url"] = urls[0]
+        if parsed:
+            _apply_refresh(manga, parsed)
+        storage.save_manga(manga_items)
     return jsonify(public_manga(manga))
 
 
 @app.route("/api/manga/<manga_id>", methods=["DELETE"])
 @require_admin
 def delete_manga(manga_id):
-    manga_items = storage.load_manga(fresh=True)
-    remaining = [m for m in manga_items if m["id"] != manga_id]
-    if len(remaining) == len(manga_items):
-        return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
-    storage.save_manga(remaining)
+    with storage.state_lock:
+        manga_items = storage.load_manga(fresh=True)
+        remaining = [m for m in manga_items if m["id"] != manga_id]
+        if len(remaining) == len(manga_items):
+            return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
+        storage.save_manga(remaining)
 
     # เอาออกจาก subscriptions/read_state ของทุกคน กันข้อมูลค้าง
     with storage.state_lock:
@@ -2651,20 +2728,22 @@ def _commit_refreshes(results: dict[str, dict], failed_ids: set[str] | None = No
     failed_ids = failed_ids or set()
     if not results and not failed_ids:
         return []
-    manga_items = storage.load_manga(fresh=True)
-    changed = []
-    for manga in manga_items:
-        if manga["id"] in failed_ids:
-            manga["refresh_error"] = {"at": now_iso(), "error": "ดึงข้อมูลไม่สำเร็จจากทุกแหล่งที่มา"}
-            continue
-        parsed = results.get(manga["id"])
-        if not parsed:
-            continue
-        manga.pop("refresh_error", None)
-        prev_chapter = _apply_refresh(manga, parsed)
-        if _is_new_chapter(prev_chapter, parsed.get("latest_chapter")):
-            changed.append((manga, prev_chapter))
-    storage.save_manga(manga_items)
+    # ล็อกช่วงโหลด→บันทึก กันชนกับแอดมินที่กำลังแก้/ลบเรื่อง (ไม่มีเน็ตในช่วงนี้ ผลดึงได้มาก่อนแล้ว)
+    with storage.state_lock:
+        manga_items = storage.load_manga(fresh=True)
+        changed = []
+        for manga in manga_items:
+            if manga["id"] in failed_ids:
+                manga["refresh_error"] = {"at": now_iso(), "error": "ดึงข้อมูลไม่สำเร็จจากทุกแหล่งที่มา"}
+                continue
+            parsed = results.get(manga["id"])
+            if not parsed:
+                continue
+            manga.pop("refresh_error", None)
+            prev_chapter = _apply_refresh(manga, parsed)
+            if _is_new_chapter(prev_chapter, parsed.get("latest_chapter")):
+                changed.append((manga, prev_chapter))
+        storage.save_manga(manga_items)
 
     for manga, prev_chapter in changed:
         # แจ้งเตือนเฉพาะตอนที่เคยรู้ตอนล่าสุดมาก่อนแล้วเปลี่ยน (ไม่แจ้งตอนเพิ่งเพิ่มเรื่องใหม่)
@@ -2701,12 +2780,24 @@ def refresh_manga(manga_id):
     return jsonify(serialize(manga, read_state))
 
 
+_refresh_all_lock = threading.Lock()
+
+
 @app.route("/api/refresh_all", methods=["POST"])
 def refresh_all():
     # เข้าถึงได้จาก CRON_TOKEN (refresh_loop.py, ไม่มี session) หรือ session ของ admin เท่านั้น
     if current_username() and not is_admin():
         return jsonify({"error": "เฉพาะ admin เท่านั้น"}), 403
+    # ทีละรอบเท่านั้น: รอบอัตโนมัติ (ทุก 30 นาที) ชนกับแอดมินกดเอง = ดึงทุกเว็บซ้อนสองชุด thread หมด เว็บจอขาว
+    if not _refresh_all_lock.acquire(blocking=False):
+        return jsonify({"busy": True, "items": manga_list_payload(current_username()), "updated_ids": [], "failed": []}), 409
+    try:
+        return _refresh_all_locked()
+    finally:
+        _refresh_all_lock.release()
 
+
+def _refresh_all_locked():
     manga_items = list(storage.load_manga())
     results: dict[str, dict] = {}
     failed = []
@@ -3046,7 +3137,9 @@ def save_scroll_position(manga_id):
     fraction = max(0.0, min(1.0, float(fraction)))
 
     manga = storage.get_manga(manga_id)
-    chapter = next((c for c in (manga.get("chapters") or []) if c["url"] == chapter_url), None) if manga else None
+    if not manga:
+        return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
+    chapter = next((c for c in (manga.get("chapters") or []) if c["url"] == chapter_url), None)
     key = _chapter_key(chapter["text"] if chapter else None, chapter_url)
 
     with storage.state_lock:
@@ -3142,6 +3235,10 @@ def proxy_image():
     allowed = storage.get_allowed_domains()
     parsed_src = urlparse(src)
     netloc = parsed_src.netloc
+    # โดเมนที่อนุญาตเรียนรู้เองจากรูปในหน้าตอนของเว็บต้นทาง — ต้องเป็นที่อยู่สาธารณะด้วย กันเว็บต้นทาง (หรือ CDN
+    # ที่เด้ง 302) พาเซิร์ฟเวอร์ไปยิง 127.0.0.1 / LAN / 169.254.169.254 (redirect เช็คใน scraper.guard_redirect)
+    if not scraper.is_public_url(src):
+        return "address not allowed", 403
 
     is_allowed = netloc in allowed
     # เว็บกลุ่มนี้บางเว็บใช้ Jetpack Photon CDN (i0/i1/i2/i3.wp.com) พร็อกซีรูปโดยฝัง
