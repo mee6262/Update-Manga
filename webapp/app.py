@@ -1314,6 +1314,7 @@ def list_videos():
 
 
 @app.route("/api/videos", methods=["POST"])
+@require_admin  # เพิ่มคลิปได้เฉพาะแอดมิน (ปุ่มในหน้าวิดีโอซ่อนสำหรับสมาชิก)
 def add_video():
     username = current_username()
     if not username and storage.load_users():

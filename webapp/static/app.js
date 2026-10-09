@@ -263,7 +263,7 @@ function renderVideos() {
   // ผลค้นหาในหน้าค้นหาใช้ข้อมูลคลิปชุดเดียวกัน — บันทึก/ลบ/ดูค้างแล้วต้องอัปเดตตามด้วย
   if (el("#searchInput").value.trim()) renderSearch();
   renderVideoCategoryChips();
-  el("#videoToolbar").hidden = videoTab !== "home";
+  el("#videoToolbar").hidden = videoTab !== "home" || !state.currentUser.is_admin; // เพิ่มคลิปได้เฉพาะแอดมิน
   el("#videoHome").hidden = !rows;
   if (rows) renderVideoHome();
   el("#libraryView").hidden = !library;
