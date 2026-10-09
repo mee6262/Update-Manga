@@ -4753,6 +4753,12 @@ function renderVideoManage() {
 // ---------- แผ่นแก้ไข (กด ⋯ / แถว) ----------
 let vmSheetKey = null;
 
+// "ภาค 2" / "ภาค2" / "ซีซั่น 3" / "Season 2" ในชื่อเรื่อง → เลขซีซั่น (ไว้ใส่ค่าเริ่มต้นตอนรวมเรื่องเป็นซีซั่น)
+function guessSeason(name) {
+  const m = String(name).match(/(?:ภาค(?:ที่)?|ซีซั่น|ซีซัน|season|ss)\s*(\d+)/i);
+  return m ? Number(m[1]) : "";
+}
+
 // ส่วน YouTube ในแผ่นแก้ไขเรื่อง: playlist ต้นทางแต่ละภาษา (ติดตามตอนใหม่ เปิด/ปิด) + ตั้งชื่อซีซั่น
 function ytSheetHtml(p) {
   const tracks = p.tracks || [];
@@ -4790,13 +4796,19 @@ function openVmSheet(key, { episodes = false } = {}) {
     const p = playlistById(id);
     if (!p) return closeVmSheet();
     const eps = allPlaylistEpisodes(id);
-    const twins = similarPlaylists().get(id) || [];
+    // เรื่องเดียวกันคนละภาค ("อุ้ยเสี่ยวป้อภาค1" ↔ "ภาค2") ขึ้นก่อน — ตัวหาชื่อคล้าย (similarPlaylists) ถือว่าเลขต่าง = คนละเรื่อง
+    const base = (n) => String(n).replace(/(?:ภาค(?:ที่)?|ซีซั่น|ซีซัน|season|ss)\s*\d+/gi, "").replace(/\s+/g, "").toLowerCase();
+    const seasonTwins = (state.videoPlaylists || []).filter((x) => x.id !== id && base(x.name) === base(p.name)).map((x) => x.id);
+    const twins = [...new Set([...seasonTwins, ...(similarPlaylists().get(id) || [])])];
     const others = [...twins.map(playlistById), ...(state.videoPlaylists || []).filter((x) => x.id !== id && !twins.includes(x.id))].filter(Boolean);
     body.innerHTML = `<div class="sheet-head">${vmThumb(p.thumbnail_url)}<div><div class="name">${escapeHtml(p.name)}</div><div class="meta">${eps.length} ตอน${eps.length ? ` · ตอนที่ ${Number(eps[0].episode)}–${Number(eps[eps.length - 1].episode)}` : ""}</div></div></div>
       <label class="vm-field">ชื่อเรื่อง<input id="sheetName" value="${escapeHtml(p.name)}" maxlength="80" /></label>
       <div class="vm-field">หมวด<div class="pl-controls" id="sheetCats">${catChipsHtml(p.category_id)}</div></div>
       <button class="btn primary" data-sheet-save>บันทึก</button>
       <div class="vm-field">รวมเข้ากับเรื่องอื่น<select id="sheetMergeTarget" class="form-select">${others.map((o, i) => `<option value="${escapeHtml(o.id)}">${i < twins.length ? "★ " : ""}${escapeHtml(o.name)} (${o.count} ตอน)</option>`).join("")}</select>
+        <div class="merge-opts"><label>เป็นซีซั่น <input id="sheetMergeSeason" type="number" min="1" max="99" inputmode="numeric" value="${guessSeason(p.name)}" placeholder="—" /></label>
+          <label>ภาษา <select id="sheetMergeLang" class="form-select"><option value="">ไม่ระบุ</option><option value="dub">พากย์ไทย</option><option value="sub">ซับไทย</option></select></label></div>
+        <div class="hint">ซีซั่นว่าง = ย้ายตอนไปต่อเรื่องเดิมแบบเดิม · ใส่เลข = เรื่องนี้เป็นภาคนั้นของเรื่องปลายทาง (เลขตอนไม่ชนกัน)</div>
         <button class="btn" data-sheet-merge>รวมทุกตอนเข้าเรื่องที่เลือก</button></div>
       ${ytSheetHtml(p)}
       <button class="btn" data-sheet-episodes>${episodes ? "ซ่อนรายการตอน" : "ดูรายการตอน / แก้เลขตอน"}</button>
@@ -4864,8 +4876,11 @@ async function vmSheetAction(e) {
     } else if (e.target.closest("[data-sheet-merge]")) {
       const target = playlistById(el("#sheetMergeTarget").value);
       const p = playlistById(id);
-      if (!target || !(await askConfirm(`ย้ายทั้ง ${p.count} ตอนของ "${p.name}" เข้า "${target.name}" แล้วลบ "${p.name}"?`))) return;
-      const res = await sendJSON("POST", `/api/video-playlists/${encodeURIComponent(id)}/merge`, { into: target.id });
+      const season = el("#sheetMergeSeason").value.trim();
+      const lang = el("#sheetMergeLang").value;
+      const as = `${season ? ` เป็นซีซั่น ${season}` : ""}${lang ? ` (${LANG_LABEL[lang]})` : ""}`;
+      if (!target || !(await askConfirm(`ย้ายทั้ง ${p.count} ตอนของ "${p.name}" เข้า "${target.name}"${as} แล้วลบ "${p.name}"?`))) return;
+      const res = await sendJSON("POST", `/api/video-playlists/${encodeURIComponent(id)}/merge`, { into: target.id, season: season || null, lang: lang || null });
       await refresh();
       openVmSheet(`pl:${target.id}`, { episodes: true });
       el("#sheetMsg").textContent = `รวมแล้ว ${res.moved} ตอน — ตรวจเลขตอนซ้ำด้านบนได้เลย`;

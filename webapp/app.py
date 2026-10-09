@@ -1955,6 +1955,10 @@ def _store_playlist_items(groups: list[tuple[str, list[dict]]], category_name: s
         by_key = {v.get("canonical_key"): v for v in videos}
         for name, items in groups:
             playlist = next((p for p in playlists if p["name"] == name), None)
+            alias = None
+            if not playlist:  # ชื่อเรื่องเดิมที่ถูกรวมเป็นซีซั่นของเรื่องอื่นแล้ว
+                playlist = next((p for p in playlists if any(a["name"] == name for a in p.get("aliases", []))), None)
+                alias = playlist and next(a for a in playlist["aliases"] if a["name"] == name)
             created = not playlist
             if created:
                 playlist = {"id": secrets.token_hex(4), "name": name, "created_at": now}
@@ -1971,8 +1975,10 @@ def _store_playlist_items(groups: list[tuple[str, list[dict]]], category_name: s
                     continue
                 episode = item["episode"]
                 if episode is None:  # ไม่มีเลขตอน: ต่อท้ายตอนล่าสุดของเรื่อง
+                    season = (alias or {}).get("season") or None  # รวมเป็นซีซั่นแล้ว: ต่อท้ายในซีซั่นนั้น
                     episode = float(int(max((v.get("episode") or 0 for v in videos
-                                             if v.get("playlist_id") == playlist["id"]), default=0)) + 1)
+                                             if v.get("playlist_id") == playlist["id"]
+                                             and (not season or (v.get("season") or 1) == season)), default=0)) + 1)
                 if video:
                     moved += video.get("playlist_id") != playlist["id"] or video.get("episode") != episode
                 else:
@@ -1986,6 +1992,10 @@ def _store_playlist_items(groups: list[tuple[str, list[dict]]], category_name: s
                     added += 1
                 video["playlist_id"] = playlist["id"]
                 video["episode"] = episode
+                if alias and alias.get("season"):
+                    video["season"] = alias["season"]
+                if alias and alias.get("lang"):
+                    video["lang"] = alias["lang"]
                 items_out.append({"title": item["title"], "playlist": name, "episode": episode,
                                   "status": "added", "new_playlist": created})
                 if not video.get("thumbnail_url") and item["image"]:
@@ -2112,9 +2122,20 @@ def update_video_playlist(playlist_id):
 def merge_video_playlist(playlist_id):
     """รวมเรื่อง (ชื่อแตกเป็นสองเรื่อง เช่น "มหาเวท"/"มหาเวทย์"): ย้ายทุกตอนเข้าเรื่องปลายทาง แล้วลบเรื่องนี้
     เลขตอนซ้ำกันเก็บไว้ทั้งคู่ (แก้เลขเองทีหลัง); คนที่บันทึกเรื่องนี้ไว้ ย้ายไปบันทึกเรื่องปลายทางแทน"""
-    target_id = str((request.get_json(force=True, silent=True) or {}).get("into") or "")
+    body = request.get_json(force=True, silent=True) or {}
+    target_id = str(body.get("into") or "")
     if target_id == playlist_id:
         return jsonify({"error": "เลือกเรื่องอื่น"}), 400
+    # รวมเป็นซีซั่น (เช่น เพจลงภาค 2 เป็น playlist แยก) — ไม่ระบุ = ย้ายตอนไปแบบเดิม
+    season = None
+    if body.get("season") not in (None, ""):
+        try:
+            season = int(body["season"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "ซีซั่นต้องเป็นตัวเลข"}), 400
+        if not 1 <= season <= 99:
+            return jsonify({"error": "ซีซั่นไม่ถูกต้อง"}), 400
+    lang = body.get("lang") if body.get("lang") in ("dub", "sub") else None
     with storage.state_lock:
         playlists = storage.load_video_playlists(fresh=True)
         source = next((p for p in playlists if p["id"] == playlist_id), None)
@@ -2126,7 +2147,21 @@ def merge_video_playlist(playlist_id):
         for video in videos:
             if video.get("playlist_id") == playlist_id:
                 video["playlist_id"] = target_id
+                if season:
+                    video["season"] = season
+                if lang:
+                    video["lang"] = lang
                 moved += 1
+        # ชื่อเดิมเป็นชื่อแฝงของเรื่องปลายทาง — เพจยังลงตอนใหม่ชื่อ "…ภาค2" ตัวเช็คเพจจะได้ใส่เข้าซีซั่นนี้ ไม่สร้างเรื่องเดิมขึ้นมาใหม่
+        aliases = [a for a in target.get("aliases", []) if a["name"] != source["name"]]
+        aliases.append({"name": source["name"], "season": season, "lang": lang})
+        aliases.extend(a for a in source.get("aliases", []) if a["name"] not in {x["name"] for x in aliases})
+        target["aliases"] = aliases
+        # playlist YouTube ที่ติดตามอยู่ของเรื่องต้นทาง ย้ายตามไปเช็คตอนใหม่ที่เรื่องปลายทาง
+        source_tracks = source.get("tracks") or []
+        if source_tracks:
+            target.setdefault("tracks", []).extend(t for t in source_tracks
+                                                   if t["list_id"] not in {x["list_id"] for x in target.get("tracks", [])})
         storage.save_videos(videos)
         storage.save_video_playlists([p for p in playlists if p["id"] != playlist_id])
         src_key, dst_key = f"playlist:{playlist_id}", f"playlist:{target_id}"
@@ -2199,7 +2234,7 @@ def _add_reels_to_playlists(urls: list[str], category_name: str, username: str,
             todo.append(facebook_url)
     with ThreadPoolExecutor(max_workers=4) as pool:
         metas = list(pool.map(_facebook_page_meta, todo))
-    names = [p["name"] for p in storage.load_video_playlists()]
+    names = [n for p in storage.load_video_playlists() for n in [p["name"], *(a["name"] for a in p.get("aliases", []))]]
     groups: dict[str, list[dict]] = {}
     for facebook_url, meta in zip(todo, metas):
         title = _reel_title(meta.get("title") or "")
