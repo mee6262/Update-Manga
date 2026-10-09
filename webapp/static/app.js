@@ -1044,11 +1044,41 @@ function reuseNativeVideo(position, sources) {
 // (หน้าตัวเล่น, แถบเมนูล่าง) ตามความสูงจอแนวนอน → ตัวเล่นเหลือครึ่งจอ เมนูล่างลอยกลางจอ
 // กระตุ้นให้คำนวณ viewport ใหม่ด้วยการเลื่อนหน้า 1px แล้วเลื่อนกลับ (ซ้ำหลังแอนิเมชันหมุนจอจบ)
 function nudgeViewport() {
-  [100, 500, 1000].forEach((ms) => setTimeout(() => {
-    const y = window.scrollY;
-    window.scrollTo(0, y + 1);
-    window.scrollTo(0, y);
-  }, ms));
+  [100, 500, 1000].forEach((ms) => setTimeout(fixFixedLayout, ms));
+}
+
+// เลื่อน 1px (ถอยขึ้นถ้าอยู่ท้ายหน้า — เลื่อนลงเกินท้ายหน้าไม่มีผล) + ซ่อน/โชว์เมนูล่างให้ Safari จัดตำแหน่งใหม่
+function fixFixedLayout() {
+  const y = window.scrollY;
+  window.scrollTo(0, y > 0 ? y - 1 : y + 1);
+  window.scrollTo(0, y);
+  const nav = el(".bottom-nav");
+  nav.style.display = "none";
+  void nav.offsetHeight;
+  nav.style.display = "";
+}
+
+// ตรวจว่าเมนูล่างไม่ชิดขอบจอ (ลอยกลางจอ) — เกิดได้หลังคีย์บอร์ดหุบ/ออกจากเต็มจอ ตอนที่หน้ายังล็อกเลื่อนอยู่
+function checkBottomNav() {
+  if (document.hidden) return;
+  const nav = el(".bottom-nav");
+  if (!nav || getComputedStyle(nav).display === "none") return;
+  const active = document.activeElement;
+  if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return; // คีย์บอร์ดยังเปิด
+  const vv = window.visualViewport;
+  const screenBottom = Math.max(window.innerHeight, vv ? vv.height + vv.offsetTop : 0);
+  if (screenBottom - nav.getBoundingClientRect().bottom > 4) fixFixedLayout();
+}
+
+function initFixedLayoutGuard() {
+  let t = null;
+  const later = () => { clearTimeout(t); t = setTimeout(checkBottomNav, 150); };
+  window.addEventListener("resize", later);
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", later);
+  window.addEventListener("scroll", later, { passive: true });
+  document.addEventListener("focusout", later);
+  document.addEventListener("visibilitychange", later);
+  window.addEventListener("pageshow", later);
 }
 
 // ---------- ความเร็ว / แตะสองครั้งข้าม 10 วิ / ตั้งเวลาปิด (เฉพาะตัวเล่นของเว็บเอง) ----------
@@ -1491,6 +1521,7 @@ function initVideos() {
   el("#autoNextBtn").addEventListener("click", () => setAutoNextPref(!autoNextOn()));
   window.addEventListener("pagehide", () => { stopVideoClock(); saveActiveVideoProgress(true); });
   window.addEventListener("orientationchange", nudgeViewport);
+  initFixedLayoutGuard();
   document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement) nudgeViewport(); });
   document.addEventListener("webkitfullscreenchange", () => { if (!document.webkitFullscreenElement) nudgeViewport(); });
   // แตะเล่นในกรอบคลิป (iframe ของ Facebook) ทำให้หน้าเว็บเสียโฟกัส — ใช้เป็นสัญญาณเริ่มเล่นสำรอง
