@@ -4758,6 +4758,9 @@ function ytSheetHtml(p) {
   const tracks = p.tracks || [];
   const seasons = [...new Set(allPlaylistEpisodes(p.id).map((v) => v.season || 1))].sort((a, b) => a - b);
   if (!tracks.length && seasons.length < 2) return "";
+  const starts = (p.season_starts || []).map((n) => Number(n)).join(", ");
+  const split = tracks.length ? `<label class="vm-field">แบ่งซีซั่นเอง: ตอนที่เริ่มซีซั่นใหม่ (คั่นด้วย ,)<input id="sheetSeasonStarts" value="${escapeHtml(starts)}" placeholder="เช่น 13 หรือ 13, 25 (ว่าง = ดูจากชื่อคลิป)" inputmode="decimal" /></label>
+    <div class="hint">ใช้เมื่อชื่อคลิปไม่บอกซีซั่น (เช่น ตอนที่ 1–24 ต่อกันแต่เป็น 2 ซีซั่น) — ตอนใหม่ที่ดึงมาทีหลังเข้าซีซั่นตามนี้ด้วย</div>` : "";
   const rows = tracks.map((t) => {
     const status = t.error ? `<span class="status-dot bad"></span><span class="status-bad">${escapeHtml(t.error)}</span>`
       : `<span class="status-dot ok"></span>เช็ค ${timeAgo(t.checked_at, "เมื่อสักครู่")}`;
@@ -4766,7 +4769,7 @@ function ytSheetHtml(p) {
   }).join("");
   const names = seasons.length > 1 ? `<div class="vm-field">ชื่อซีซั่น (ว่าง = "ซีซั่น N")${seasons.map((n) =>
     `<label class="season-name">${n}<input data-season-name="${n}" value="${escapeHtml((p.season_names || {})[n] || "")}" placeholder="ซีซั่น ${n}" maxlength="30" /></label>`).join("")}</div>` : "";
-  return `${tracks.length ? `<div class="vm-field">playlist YouTube (เช็คตอนใหม่ทุก 1 ชม.)<ul class="settings-list vm-list">${rows}</ul></div>` : ""}${names}`;
+  return `${tracks.length ? `<div class="vm-field">playlist YouTube (เช็คตอนใหม่ทุก 1 ชม.)<ul class="settings-list vm-list">${rows}</ul></div>` : ""}${split}${names}`;
 }
 
 function closeVmSheet() {
@@ -4819,7 +4822,16 @@ async function vmSheetChange(e) {
   if (!id) return;
   const follow = e.target.closest("[data-track-follow]");
   const season = e.target.closest("[data-season-name]");
+  const starts = e.target.closest("#sheetSeasonStarts");
   try {
+    if (starts) {
+      const list = starts.value.split(/[,\s]+/).filter(Boolean).map(Number);
+      if (list.some((n) => !(n > 0))) return toast("ใส่เลขตอน เช่น 13 หรือ 13, 25", { error: true });
+      await sendJSON("PATCH", `/api/video-playlists/${encodeURIComponent(id)}`, { season_starts: list });
+      await loadVideos();
+      openVmSheet(vmSheetKey);
+      return toast(list.length ? `แบ่งเป็น ${list.length + 1} ซีซั่นแล้ว` : "กลับไปใช้ซีซั่นตามชื่อคลิปแล้ว");
+    }
     if (follow) await sendJSON("PATCH", `/api/video-playlists/${encodeURIComponent(id)}`, { track: { list_id: follow.dataset.trackFollow, follow: follow.checked } });
     else if (season) await sendJSON("PATCH", `/api/video-playlists/${encodeURIComponent(id)}`, { season_name: { season: Number(season.dataset.seasonName), name: season.value } });
     else return;

@@ -1895,6 +1895,7 @@ def _public_playlists(videos: list[dict], saved: dict | None = None) -> list[dic
             "tracks": [{k: t.get(k) for k in ("list_id", "lang", "follow", "title", "checked_at", "error")}
                        for t in playlist.get("tracks", [])],
             "season_names": playlist.get("season_names") or {},
+            "season_starts": playlist.get("season_starts") or [],
             "provider": "youtube" if any(v.get("provider") == "youtube" for v in items) else "facebook",
             "thumbnail_url": cover,
             "updated_at": max(v.get("created_at", "") for v in items),
@@ -2083,6 +2084,19 @@ def update_video_playlist(playlist_id):
             else:
                 names.pop(str(int(item.get("season") or 1)), None)
             playlist["season_names"] = names
+        if "season_starts" in body:  # [13, 25] = ตอน 13 เริ่มซีซั่น 2, ตอน 25 เริ่มซีซั่น 3 ([] = ตามชื่อคลิป)
+            try:
+                starts = sorted({float(x) for x in body.get("season_starts") or [] if float(x) > 0})
+            except (TypeError, ValueError):
+                return jsonify({"error": "เลขตอนต้องเป็นตัวเลข"}), 400
+            if len(starts) > 30:
+                return jsonify({"error": "แบ่งได้ไม่เกิน 30 ซีซั่น"}), 400
+            playlist["season_starts"] = starts
+            videos = storage.load_videos(fresh=True)
+            for video in videos:
+                if video.get("playlist_id") == playlist_id and video.get("provider") == "youtube":
+                    video["season"] = _season_of(video["title"], video.get("episode"), starts)
+            storage.save_videos(videos)
         if "track" in body:  # {"list_id", "follow": bool}
             item = body.get("track") or {}
             track = next((t for t in playlist.get("tracks", []) if t["list_id"] == item.get("list_id")), None)
@@ -2342,6 +2356,17 @@ def youtube_preview():
     })
 
 
+def _season_of(title: str, episode, starts: list, default: int = 1) -> int:
+    """ซีซั่นของตอน: ชื่อคลิปบอก ("ภาค 2", "ซีซั่น 3") ใช้ตามนั้น — ไม่บอก ใช้จุดแบ่งที่แอดมินตั้ง (season_starts =
+    เลขตอนแรกของแต่ละซีซั่นถัดไป เช่น [13] = ตอน 13 ขึ้นไปเป็นซีซั่น 2) เพราะบางช่องตั้งชื่อตอนต่อกันเฉย ๆ ไม่มีซีซั่น"""
+    marked = youtube.detect_season(title)
+    if marked:
+        return marked
+    if starts and episode is not None:
+        return 1 + sum(1 for start in starts if episode >= start)
+    return default
+
+
 def _store_youtube_items(list_id: str, info: dict, *, playlist_id: str | None, name: str, lang: str | None,
                          category_id: str | None, follow: bool, username: str) -> dict:
     """ตอนจาก playlist YouTube → เรื่อง (เดิมหรือใหม่) — ซีซั่น/ภาษา/เลขตอนจากชื่อคลิป คลิปที่มีแล้วข้าม
@@ -2379,7 +2404,8 @@ def _store_youtube_items(list_id: str, info: dict, *, playlist_id: str | None, n
             video.update({
                 "playlist_id": playlist["id"],
                 "episode": episode if episode is not None else float(item["index"]),
-                "season": youtube.detect_season(item["title"]) or default_season,
+                "season": _season_of(item["title"], episode if episode is not None else float(item["index"]),
+                                     playlist.get("season_starts") or [], default_season),
                 "lang": youtube.detect_lang(item["title"]) or track.get("lang"),
             })
             if first_import:
