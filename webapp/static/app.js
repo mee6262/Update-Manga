@@ -4849,7 +4849,8 @@ function openVmSheet(key, { episodes = false } = {}) {
       <div class="vm-field">รวมเข้ากับเรื่องอื่น<select id="sheetMergeTarget" class="form-select">${others.map((o, i) => `<option value="${escapeHtml(o.id)}">${i < twins.length ? "★ " : ""}${escapeHtml(o.name)} (${o.count} ตอน)</option>`).join("")}</select>
         <div class="merge-opts"><label>เป็นซีซั่น <input id="sheetMergeSeason" type="number" min="1" max="99" inputmode="numeric" value="${guessSeason(p.name)}" placeholder="—" /></label>
           <label>ภาษา <select id="sheetMergeLang" class="form-select"><option value="">ไม่ระบุ</option><option value="dub">พากย์ไทย</option><option value="sub">ซับไทย</option></select></label></div>
-        <div class="hint">ซีซั่นว่าง = ย้ายตอนไปต่อเรื่องเดิมแบบเดิม · ใส่เลข = เรื่องนี้เป็นภาคนั้นของเรื่องปลายทาง (เลขตอนไม่ชนกัน)</div>
+        <label class="switch-label">ต่อเลขตอนจากเรื่องปลายทาง <input type="checkbox" class="switch" id="sheetMergeRenumber" /></label>
+        <div class="hint">ซีซั่นว่าง = ย้ายตอนไปต่อเรื่องเดิมแบบเดิม · ใส่เลข = เรื่องนี้เป็นภาคนั้นของเรื่องปลายทาง · ต่อเลขตอน = เรียงตอนตามลำดับเดิมแล้วนับต่อจากตอนสุดท้ายของปลายทาง (ใช้กับภาคที่เริ่มตอน 1 ใหม่ หรือไม่มีเลขตอน)</div>
         <button class="btn" data-sheet-merge>รวมทุกตอนเข้าเรื่องที่เลือก</button></div>
       ${ytSheetHtml(p)}
       <button class="btn" data-sheet-episodes>${episodes ? "ซ่อนรายการตอน" : "ดูรายการตอน / แก้เลขตอน"}</button>
@@ -4919,9 +4920,11 @@ async function vmSheetAction(e) {
       const p = playlistById(id);
       const season = el("#sheetMergeSeason").value.trim();
       const lang = el("#sheetMergeLang").value;
-      const as = `${season ? ` เป็นซีซั่น ${season}` : ""}${lang ? ` (${LANG_LABEL[lang]})` : ""}`;
+      const renumber = el("#sheetMergeRenumber").checked;
+      const last = Math.max(0, ...allPlaylistEpisodes(target.id).map((v) => Number(v.episode) || 0));
+      const as = `${season ? ` เป็นซีซั่น ${season}` : ""}${lang ? ` (${LANG_LABEL[lang]})` : ""}${renumber ? `\nเลขตอนเริ่มที่ ${Math.floor(last) + 1}` : ""}`;
       if (!target || !(await askConfirm(`ย้ายทั้ง ${p.count} ตอนของ "${p.name}" เข้า "${target.name}"${as} แล้วลบ "${p.name}"?`))) return;
-      const res = await sendJSON("POST", `/api/video-playlists/${encodeURIComponent(id)}/merge`, { into: target.id, season: season || null, lang: lang || null });
+      const res = await sendJSON("POST", `/api/video-playlists/${encodeURIComponent(id)}/merge`, { into: target.id, season: season || null, lang: lang || null, renumber });
       await refresh();
       openVmSheet(`pl:${target.id}`, { episodes: true });
       el("#sheetMsg").textContent = `รวมแล้ว ${res.moved} ตอน — ตรวจเลขตอนซ้ำด้านบนได้เลย`;

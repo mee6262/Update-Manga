@@ -1974,6 +1974,8 @@ def _store_playlist_items(groups: list[tuple[str, list[dict]]], category_name: s
                     items_out.append({"title": item["title"], "playlist": name, "status": "exists"})
                     continue
                 episode = item["episode"]
+                if episode is not None and alias and alias.get("episode_offset"):
+                    episode += alias["episode_offset"]  # รวมแบบต่อเลขตอนไว้ — "…ตัน2 ตอน 5" = ตอน 12+5
                 if episode is None:  # ไม่มีเลขตอน: ต่อท้ายตอนล่าสุดของเรื่อง
                     season = (alias or {}).get("season") or None  # รวมเป็นซีซั่นแล้ว: ต่อท้ายในซีซั่นนั้น
                     episode = float(int(max((v.get("episode") or 0 for v in videos
@@ -2142,6 +2144,8 @@ def merge_video_playlist(playlist_id):
         if not 1 <= season <= 99:
             return jsonify({"error": "ซีซั่นไม่ถูกต้อง"}), 400
     lang = body.get("lang") if body.get("lang") in ("dub", "sub") else None
+    # ต่อเลขตอน: ภาคหลังเริ่มตอน 1 ใหม่ หรือไม่มีเลขตอนเลย (มีแต่ชื่อตอน) → เรียงตามลำดับเดิมแล้วให้เลขต่อจากตอนสุดท้ายของปลายทาง
+    renumber = bool(body.get("renumber"))
     with storage.state_lock:
         playlists = storage.load_video_playlists(fresh=True)
         source = next((p for p in playlists if p["id"] == playlist_id), None)
@@ -2149,6 +2153,13 @@ def merge_video_playlist(playlist_id):
         if not source or not target:
             return jsonify({"error": "ไม่พบ playlist"}), 404
         videos = storage.load_videos(fresh=True)
+        offset = 0
+        if renumber:
+            offset = int(max((v.get("episode") or 0 for v in videos if v.get("playlist_id") == target_id), default=0))
+            ordered = sorted((v for v in videos if v.get("playlist_id") == playlist_id),
+                             key=lambda v: (v.get("season") or 1, v.get("episode") or 0, v.get("created_at", "")))
+            for i, video in enumerate(ordered, start=1):
+                video["episode"] = float(offset + i)
         moved = 0
         for video in videos:
             if video.get("playlist_id") == playlist_id:
@@ -2160,7 +2171,7 @@ def merge_video_playlist(playlist_id):
                 moved += 1
         # ชื่อเดิมเป็นชื่อแฝงของเรื่องปลายทาง — เพจยังลงตอนใหม่ชื่อ "…ภาค2" ตัวเช็คเพจจะได้ใส่เข้าซีซั่นนี้ ไม่สร้างเรื่องเดิมขึ้นมาใหม่
         aliases = [a for a in target.get("aliases", []) if a["name"] != source["name"]]
-        aliases.append({"name": source["name"], "season": season, "lang": lang})
+        aliases.append({"name": source["name"], "season": season, "lang": lang, "episode_offset": offset})
         aliases.extend(a for a in source.get("aliases", []) if a["name"] not in {x["name"] for x in aliases})
         target["aliases"] = aliases
         # playlist YouTube ที่ติดตามอยู่ของเรื่องต้นทาง ย้ายตามไปเช็คตอนใหม่ที่เรื่องปลายทาง
