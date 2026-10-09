@@ -269,6 +269,8 @@ function renderVideos() {
   el("#libraryView").hidden = !library;
   if (library) renderLibrary();
   renderPlaylistRow();
+  // สลับหมวดแล้วท้ายหน้ายังอยู่ในจอ (จอใหญ่/การ์ดน้อย) ตัวดูการเลื่อนไม่ยิงซ้ำ เพราะท้ายหน้าไม่ได้ "เพิ่งเข้ามา" ในจอ
+  if (fillVideoCards) setTimeout(fillVideoCards, 0);
   if (!el("#playlistView").hidden) renderPlaylistView();
   if (activeVideo && !el("#videoPlayer").hidden) renderPlayerEpisodes(activeVideo);
 }
@@ -653,6 +655,8 @@ function resetVideoPaging() {
   playlistShown = PLAYLIST_PAGE;
 }
 
+let fillVideoCards = null; // เติมการ์ดจนล้นจอ — ตั้งค่าใน initVideoInfiniteScroll
+
 function initVideoInfiniteScroll() {
   const sentinel = el("#videoSentinel");
   const near = () => {
@@ -661,6 +665,7 @@ function initVideoInfiniteScroll() {
   };
   // เติมแล้วท้ายหน้ายังอยู่ในจอ (จอสูง/การ์ดน้อย) เติมต่อจนล้นจอ
   const fill = () => { for (let i = 0; i < 20 && near() && loadMoreVideoCards(); i++); };
+  fillVideoCards = fill;
   if ("IntersectionObserver" in window) {
     new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) fill(); }, { rootMargin: "0px 0px 800px 0px" }).observe(sentinel);
   }
