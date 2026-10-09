@@ -324,8 +324,12 @@ MIN_PASSWORD = 8
 REGISTER_LIMIT = 5              # สมัครได้ไม่เกินกี่บัญชี
 REGISTER_WINDOW = 3600          # ต่อ IP ต่อชั่วโมง (กันบอทสมัครรัว ๆ)
 _register_log: dict[str, list[float]] = {}
-LOGIN_FAIL_LIMIT = 8            # รหัสผิดได้ไม่เกินกี่ครั้ง
-LOGIN_FAIL_WINDOW = 15 * 60     # ต่อ IP ใน 15 นาที (กันเดารหัส)
+# ล็อกเป็นราย "ชื่อผู้ใช้ + IP" — คนอื่นที่ใช้เน็ตวงเดียวกัน (บ้าน/ออฟฟิศ) ไม่โดนล็อกตาม และคนแกล้งใส่รหัสผิด
+# ด้วยชื่อเราจากเครื่องตัวเองก็ไม่ทำให้เราเข้าจากเครื่องเราไม่ได้ ส่วนเพดานรวมต่อชื่อผู้ใช้ (ทุก IP) กันการเดารหัส
+# แบบสลับ IP ไปเรื่อย ๆ
+LOGIN_FAIL_LIMIT = 8            # รหัสผิดได้ไม่เกินกี่ครั้ง ต่อชื่อผู้ใช้ + IP
+LOGIN_FAIL_USER_LIMIT = 30      # ต่อชื่อผู้ใช้ รวมทุก IP
+LOGIN_FAIL_WINDOW = 15 * 60     # ใน 15 นาที
 _login_fails: dict[str, list[float]] = {}
 _login_fails_lock = threading.Lock()
 
@@ -337,14 +341,20 @@ def client_ip() -> str:
     return (forwarded.split(",")[-1].strip() if forwarded else "") or request.remote_addr or ""
 
 
-def _recent_login_fails(ip: str, now: float) -> list[float]:
+def _recent_login_fails(key: str, now: float) -> int:
     with _login_fails_lock:
-        recent = [t for t in _login_fails.get(ip, []) if now - t < LOGIN_FAIL_WINDOW]
+        recent = [t for t in _login_fails.get(key, []) if now - t < LOGIN_FAIL_WINDOW]
         if recent:
-            _login_fails[ip] = recent
+            _login_fails[key] = recent
         else:
-            _login_fails.pop(ip, None)
-        return recent
+            _login_fails.pop(key, None)
+        return len(recent)
+
+
+def _login_locked(username: str, ip: str, now: float) -> bool:
+    name = username.casefold()
+    return (_recent_login_fails(f"{name}|{ip}", now) >= LOGIN_FAIL_LIMIT
+            or _recent_login_fails(name, now) >= LOGIN_FAIL_USER_LIMIT)
 
 
 def registration_open() -> bool:
@@ -390,19 +400,21 @@ def login():
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         ip, now = client_ip(), time.time()
-        if len(_recent_login_fails(ip, now)) >= LOGIN_FAIL_LIMIT:
-            error = "ใส่รหัสผิดหลายครั้งเกินไป รอ 15 นาทีแล้วลองใหม่"
+        name = username.casefold()
+        if _login_locked(username, ip, now):
+            error = "ใส่รหัสผิดหลายครั้งเกินไปสำหรับบัญชีนี้ รอ 15 นาทีแล้วลองใหม่"
             return render_template("login.html", error=error, mode="login", form={},
                                    registration_open=registration_open()), 429
         users = storage.load_users()
         user = users.get(username)
         if user and check_password_hash(user["password_hash"], password):
             with _login_fails_lock:
-                _login_fails.pop(ip, None)
+                _login_fails.pop(f"{name}|{ip}", None)
             _start_session(username, user)
             return redirect(_safe_next(request.args.get("next")))
         with _login_fails_lock:
-            _login_fails.setdefault(ip, []).append(now)
+            _login_fails.setdefault(f"{name}|{ip}", []).append(now)
+            _login_fails.setdefault(name, []).append(now)
         error = "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง"
     return render_template("login.html", error=error, mode="login", form={}, registration_open=registration_open())
 
