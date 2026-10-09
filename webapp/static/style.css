@@ -886,7 +886,7 @@ a.video-card { display: block; text-decoration: none; }
 .comment-label { font-size: 0.75rem; color: var(--accent); margin-top: 2px; }
 .comment-text { margin-top: 3px; white-space: pre-wrap; word-break: break-word; }
 .comment-empty { padding: 18px 0; color: var(--text-dim); text-align: center; }
-.comment-form { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; }
+.comment-form { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
 .comment-form textarea { flex: 1; resize: none; font: inherit; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); }
 .link-btn { background: none; border: 0; padding: 0; color: var(--text-dim); text-decoration: underline; font: inherit; font-size: inherit; cursor: pointer; }
 .danger-text { color: #ff8a8a; }
