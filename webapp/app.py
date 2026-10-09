@@ -1741,6 +1741,20 @@ def add_video_category():
     return jsonify(category), 201
 
 
+@app.route("/api/video-categories/order", methods=["PUT"])
+@require_admin
+def reorder_video_categories():
+    """ลำดับหมวดคลิป = ลำดับแถว/ชิปในหน้า MeeMovie"""
+    ids = (request.get_json(force=True, silent=True) or {}).get("ids")
+    with storage.state_lock:
+        categories = storage.load_video_categories(fresh=True)
+        by_id = {c["id"]: c for c in categories}
+        if not isinstance(ids, list) or sorted(ids) != sorted(by_id):
+            return jsonify({"error": "ลำดับไม่ครบหรือมีหมวดที่ไม่รู้จัก ลองโหลดหน้าใหม่"}), 400
+        storage.save_video_categories([by_id[i] for i in ids])
+    return jsonify({"ok": True})
+
+
 @app.route("/api/video-categories/<category_id>", methods=["DELETE"])
 @require_admin
 def delete_video_category(category_id):
@@ -2528,11 +2542,12 @@ def delete_category(category_id):
 @require_admin
 def reorder_categories():
     ids = (request.get_json(force=True, silent=True) or {}).get("ids")
-    categories = storage.load_categories(fresh=True)
-    by_id = {c["id"]: c for c in categories}
-    if not isinstance(ids, list) or sorted(ids) != sorted(by_id):
-        return jsonify({"error": "ลำดับไม่ครบหรือมีหมวดหมู่ที่ไม่รู้จัก ลองโหลดหน้าใหม่"}), 400
-    storage.save_categories([by_id[i] for i in ids])
+    with storage.state_lock:
+        categories = storage.load_categories(fresh=True)
+        by_id = {c["id"]: c for c in categories}
+        if not isinstance(ids, list) or sorted(ids) != sorted(by_id):
+            return jsonify({"error": "ลำดับไม่ครบหรือมีหมวดหมู่ที่ไม่รู้จัก ลองโหลดหน้าใหม่"}), 400
+        storage.save_categories([by_id[i] for i in ids])
     return jsonify({"ok": True})
 
 

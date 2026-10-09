@@ -4501,10 +4501,11 @@ function renderVideoManage() {
     }).join("") || '<li class="hint">ไม่มีคลิปตามตัวกรองนี้</li>';
 
   // หมวด
-  el("#videoCategoryList").innerHTML = cats.length ? cats.map((c) => {
+  el("#videoCategoryList").innerHTML = cats.length ? cats.map((c, i) => {
     const nClips = clips.filter((v) => v.category_id === c.id).length;
     const nPl = lists.filter((p) => p.category_id === c.id).length;
     return `<li class="vm-row" data-cat-id="${escapeHtml(c.id)}"><div class="grow"><div class="name">${escapeHtml(c.name)}</div><div class="meta">คลิป ${nClips} · เรื่อง ${nPl}</div></div>
+      <button class="icon-btn" data-move-video-category="up" title="เลื่อนขึ้น"${i === 0 ? " disabled" : ""}>${ICON_UP}</button><button class="icon-btn" data-move-video-category="down" title="เลื่อนลง"${i === cats.length - 1 ? " disabled" : ""}>${ICON_DOWN}</button>
       <button class="btn" data-rename-video-category="${escapeHtml(c.id)}">เปลี่ยนชื่อ</button><button class="btn danger" data-delete-video-category="${escapeHtml(c.id)}">ลบ</button></li>`;
   }).join("") : '<li class="hint">ยังไม่มีหมวดคลิป</li>';
 
@@ -4762,8 +4763,17 @@ function initAdminPanels() {
   el("#videoCategoryList").addEventListener("click", async (event) => {
     const del = event.target.closest("[data-delete-video-category]")?.dataset.deleteVideoCategory;
     const ren = event.target.closest("[data-rename-video-category]")?.dataset.renameVideoCategory;
+    const move = event.target.closest("[data-move-video-category]")?.dataset.moveVideoCategory;
     try {
-      if (del) {
+      if (move) {
+        // ลำดับหมวด = ลำดับแถว/ชิปในหน้า MeeMovie
+        const ids = (state.videoCategories || []).map((c) => c.id);
+        const i = ids.indexOf(event.target.closest("[data-cat-id]").dataset.catId);
+        const j = move === "up" ? i - 1 : i + 1;
+        if (i < 0 || j < 0 || j >= ids.length) return;
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+        await sendJSON("PUT", "/api/video-categories/order", { ids });
+      } else if (del) {
         if (!(await askConfirm("ลบหมวดนี้? (คลิปและเรื่องในหมวดจะกลายเป็นไม่มีหมวด)"))) return;
         await sendJSON("DELETE", `/api/video-categories/${encodeURIComponent(del)}`);
       } else if (ren) {
