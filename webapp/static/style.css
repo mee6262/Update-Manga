@@ -1334,3 +1334,5 @@ button, .nav-item, .home-tab, .video-tab { -webkit-user-select: none; user-selec
 .series-info { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .series-seasons { color: var(--accent); font-weight: 600; }
 .series-lang { font-size: 0.68rem; line-height: 1.4; padding: 0 5px; border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
+.pl-lang-one { display: flex; align-items: center; gap: 8px; margin: 10px 0 2px; font-size: 0.8rem; color: var(--text-dim); }
+.pl-lang-one .series-lang { font-size: 0.8rem; padding: 2px 8px; }

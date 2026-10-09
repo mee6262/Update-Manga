@@ -788,13 +788,13 @@ function playlistCardHtml(p) {
   return `<div class="video-item playlist-item"><button class="video-card playlist-card" data-playlist-id="${escapeHtml(p.id)}"><span class="video-media">${thumbHtml(p.thumbnail_url).replace("<img ", '<img class="video-thumb" ')}${ytBadge(p)}${playlistBadge(p, eps)}<span class="video-time">${eps.length} ตอน</span></span><span class="video-card-info"><span class="video-card-title">${escapeHtml(p.name)}</span>${seriesInfoHtml(p)}<span class="video-card-meta">${resume ? `ดูต่อ ${episodeLabel(resume)}` : "ยังไม่เคยดู"}</span></span></button>${playlistSaveButton(p)}</div>`;
 }
 
-// บรรทัดใต้ชื่อเรื่อง: "ซีซั่น 1–4 · พากย์ ซับ" — เฉพาะเรื่องที่มีหลายซีซั่น/หลายภาษา (เรื่องธรรมดาไม่มีบรรทัดนี้)
+// บรรทัดใต้ชื่อเรื่อง: "ซีซั่น 1–4 · พากย์ ซับ" — เฉพาะเรื่องที่มีหลายซีซั่น หรือรู้ภาษา (เรื่องธรรมดาไม่มีบรรทัดนี้)
 function seriesInfoHtml(p) {
   const seasons = [...new Set(allPlaylistEpisodes(p.id).map((v) => v.season || 1))].sort((a, b) => a - b);
   const langs = seriesLangs(p);
-  if (seasons.length < 2 && langs.length < 2) return "";
+  if (seasons.length < 2 && !langs.length) return "";
   const season = seasons.length > 1 ? `<span class="series-seasons">ซีซั่น ${seasons[0]}–${seasons[seasons.length - 1]}</span>` : "";
-  const tags = langs.length > 1 ? langs.map((l) => `<span class="series-lang">${LANG_LABEL[l].replace("ไทย", "")}</span>`).join("") : "";
+  const tags = langs.length ? langs.map((l) => `<span class="series-lang">${LANG_LABEL[l].replace("ไทย", "")}</span>`).join("") : "";
   return `<span class="video-card-meta series-info">${season}${season && tags ? " · " : ""}${tags}</span>`;
 }
 
@@ -887,7 +887,9 @@ function renderPlaylistView() {
     shown = ordered.slice(playlistRange * EP_RANGE, (playlistRange + 1) * EP_RANGE);
   }
   const tiles = shown.map((x) => episodeTileHtml(x.v, playlist, { fresh: fresh.has(x.v.id), na: x.na })).join("");
-  const langSeg = lang ? `<div class="pl-lang" role="tablist">${seriesLangs(playlist).map((l) =>
+  const langSeg = !lang && seriesLangs(playlist).length === 1
+    ? `<div class="pl-lang-one">${seriesLangs(playlist).map((l) => `<span class="series-lang">${LANG_LABEL[l]}</span>`).join("")}<span>มีภาษาเดียว</span></div>`
+    : lang ? `<div class="pl-lang" role="tablist">${seriesLangs(playlist).map((l) =>
     `<button class="${l === lang ? "active" : ""}" data-pl-lang="${l}" role="tab" aria-selected="${l === lang}">${LANG_LABEL[l] || l}</button>`).join("")}</div>` : "";
   const resumeWhere = `${episodeLabel(resume)}${lang ? ` · ${LANG_LABEL[lang]}` : ""}`;
   el("#playlistBody").innerHTML = `<div class="pl-cover">${thumbHtml(resume.thumbnail_url || playlist.thumbnail_url)}${ytBadge(playlist)}${playlistBadge(playlist, episodes)}</div>
