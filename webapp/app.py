@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -27,6 +28,7 @@ import playlist_parse
 import scraper
 import storage
 import webpush
+import youtube
 from telegram_notify import send_telegram
 
 try:
@@ -498,7 +500,7 @@ def logout():
 
 
 PREFS_MAX_KEYS = 40
-PREFS_MAX_BYTES = 4000
+PREFS_MAX_BYTES = 16000  # ภาษาที่เลือกต่อเรื่อง (video_lang) โตตามจำนวนเรื่องที่มีทั้งพากย์และซับ
 
 
 @app.route("/api/prefs", methods=["POST"])
@@ -1213,7 +1215,8 @@ _duration_backfill_tried: set[str] = set()
 
 def _needs_duration_backfill(video: dict) -> bool:
     # ตอนใน playlist นำเข้าทีละหลายร้อย — ไม่ไล่ยิงหน้าฝังของ Facebook ทุกตอน ความยาวได้จากตัวเล่นตอนดูจริง
-    return not video.get("duration_seconds") and not video.get("playlist_id") and video["id"] not in _duration_backfill_tried
+    return (not video.get("duration_seconds") and not video.get("playlist_id") and video.get("provider") != "youtube"
+            and video["id"] not in _duration_backfill_tried)
 
 
 def _backfill_video_durations():
@@ -1281,6 +1284,11 @@ def _public_video(video: dict, progress: dict | None = None, saved: dict | None 
         "category_id": video.get("category_id"),
         "playlist_id": video.get("playlist_id"),
         "episode": video.get("episode"),
+        "season": video.get("season"),
+        "lang": video.get("lang"),  # dub = พากย์ไทย / sub = ซับไทย / None
+        "provider": video.get("provider") or "facebook",
+        "youtube_id": video.get("youtube_id"),
+        "bulk": bool(video.get("bulk")),
         "added_by": video["added_by"],
         "created_at": video["created_at"],
         "can_delete": _can_delete_video(video),
@@ -1311,8 +1319,15 @@ def add_video():
     if not username and storage.load_users():
         return jsonify({"error": "unauthorized"}), 401
     body = request.get_json(force=True, silent=True) or {}
+    url = str(body.get("facebook_url") or body.get("url") or "").strip()
+    parsed = youtube.parse_url(url)
+    if parsed and parsed[0] == "video":
+        payload, status = _create_youtube_clip(parsed[1], username or "local")
+        return jsonify(payload), status
+    if parsed:
+        return jsonify({"error": "ลิงก์ playlist ให้แอดมินเพิ่มเป็นเรื่องที่หน้าจัดการคลิป (แท็บ เพิ่ม)"}), 400
     payload, status = _create_clip(
-        str(body.get("facebook_url") or "").strip(), username or "local",
+        url, username or "local",
         title=" ".join(str(body.get("title") or "").split()),
         thumbnail_url=str(body.get("thumbnail_url") or "").strip(),
     )
@@ -1439,6 +1454,8 @@ def get_video_sources(video_id):
     if video.get("external"):
         return jsonify({})
     _record_activity(username or "local", "plays", video_id)  # เปิดตัวเล่น 1 ครั้ง = ดู 1 ครั้ง
+    if video.get("provider") == "youtube":
+        return jsonify({})  # เล่นผ่านตัวเล่นของ YouTube เท่านั้น
     return jsonify(_facebook_video_sources(video["facebook_url"]))
 
 
@@ -1807,6 +1824,18 @@ def update_video(video_id):
             if not 0 <= episode < 100000:
                 return jsonify({"error": "เลขตอนไม่ถูกต้อง"}), 400
             video["episode"] = episode
+        if "season" in body:
+            try:
+                season = int(body.get("season") or 1)
+            except (TypeError, ValueError):
+                return jsonify({"error": "ซีซั่นต้องเป็นตัวเลข"}), 400
+            if not 1 <= season <= 99:
+                return jsonify({"error": "ซีซั่นไม่ถูกต้อง"}), 400
+            video["season"] = season
+        if "lang" in body:
+            if body.get("lang") not in ("dub", "sub", None, ""):
+                return jsonify({"error": "ภาษาไม่ถูกต้อง"}), 400
+            video["lang"] = body.get("lang") or None
         storage.save_videos(videos)
     return jsonify(_public_video(video))
 
@@ -1862,6 +1891,11 @@ def _public_playlists(videos: list[dict], saved: dict | None = None) -> list[dic
             # สร้างจากตอนใหม่ (เช็คเพจ/วางลิงก์) = ป้าย NEW ได้; ชุดที่นำเข้าทีเดียวทั้งคลังไม่นับว่าเรื่องใหม่
             "is_fresh": bool(playlist.get("fresh")),
             "count": len(items),
+            "langs": sorted({v.get("lang") for v in items if v.get("lang")}),
+            "tracks": [{k: t.get(k) for k in ("list_id", "lang", "follow", "title", "checked_at", "error")}
+                       for t in playlist.get("tracks", [])],
+            "season_names": playlist.get("season_names") or {},
+            "provider": "youtube" if any(v.get("provider") == "youtube" for v in items) else "facebook",
             "thumbnail_url": cover,
             "updated_at": max(v.get("created_at", "") for v in items),
         })
@@ -2040,6 +2074,21 @@ def update_video_playlist(playlist_id):
             if category_id and not any(c["id"] == category_id for c in storage.load_video_categories()):
                 return jsonify({"error": "ไม่พบหมวดนี้"}), 400
             playlist["category_id"] = category_id
+        if "season_name" in body:  # {"season": 2, "name": "ภาคพิเศษ"} — ชื่อว่าง = กลับไปใช้ "ซีซั่น N"
+            item = body.get("season_name") or {}
+            name = " ".join(str(item.get("name") or "").split())[:30]
+            names = dict(playlist.get("season_names") or {})
+            if name:
+                names[str(int(item.get("season") or 1))] = name
+            else:
+                names.pop(str(int(item.get("season") or 1)), None)
+            playlist["season_names"] = names
+        if "track" in body:  # {"list_id", "follow": bool}
+            item = body.get("track") or {}
+            track = next((t for t in playlist.get("tracks", []) if t["list_id"] == item.get("list_id")), None)
+            if not track:
+                return jsonify({"error": "ไม่พบ playlist YouTube นี้ในเรื่อง"}), 404
+            track["follow"] = bool(item.get("follow"))
         storage.save_video_playlists(playlists)
     return jsonify({"ok": True})
 
@@ -2202,6 +2251,236 @@ def add_playlist_links():
     return jsonify({"ok": True, "results": results})
 
 
+# ---------- YouTube: คลิปเดี่ยว / เรื่องจาก playlist (พากย์ไทย-ซับไทย, หลายซีซั่น) / เช็คตอนใหม่ทุกชั่วโมง ----------
+# เล่นผ่านตัวเล่นของ YouTube เท่านั้น (facebook_url เก็บลิงก์ watch ไว้ใช้ปุ่ม "เปิดใน YouTube" — ชื่อฟิลด์เดิมของคลัง)
+YOUTUBE_WATCH_INTERVAL = 60 * 60
+_youtube_watch_lock = threading.Lock()
+
+
+def _yt_key(video_id: str) -> str:
+    return hashlib.sha256(youtube.watch_url(video_id).encode("utf-8")).hexdigest()[:20]
+
+
+def _yt_record(video_id: str, title: str, duration, username: str, now: str) -> dict:
+    key = _yt_key(video_id)
+    return {
+        "id": key, "canonical_key": key, "title": _clean_video_title(title)[:MAX_VIDEO_TITLE] or "คลิปจาก YouTube",
+        "facebook_url": youtube.watch_url(video_id), "thumbnail_url": youtube.thumb_url(video_id),
+        "duration_seconds": duration, "external": False, "provider": "youtube", "youtube_id": video_id,
+        "added_by": username, "created_at": now,
+    }
+
+
+def _create_youtube_clip(video_id: str, username: str, category_id: str | None = None) -> tuple[dict, int]:
+    try:
+        meta = youtube.video_meta(video_id)  # ยิงเน็ตก่อนเข้า lock
+    except ValueError as e:
+        return {"error": str(e)}, 400
+    except requests.RequestException as e:
+        return {"error": f"เชื่อมต่อ YouTube ไม่ได้: {e}"}, 502
+    with storage.state_lock:
+        videos = storage.load_videos(fresh=True)
+        existing = next((v for v in videos if v.get("canonical_key") == _yt_key(video_id)), None)
+        if existing:
+            return {**_public_video(existing), "already_exists": True}, 200
+        video = _yt_record(video_id, meta["title"], None, username, datetime.now(timezone.utc).isoformat())
+        video["external"] = not meta["embeddable"]  # ช่องปิดการฝัง → การ์ดเปิดในแอป YouTube แทน
+        if category_id:
+            video["category_id"] = category_id
+        videos.append(video)
+        storage.save_videos(videos)
+    return _public_video(video), 201
+
+
+def _match_series(name: str) -> dict | None:
+    """เรื่องเดิมในคลังที่ชื่อตรงกัน (ไม่สนวรรณยุกต์/วงเล็บ/ป้ายพากย์-ซับ) — ไว้รวมพากย์กับซับเป็นเรื่องเดียว"""
+    want = youtube.norm_name(name)
+    if not want:
+        return None
+    return next((p for p in storage.load_video_playlists()
+                 if youtube.norm_name(youtube.series_name(p["name"])) == want), None)
+
+
+def _playlist_summary(info: dict) -> dict:
+    titles = [item["title"] for item in info["items"]]
+    langs = Counter(youtube.detect_lang(t) for t in titles)
+    lang = youtube.detect_lang(info["title"]) or (langs.most_common(1)[0][0] if langs else None)
+    default_season = youtube.detect_season(info["title"]) or 1
+    seasons = Counter(youtube.detect_season(t) or default_season for t in titles)
+    episodes = [e for e in (youtube.parse_episode(t) for t in titles) if e is not None]
+    return {"name": youtube.series_name(info["title"]) or youtube.series_name(titles[0]), "lang": lang,
+            "count": len(titles), "seasons": dict(sorted(seasons.items())),
+            "first_episode": min(episodes, default=None), "last_episode": max(episodes, default=None)}
+
+
+@app.route("/api/youtube/preview", methods=["POST"])
+@require_admin
+def youtube_preview():
+    """ดูก่อนเพิ่ม: คลิปเดี่ยว → ชื่อ/ฝังได้ไหม; playlist → ชื่อเรื่อง ภาษา ซีซั่น จำนวนตอน + เรื่องเดิมที่ควรรวมเข้า"""
+    parsed = youtube.parse_url(str((request.get_json(force=True, silent=True) or {}).get("url") or ""))
+    if not parsed:
+        return jsonify({"error": "ไม่ใช่ลิงก์ YouTube (คลิป หรือ playlist)"}), 400
+    kind, ident = parsed
+    try:
+        if kind == "video":
+            meta = youtube.video_meta(ident)
+            return jsonify({"kind": "video", "id": ident, "thumbnail_url": youtube.thumb_url(ident), **meta})
+        info = youtube.fetch_playlist(ident)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except requests.RequestException as e:
+        return jsonify({"error": f"เชื่อมต่อ YouTube ไม่ได้: {e}"}), 502
+    summary = _playlist_summary(info)
+    owner = next((p for p in storage.load_video_playlists()
+                  if any(t["list_id"] == ident for t in p.get("tracks", []))), None)
+    match = owner or _match_series(summary["name"])
+    return jsonify({
+        "kind": "playlist", "list_id": ident, "title": info["title"], "channel": info["channel"],
+        "thumbnail_url": youtube.thumb_url(info["items"][0]["id"]), **summary,
+        "already_added": bool(owner),
+        "match": {"id": match["id"], "name": match["name"], "category_id": match.get("category_id")} if match else None,
+    })
+
+
+def _store_youtube_items(list_id: str, info: dict, *, playlist_id: str | None, name: str, lang: str | None,
+                         category_id: str | None, follow: bool, username: str) -> dict:
+    """ตอนจาก playlist YouTube → เรื่อง (เดิมหรือใหม่) — ซีซั่น/ภาษา/เลขตอนจากชื่อคลิป คลิปที่มีแล้วข้าม
+    ห้ามยิงเน็ตในนี้ (อยู่ใน state_lock)"""
+    now = datetime.now(timezone.utc).isoformat()
+    default_season = youtube.detect_season(info["title"]) or 1
+    added: list[dict] = []
+    with storage.state_lock:
+        playlists = storage.load_video_playlists(fresh=True)
+        playlist = next((p for p in playlists if p["id"] == playlist_id), None) if playlist_id else None
+        if playlist_id and not playlist:
+            return {"error": "ไม่พบเรื่องที่จะเพิ่มเข้า"}
+        if not playlist:
+            playlist = {"id": secrets.token_hex(4), "name": name, "created_at": now, "fresh": True}
+            if category_id:
+                playlist["category_id"] = category_id
+            playlists.append(playlist)
+        tracks = playlist.setdefault("tracks", [])
+        track = next((t for t in tracks if t["list_id"] == list_id), None)
+        first_import = not track
+        if not track:
+            track = {"list_id": list_id, "lang": lang, "follow": follow, "title": info["title"]}
+            tracks.append(track)
+        track["checked_at"] = now
+        track.pop("error", None)
+        videos = storage.load_videos(fresh=True)
+        known = {v.get("canonical_key") for v in videos}
+        for item in info["items"]:
+            key = _yt_key(item["id"])
+            if key in known:
+                continue
+            known.add(key)
+            episode = youtube.parse_episode(item["title"])
+            video = _yt_record(item["id"], item["title"], item.get("duration"), username, now)
+            video.update({
+                "playlist_id": playlist["id"],
+                "episode": episode if episode is not None else float(item["index"]),
+                "season": youtube.detect_season(item["title"]) or default_season,
+                "lang": youtube.detect_lang(item["title"]) or track.get("lang"),
+            })
+            if first_import:
+                # ชุดแรกของ playlist (เช่น เพิ่มซับไทยเข้าเรื่องที่มีพากย์อยู่แล้ว) ไม่ใช่ "ตอนใหม่" — ไม่งั้นป้าย NEW ท่วม
+                video["bulk"] = True
+            videos.append(video)
+            added.append(video)
+        storage.save_video_playlists(playlists)
+        storage.save_videos(videos)
+    return {"playlist_id": playlist["id"], "name": playlist["name"], "added": added,
+            "exists": len(info["items"]) - len(added)}
+
+
+@app.route("/api/youtube/add", methods=["POST"])
+@require_admin
+def youtube_add():
+    """body: {"url", "playlist_id" (รวมเข้าเรื่องเดิม) | "name" (เรื่องใหม่), "lang", "category_id", "follow"}"""
+    body = request.get_json(force=True, silent=True) or {}
+    parsed = youtube.parse_url(str(body.get("url") or ""))
+    if not parsed:
+        return jsonify({"error": "ไม่ใช่ลิงก์ YouTube"}), 400
+    category_id = body.get("category_id") or None
+    if category_id and not any(c["id"] == category_id for c in storage.load_video_categories()):
+        return jsonify({"error": "ไม่พบหมวดนี้"}), 400
+    username = current_username() or "local"
+    if parsed[0] == "video":
+        payload, status = _create_youtube_clip(parsed[1], username, category_id)
+        return jsonify(payload), status
+    try:
+        info = youtube.fetch_playlist(parsed[1])  # ยิงเน็ตก่อนเข้า lock
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except requests.RequestException as e:
+        return jsonify({"error": f"เชื่อมต่อ YouTube ไม่ได้: {e}"}), 502
+    name = " ".join(str(body.get("name") or "").split())[:MAX_PLAYLIST_NAME] or _playlist_summary(info)["name"]
+    lang = body.get("lang") if body.get("lang") in ("dub", "sub") else None
+    result = _store_youtube_items(parsed[1], info, playlist_id=body.get("playlist_id") or None, name=name,
+                                  lang=lang, category_id=category_id, follow=bool(body.get("follow", True)),
+                                  username=username)
+    if result.get("error"):
+        return jsonify(result), 404
+    return jsonify({"ok": True, "playlist_id": result["playlist_id"], "name": result["name"],
+                    "added": len(result["added"]), "exists": result["exists"]})
+
+
+def _notify_new_episodes(playlist_id: str, name: str, added: list[dict]):
+    """ตอนใหม่ของเรื่องที่บันทึกไว้ (ปุ่มบันทึกทั้งเรื่อง) → กระดิ่ง + push ถึงคนที่บันทึก"""
+    newest = max(added, key=lambda v: v.get("episode") or 0)
+    lang = {"dub": " (พากย์ไทย)", "sub": " (ซับไทย)"}.get(newest.get("lang"), "")
+    text = f"{name} ตอนที่ {newest['episode']:g}{lang} มาแล้ว" + (f" (+{len(added) - 1} ตอน)" if len(added) > 1 else "")
+    url = f"/?playlist={playlist_id}"
+    for username in storage.all_usernames():
+        if f"playlist:{playlist_id}" in storage.load_video_saved(username):
+            _add_notification(username, {"type": "video", "target": f"playlist:{playlist_id}", "text": text, "url": url})
+            webpush.send_to_user(username, {"title": name, "body": text, "tag": f"playlist-{playlist_id}", "url": url})
+
+
+def run_youtube_watch() -> bool:
+    """เช็คทุก playlist YouTube ที่ติดตาม 1 รอบ (False = มีรอบอื่นทำอยู่) — อ่าน playlist ทั้งชุด 1-2 คำขอต่อ playlist"""
+    if not _youtube_watch_lock.acquire(blocking=False):
+        return False
+    try:
+        for playlist in storage.load_video_playlists():
+            for track in [t for t in playlist.get("tracks", []) if t.get("follow")]:
+                error = None
+                try:
+                    info = youtube.fetch_playlist(track["list_id"])
+                    result = _store_youtube_items(track["list_id"], info, playlist_id=playlist["id"], name=playlist["name"],
+                                                  lang=track.get("lang"), category_id=None, follow=True, username="auto")
+                    error = result.get("error")
+                    if result.get("added"):
+                        print(f"[youtube-watch] {playlist['name']} +{len(result['added'])} ตอน", flush=True)
+                        _notify_new_episodes(playlist["id"], playlist["name"], result["added"])
+                except Exception as e:
+                    error = str(e) or e.__class__.__name__
+                if error:
+                    print(f"[youtube-watch] ⚠️ {playlist['name']} ({track['list_id']}): {error}", flush=True)
+                    with storage.state_lock:
+                        playlists = storage.load_video_playlists(fresh=True)
+                        for p in playlists:
+                            for t in p.get("tracks", []):
+                                if p["id"] == playlist["id"] and t["list_id"] == track["list_id"]:
+                                    t["error"] = error[:200]
+                                    t["checked_at"] = datetime.now(timezone.utc).isoformat()
+                        storage.save_video_playlists(playlists)
+                time.sleep(2)
+        return True
+    finally:
+        _youtube_watch_lock.release()
+
+
+def _youtube_watch_loop():
+    time.sleep(180)
+    while True:
+        try:
+            run_youtube_watch()
+        except Exception as e:
+            print(f"⚠️ youtube-watch ล้ม: {e}", flush=True)
+        time.sleep(YOUTUBE_WATCH_INTERVAL)
+
+
 PLAYLIST_WATCH_INTERVAL = 2 * 60 * 60
 PLAYLIST_WATCH_TIMEOUT = 150
 _playlist_watch_lock = threading.Lock()
@@ -2297,12 +2576,14 @@ def _start_playlist_watch():
         _playlist_watch_started = True
         threading.Thread(target=_playlist_watch_loop, daemon=True).start()
         threading.Thread(target=_maintenance_loop, daemon=True).start()
+        threading.Thread(target=_youtube_watch_loop, daemon=True).start()
 
 
 @app.route("/api/video-playlists/watch", methods=["GET"])
 @require_admin
 def get_playlist_watch():
     return jsonify({**storage.load_playlist_watch(), "running": _playlist_watch_lock.locked(),
+                    "youtube_running": _youtube_watch_lock.locked(),
                     "interval_hours": PLAYLIST_WATCH_INTERVAL / 3600})
 
 
@@ -2326,9 +2607,12 @@ def save_playlist_watch_sources():
 @app.route("/api/video-playlists/watch/run", methods=["POST"])
 @require_admin
 def run_playlist_watch_now():
-    if _playlist_watch_lock.locked():
+    if _playlist_watch_lock.locked() and _youtube_watch_lock.locked():
         return jsonify({"started": False, "error": "กำลังเช็คอยู่"})
-    threading.Thread(target=run_playlist_watch, daemon=True).start()
+    if not _playlist_watch_lock.locked() and storage.load_playlist_watch().get("sources"):
+        threading.Thread(target=run_playlist_watch, daemon=True).start()
+    if not _youtube_watch_lock.locked():
+        threading.Thread(target=run_youtube_watch, daemon=True).start()
     return jsonify({"started": True})
 
 
