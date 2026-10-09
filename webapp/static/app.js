@@ -778,15 +778,28 @@ const EP_RANGE = 20;
 let playlistRange = 0;
 let playlistDesc = false;
 
+// ลำดับตอนในหน้าเรื่อง (ตอนแรกก่อน / ล่าสุดก่อน) จำตามบัญชี ใช้กับทุกเรื่อง — แบบเดียวกับลำดับตอนมังงะ
+const EPISODE_SORT_KEY = "episodeSort";
+function episodeSortDesc() {
+  if (state.prefs.episode_sort === "desc" || state.prefs.episode_sort === "asc") return state.prefs.episode_sort === "desc";
+  try { return localStorage.getItem(EPISODE_SORT_KEY) === "desc"; } catch (e) { return false; }
+}
+
+function setEpisodeSortDesc(desc) {
+  try { localStorage.setItem(EPISODE_SORT_KEY, desc ? "desc" : "asc"); } catch (e) { /* ไม่จำก็ได้ */ }
+  savePref("episode_sort", desc ? "desc" : "asc");
+}
+
 let playlistSeason = null; // ซีซั่นที่เปิดดูในหน้าเรื่อง (null = ซีซั่นของตอนที่จะดูต่อ)
 
 function openPlaylist(playlistId) {
   openPlaylistId = playlistId;
-  playlistDesc = false;
+  playlistDesc = episodeSortDesc();
   playlistSeason = null;
-  // เปิดมาที่ช่วงตอนที่จะดูต่อ
+  // เปิดมาที่ช่วงตอนที่จะดูต่อ (เรียงล่าสุดก่อน = นับตำแหน่งจากท้าย)
   const eps = playlistEpisodes(playlistId);
-  playlistRange = eps.length ? Math.floor(eps.indexOf(playlistResume(eps)) / EP_RANGE) : 0;
+  const at = eps.indexOf(playlistResume(eps));
+  playlistRange = eps.length ? Math.floor((playlistDesc ? eps.length - 1 - at : at) / EP_RANGE) : 0;
   el("#playlistView").hidden = false;
   document.body.style.overflow = "hidden";
   renderPlaylistView();
@@ -1754,7 +1767,7 @@ function initVideos() {
       if (v && await askConfirm(`${episodeLabel(v)} ยังไม่มี${want}\nดูแบบ${LANG_LABEL[v.lang] || "ภาษาอื่น"}ไปก่อนไหม?`)) openVideo(v);
       return;
     }
-    if (event.target.closest("[data-ep-sort]")) { playlistDesc = !playlistDesc; playlistRange = 0; return renderPlaylistView(); }
+    if (event.target.closest("[data-ep-sort]")) { playlistDesc = !playlistDesc; setEpisodeSortDesc(playlistDesc); playlistRange = 0; return renderPlaylistView(); }
     const saveBtn = event.target.closest("[data-save-playlist]");
     if (saveBtn) return togglePlaylistSave(saveBtn.dataset.savePlaylist, saveBtn);
     const id = event.target.closest("[data-episode-id]")?.dataset.episodeId;
