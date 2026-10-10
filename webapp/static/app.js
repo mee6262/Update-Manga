@@ -851,7 +851,7 @@ function renderPlaylistRow() {
 }
 
 function providerName(item) {
-  return { youtube: "YouTube", anifume: "Anifume" }[item?.provider] || "Facebook";
+  return { youtube: "YouTube", anifume: "Anifume", a037: "037-anime" }[item?.provider] || "Facebook";
 }
 
 function ytBadge(item) {
@@ -1056,7 +1056,7 @@ function setAutoNextPref(on) {
 
 function renderAutoNext() {
   const btn = el("#autoNextBtn");
-  const unsupported = activeVideo?.provider === "anifume";
+  const unsupported = activeFramePlayback;
   btn.disabled = unsupported;
   if (unsupported) {
     btn.textContent = "⏭ เล่นต่อ: ไม่รองรับ";
@@ -1105,7 +1105,7 @@ function isVideoMini() {
 }
 
 function renderMiniPlay() {
-  el("#miniPlay").hidden = activeVideo?.provider === "anifume"; // คุมตัวเล่นใน iframe ไม่ได้
+  el("#miniPlay").hidden = activeFramePlayback; // คุมตัวเล่นใน iframe ไม่ได้
   const paused = nativeVideo ? nativeVideo.paused : ytPlayer ? ytPaused() : false;
   el("#miniPlay").textContent = paused ? "▶" : "⏸";
 }
@@ -1229,44 +1229,117 @@ async function mountYouTubeVideo(video, position, autoplay) {
 
 // ตัวเล่นใน iframe ข้ามโดเมน (JW Player ของ Anifume ไม่รับ/ส่ง postMessage) — อ่านเวลา/สั่งเล่นไม่ได้
 const AF_LIMITS = "ตัวเล่นของ Anifume: ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
+const FRAME_LIMITS = "ตัวเล่นของแหล่งนี้: ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
+let activeFramePlayback = false; // ตอนที่เล่นอยู่เป็น iframe ของแหล่ง (ปุ่มเล่นต่อ/เล่น-หยุดใช้ไม่ได้)
+let resolveTries = 0;            // ขอลิงก์ใหม่ในการเปิดตอนนี้กี่ครั้งแล้ว (เซิร์ฟเวอร์จำกัดซ้ำอีกชั้น)
+// รอบการเปิดตัวเล่น — เพิ่มทุกครั้งที่ openVideo/closeVideo ผลของ request/event จากรอบเก่า (เช่น ปิดแล้วเปิดตอนเดิมซ้ำ
+// ซึ่ง activeVideo.id เท่ากัน) ต้องไม่แตะตัวเล่นรอบใหม่
+let playGen = 0;
+const MAX_RESOLVE_TRIES = 2;
 
-// Anifume ไม่มี embed แยก: ฝังหน้าตอนต้นฉบับทั้งหน้า (เว็บไม่ห้ามฝัง) — sandbox ไม่มี allow-popups กันโฆษณาเด้งหน้าใหม่
-// embed_url มาจากเซิร์ฟเวอร์ (สร้างจากลิงก์ anifume.com ที่ตรวจแล้ว) ปุ่มเปิดหน้าต้นฉบับอยู่ใต้ตัวเล่นเสมอ
-function mountAnifumeVideo(video) {
-  const body = el("#videoPlayerBody");
-  const open = video.source_url ? `<a class="btn small" href="${escapeHtml(video.source_url)}" target="_blank" rel="noopener">เปิดใน Anifume ↗</a>` : "";
-  if (!video.embed_url) {
-    body.innerHTML = `<div class="reader-msg">ตอนนี้เล่นในแอปไม่ได้ ${open}</div>`;
+function sourceLink(video, label = `เปิดใน ${providerName(video)} ↗`) {
+  return video.source_url ? `<a class="btn small" href="${escapeHtml(video.source_url)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>` : "";
+}
+
+function showPlaybackError(video, err, gen = playGen) {
+  if (gen !== playGen || activeVideo?.id !== video.id) return;
+  activeFramePlayback = false;
+  renderAutoNext();
+  const retry = err?.retryable && resolveTries < MAX_RESOLVE_TRIES ? '<button class="btn small" data-playback-retry>ลองใหม่</button>' : "";
+  el("#videoPlayerBody").innerHTML = `<div class="reader-msg playback-error"><div>${escapeHtml(err?.error || "เล่นตอนนี้ไม่ได้")}</div>
+    <div class="playback-code">${escapeHtml(err?.code || "")}</div><div class="pl-controls">${retry}${sourceLink(video)}</div></div>`;
+  el("#videoPlayerBody [data-playback-retry]")?.addEventListener("click", () => { if (gen === playGen) mountResolvedVideo(video, 0, true, true); });
+}
+
+// แหล่งใน streams (Anifume, 037-anime): ถามเซิร์ฟเวอร์ว่าเล่นยังไงตอนกดเล่น (ไม่เก็บไฟล์บนเซิร์ฟเวอร์)
+// file/hls → <video> ตัวเดิมของแอป (จำจุดดูค้าง/เล่นต่อได้) ลิงก์ตาย/หมดอายุกลางทาง → ขอใหม่ (จำกัดครั้ง)
+// page_embed/embed → iframe ของแหล่ง
+async function mountResolvedVideo(video, position, autoplay, refresh = false) {
+  const gen = playGen;
+  const stale = () => gen !== playGen || activeVideo?.id !== video.id;
+  if (refresh) resolveTries += 1;
+  let pb;
+  try {
+    pb = await getJSON(`/api/videos/${encodeURIComponent(video.id)}/playback${refresh ? "?refresh=1" : ""}`, { timeout: 45000 });
+  } catch (e) {
+    return showPlaybackError(video, e.body || { error: e.message, retryable: true }, gen);
+  }
+  if (stale()) return;
+  if (pb.kind === "file" || pb.kind === "hls") {
+    if (pb.kind === "hls" && !document.createElement("video").canPlayType("application/vnd.apple.mpegurl")) {
+      return showPlaybackError(video, { code: "PLAYBACK_UNSUPPORTED", error: "เบราว์เซอร์นี้เล่น HLS (.m3u8) เองไม่ได้ — ลองบน iPhone/Safari" }, gen);
+    }
+    activeFramePlayback = false;
+    renderAutoNext();
+    unmountYouTube();
+    unmountNativeVideo();
+    try {
+      await mountNativeVideo(video, position, { sd: pb.url });
+    } catch (e) {
+      if (stale()) return;
+      unmountNativeVideo();
+      if (resolveTries < MAX_RESOLVE_TRIES) return mountResolvedVideo(video, position, autoplay, true);
+      return showPlaybackError(video, { code: "STREAM_EXPIRED", error: "ลิงก์วิดีโอเปิดไม่ได้ (ขอใหม่แล้วก็ยังไม่ได้)" }, gen);
+    }
+    if (stale()) return; // โหลดเสร็จหลังเปลี่ยน/ปิดตอนแล้ว — ไม่ตั้งเวลา/ไม่สั่งเล่น (ตัวเล่นรอบใหม่จัดการเอง)
+    const v = nativeVideo;
+    // ตั้งที่นี่ (ไม่ใช่ใน openVideo) — เล่นได้หลังกด "ลองใหม่"/ขอลิงก์ใหม่กลางทางก็ยังบันทึกจุดดูค้างเป็นระยะ
+    clearInterval(videoSaveTimer);
+    videoSaveTimer = setInterval(saveActiveVideoProgress, 10000);
+    // เล่นไปแล้วลิงก์หมดอายุ/ตาย: ขอใหม่แล้วเล่นต่อจากจุดเดิม
+    v.addEventListener("error", () => {
+      if (nativeVideo !== v || stale()) return;
+      const at = v.currentTime;
+      unmountNativeVideo();
+      if (resolveTries < MAX_RESOLVE_TRIES) mountResolvedVideo(video, at, true, true);
+      else showPlaybackError(video, { code: "STREAM_EXPIRED", error: "ลิงก์วิดีโอหมดอายุระหว่างเล่น (ขอใหม่ครบแล้ว)" }, gen);
+    }, { once: true });
+    if (autoplay) v.play().catch(() => {});
     return;
   }
+  mountFrameVideo(video, pb);
+  clearActiveVideoProgress(); // อ่านเวลาใน iframe ข้ามโดเมนไม่ได้: เปิดแล้วนับว่าดูแล้ว (ประวัติ/ป้ายดูแล้ว) ไม่มีจุดดูค้าง
+}
+
+// iframe ของแหล่ง — sandbox ไม่มี allow-popups กันโฆษณาเด้งหน้าใหม่, ปุ่มเปิดหน้าต้นฉบับอยู่ใต้ตัวเล่นเสมอ
+// pb.frame {pad, max}: หน้าเว็บที่เลื่อนไปกล่องตัวเล่นด้วย #anchor (Anifume: #vpfi = 16:9 ใน .content padding ซ้ายขวา pad
+// border-box กว้างสุด max) — iframe สูงเท่าตัวเล่นแล้ว scale ให้เต็มกรอบ ขอบหน้าเว็บล้นออกนอกกรอบ
+// (ไม่ขยาย iframe จริง — หน้าในนั้นจะเลื่อนแนวนอน) กว้างเปลี่ยน (หมุนจอ/ย่อจอ): location.replace ไป #anchor ซ้ำ
+// = เลื่อนกลับโดยไม่โหลดใหม่ ไม่เพิ่มประวัติ
+function mountFrameVideo(video, pb) {
+  activeFramePlayback = true;
+  renderAutoNext();
+  unmountYouTube();
+  unmountNativeVideo();
+  const body = el("#videoPlayerBody");
+  const limits = video.provider === "anifume" ? AF_LIMITS : FRAME_LIMITS;
   body.innerHTML = `<div class="af-wrap"><iframe title="${escapeHtml(video.title)}" allowfullscreen scrolling="no"
       allow="fullscreen; autoplay; encrypted-media; picture-in-picture"
       sandbox="allow-scripts allow-same-origin allow-presentation"></iframe></div>
-    <div id="afError" class="yt-error" hidden>ตัวเล่นยังไม่ขึ้น? ${open}</div>
-    <div class="af-note">${AF_LIMITS} · <a href="${escapeHtml(video.source_url)}" target="_blank" rel="noopener">เปิดใน Anifume ↗</a></div>`;
+    <div id="afError" class="yt-error" hidden>ตัวเล่นยังไม่ขึ้น? ${sourceLink(video)}</div>
+    <div class="af-note">${limits}${video.source_url ? ` · <a href="${escapeHtml(video.source_url)}" target="_blank" rel="noopener">เปิดใน ${escapeHtml(providerName(video))} ↗</a>` : ""}</div>`;
   const frame = body.querySelector("iframe");
   const timer = setTimeout(() => { if (frame.isConnected) el("#afError").hidden = false; }, 20000);
   let loaded = false, width = 0;
   frame.addEventListener("load", () => { loaded = true; clearTimeout(timer); }, { once: true });
-  // embed_url ลงท้าย #vpfi: หน้าเลื่อนไปที่กล่องตัวเล่น (16:9 ใน .content padding ซ้ายขวา 12px border-box กว้างสุด 854px)
-  // iframe สูงเท่าตัวเล่น แล้ว scale ให้ตัวเล่นเต็มกรอบ ขอบหน้าเว็บล้นออกนอกกรอบ (ไม่ขยาย iframe จริง — หน้าในนั้นจะเลื่อนแนวนอน)
-  // กว้างเปลี่ยน (หมุนจอ/ย่อจอ) หัวเว็บสูงไม่เท่าเดิม: location.replace ไป #vpfi ซ้ำ = เลื่อนกลับโดยไม่โหลดใหม่ ไม่เพิ่มประวัติ
   const wrap = body.querySelector(".af-wrap");
+  const crop = pb.frame;
   const fit = () => {
     if (!frame.isConnected) return observer.disconnect();
     const w = wrap.clientWidth;
     if (!w || w === width) return;
     width = w;
-    const inner = Math.min(w, 854) - 24;
+    if (!crop) { frame.style.height = "100%"; return; }
+    const inner = Math.min(w, crop.max) - crop.pad * 2;
     frame.style.height = `${(inner * 9) / 16}px`;
-    // ขยายเผื่อ 6px + ดันขึ้น 2px: iPhone เลื่อนไป #vpfi แบบปัดเศษ เห็นพื้น #ececec ของกล่องตัวเล่นเป็นเส้นบางที่ขอบบน
+    // ขยายเผื่อ 6px + ดันขึ้น 2px: iPhone เลื่อนไป #anchor แบบปัดเศษ เห็นพื้นกล่องตัวเล่นเป็นเส้นบางที่ขอบบน
     frame.style.transform = `translateY(-2px) scale(${(w + 6) / inner})`;
-    if (loaded) try { frame.contentWindow.location.replace(video.embed_url); } catch (e) { /* เลื่อนไม่ได้ก็ยังเล่นได้ */ }
+    if (loaded) try { frame.contentWindow.location.replace(pb.url); } catch (e) { /* เลื่อนไม่ได้ก็ยังเล่นได้ */ }
   };
   const observer = new ResizeObserver(fit);
   observer.observe(wrap);
   fit();
-  frame.src = video.embed_url;
+  frame.src = pb.url;
 }
 
 async function mountFacebookVideo(video, position) {
@@ -1333,6 +1406,9 @@ const VIDEO_QUALITY_KEY = "videoQuality"; // auto | hd | sd (จำต่อเ�
 const VIDEO_QUALITY_LABEL = { auto: "อัตโนมัติ", hd: "720p", sd: "360p" };
 let nativeVideo = null;
 let nativeSources = null;
+// รอบ (playGen) ที่ไฟล์ใน <video> ตอนนี้เป็นของ — ตั้งตอนสร้างตัวเล่น/เปลี่ยนไฟล์เป็นตอนถัดไป (reuse)
+// เปิดตอนใหม่แล้วตอนเดิมยังเล่นอยู่ (ย่อจอแล้วเลือกตอนจากคลัง) event ของไฟล์เดิมต้องไม่ไปทำกับตอนใหม่
+let nativeGen = 0;
 let nativeQualityPref = "auto";
 let nativeCurrentQuality = null;
 let nativeStalls = [];
@@ -1401,6 +1477,7 @@ function mountNativeVideo(video, position, sources) {
     <div class="video-quality"><span id="videoSpeed" class="video-quality"></span><button id="sleepBtn" class="video-quality-btn">⏾ ตั้งเวลาปิด</button><button id="pipBtn" class="video-quality-btn" hidden>⧉ จอลอย</button></div>`;
   const v = el("#nativeVideo");
   nativeVideo = v;
+  nativeGen = playGen;
   nativeSources = sources;
   nativeQualityPref = readVideoQualityPref();
   return new Promise(async (resolve, reject) => {
@@ -1421,7 +1498,11 @@ function mountNativeVideo(video, position, sources) {
     rememberVideoDuration();
     v.addEventListener("pause", () => { if (!v.ended) saveActiveVideoProgress(true); renderMiniPlay(); });
     v.addEventListener("play", renderMiniPlay);
-    v.addEventListener("ended", () => { clearActiveVideoProgress(); playNextEpisode(); });
+    v.addEventListener("ended", () => {
+      if (nativeGen !== playGen) return; // ไฟล์ของตอนก่อนจบระหว่างเปิดตอนใหม่ — ห้ามมาร์คจบ/ข้ามตอนใหม่
+      clearActiveVideoProgress();
+      playNextEpisode();
+    });
     v.addEventListener("webkitendfullscreen", nudgeViewport);
     initNativeExtras(v);
     // อัตโนมัติ: กระตุก (waiting) 2 ครั้งใน 60 วิ ขณะเล่น 720p → ลดเป็น 360p
@@ -1445,6 +1526,7 @@ function mountNativeVideo(video, position, sources) {
 // ตอนถัดไปของ playlist: เปลี่ยนไฟล์ใน <video> ตัวเดิม (listener ต่าง ๆ อ้างตัวแปรกลาง ใช้ต่อได้เลย) แล้วสั่งเล่น
 function reuseNativeVideo(position, sources) {
   const v = nativeVideo;
+  nativeGen = playGen;
   nativeSources = sources;
   return new Promise(async (resolve, reject) => {
     const quality = nativeQualityPref === "auto" || !sources[nativeQualityPref] ? await pickAutoQuality(sources) : nativeQualityPref;
@@ -1663,6 +1745,11 @@ async function openVideo(video, { autoplay = false } = {}) {
   cancelNextCountdown();
   if (isVideoMini()) setVideoMini(false);
   activeVideo = video;
+  const gen = ++playGen;
+  activeFramePlayback = false;
+  resolveTries = 0;
+  // แผง error ของตอนก่อน (แหล่งใน streams) ห้ามค้างใต้ชื่อตอนใหม่ระหว่างรอโหลด
+  if (el("#videoPlayerBody .playback-error")) el("#videoPlayerBody").innerHTML = '<div class="reader-msg">กำลังโหลด...</div>';
   activeFbPlayer = null;
   activeVideoDuration = Number(video.duration_seconds) || null;
   lastSavedVideoPosition = null;
@@ -1682,15 +1769,12 @@ async function openVideo(video, { autoplay = false } = {}) {
       getJSON(`/api/videos/${encodeURIComponent(video.id)}/progress`),
       getJSON(`/api/videos/${encodeURIComponent(video.id)}/sources`, { timeout: 45000 }).catch(() => ({})),
     ]);
-    if (!activeVideo || activeVideo.id !== video.id) return;
+    if (!activeVideo || activeVideo.id !== video.id || gen !== playGen) return;
     // ตอนนี้ยังไม่เคยดูในภาษานี้ แต่ดูค้างในอีกภาษา (สลับพากย์ ↔ ซับ) → ต่อจากจุดเดิม
     const sibling = episodeProgress(video);
     const position = Number(progress.position_seconds) || (sibling.watched_at && sibling.pos) || 0;
-    if (video.provider === "anifume") {
-      unmountNativeVideo();
-      unmountYouTube();
-      mountAnifumeVideo(video);
-      clearActiveVideoProgress(); // อ่านเวลาใน iframe ข้ามโดเมนไม่ได้: เปิดแล้วนับว่าดูแล้ว (ประวัติ/ป้ายดูแล้ว) ไม่มีจุดดูค้าง
+    if (video.resolver) {
+      await mountResolvedVideo(video, position, autoplay);
       return;
     }
     if (video.provider === "youtube") {
@@ -1799,6 +1883,9 @@ function closeVideo() {
   videoSaveTimer = null;
   activeFbPlayer = null;
   activeVideo = null;
+  playGen += 1;
+  activeFramePlayback = false;
+  renderAutoNext();
   activeVideoFinished = false;
   cancelNextCountdown();
   el("#videoPlayer").classList.remove("mini");

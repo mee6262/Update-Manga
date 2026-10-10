@@ -6,6 +6,9 @@
   แต่หน้าตอนไม่ส่ง X-Frame-Options / CSP frame-ancestors = ฝังทั้งหน้าใน iframe ได้ (ทดสอบแล้วเล่นได้)
 - หน้ารวมตอน /<เลขเรื่อง>: ชื่อเรื่อง (h1.post-title), ปก (.post-content-img img), ลิงก์ทุกตอน (.eplink a)
 - ไม่ต้องใช้คุกกี้; ไม่มี og:image ในหน้าตอน (ปกเอาจากหน้ารวมตอน)
+- ตัวเล่นจริง (หน้า /player/ + ไฟล์ mp4 ลงลายเซ็นบนโฮสต์อื่น) ได้มาด้วยคำขอที่ต้องมี Referer ของหน้าตอนเท่านั้น
+  → ดึงฝั่งเซิร์ฟเวอร์ = ปลอม Referer ไม่ทำ; resolve_playback จึงคืน page_embed (หน้าตอนเลื่อนไป #vpfi) เท่านั้น
+  ตัวเล่นของเขาขอลิงก์ใหม่เองทุกครั้งที่หน้าโหลด — "ขอใหม่" ฝั่งเรา = โหลดหน้าตอนใหม่
 """
 import re
 from urllib.parse import urljoin, urlsplit
@@ -14,6 +17,7 @@ import requests
 from bs4 import BeautifulSoup
 
 import scraper
+import streams
 
 HOST = "anifume.com"
 HOSTS = {"anifume.com", "www.anifume.com"}
@@ -140,3 +144,51 @@ def fetch_series(url: str) -> dict:
     title = _page_title(soup)
     return {"url": canonical, "title": title, "name": series_name(title), "image": image if is_image_url(image) else "",
             "items": items}
+
+
+class Provider:
+    """adapter ของ streams — ข้อมูลเรื่อง/ตอนจากฟังก์ชันข้างบน, เล่นด้วยการฝังหน้าตอน"""
+    name = "anifume"
+
+    @staticmethod
+    def validate_series_url(url: str) -> str | None:
+        parsed = parse_url(url)
+        return series_url(parsed[1]) if parsed else None
+
+    @staticmethod
+    def get_series_metadata(url: str) -> dict:
+        try:
+            info = fetch_series(url)
+        except ValueError as e:
+            raise streams.StreamError(streams.SERIES_PARSE_FAILED, str(e)) from None
+        return {k: info[k] for k in ("url", "name", "title", "image")}
+
+    @staticmethod
+    def get_episode_list(url: str) -> list[dict]:
+        try:
+            items = fetch_series(url)["items"]
+        except ValueError as e:
+            raise streams.StreamError(streams.EPISODE_LIST_FAILED, str(e)) from None
+        if not items:
+            raise streams.StreamError(streams.EPISODE_LIST_FAILED, "ไม่พบรายชื่อตอนในหน้ารวมตอน")
+        return items
+
+    @staticmethod
+    def get_episode_metadata(url: str) -> dict:
+        try:
+            return fetch_episode(url)
+        except ValueError as e:
+            raise streams.StreamError(streams.PLAYER_INFO_MISSING, str(e)) from None
+
+    @staticmethod
+    def resolve_playback(video: dict, ctx: dict) -> dict:
+        url = canonical_episode_url(video.get("source_url") or "")
+        if not url:
+            raise streams.StreamError(streams.PLAYER_INFO_MISSING, "ลิงก์ตอนของ Anifume ไม่ถูกต้อง")
+        if video.get("external"):
+            raise streams.StreamError(streams.PROVIDER_RESTRICTION, "หน้าตอนนี้ห้ามฝังในเว็บอื่น (X-Frame-Options/CSP)")
+        # กล่องตัวเล่น #vpfi อยู่ใน .content (padding ซ้ายขวา 12px, border-box กว้างสุด 854px) — ตัวเล่นใช้ crop ตัดขอบ
+        return {"kind": "page_embed", "url": url + "#vpfi", "expires_at": None, "frame": {"pad": 12, "max": 854}}
+
+
+streams.register(Provider())

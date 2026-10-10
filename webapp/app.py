@@ -24,10 +24,12 @@ from dotenv import load_dotenv
 from flask import Flask, copy_current_request_context, jsonify, redirect, render_template, request, Response, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import a037
 import anifume
 import playlist_parse
 import scraper
 import storage
+import streams
 import webpush
 import youtube
 from telegram_notify import send_telegram
@@ -219,6 +221,29 @@ CRON_TOKEN = os.environ.get("CRON_TOKEN")
 DEV_NO_AUTH = os.environ.get("DEV_NO_AUTH") == "1"
 
 
+def parse_public_origin(value: str | None) -> str:
+    """"https://host[:port]" มาตรฐาน หรือ "" ถ้าไม่ได้ตั้ง/รูปแบบผิด (มี path/query/user:pass/scheme อื่น)"""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    try:
+        parts = urlsplit(value)
+        parts.port  # พอร์ตผิดรูป → ValueError
+    except ValueError:
+        return ""
+    if (parts.scheme not in ("http", "https") or not parts.hostname or parts.username is not None
+            or parts.password is not None or parts.path not in ("", "/") or parts.query or parts.fragment):
+        return ""
+    return f"{parts.scheme}://{parts.netloc.lower()}"
+
+
+# origin จริงของเว็บ (เช่น https://manga.example.com) — แหล่งที่ล็อกโดเมนตัวเล่นใช้ตรวจว่าเล่นจากเว็บนี้ได้ไหม
+# ตั้งฝั่งเซิร์ฟเวอร์เท่านั้น ห้ามเอาจาก Host ของ request (client กำหนดเองได้ → เซิร์ฟเวอร์ส่ง Referer ปลอมให้)
+PUBLIC_ORIGIN = parse_public_origin(os.environ.get("PUBLIC_ORIGIN"))
+if os.environ.get("PUBLIC_ORIGIN", "").strip() and not PUBLIC_ORIGIN:
+    print("⚠️ PUBLIC_ORIGIN รูปแบบไม่ถูกต้อง (ต้องเป็น https://โดเมน ไม่มี path) — ไม่ใช้ค่านี้", flush=True)
+
+
 def auth_disabled() -> bool:
     return DEV_NO_AUTH and not storage.load_users()
 
@@ -314,7 +339,7 @@ def require_login():
             return None
         session.clear()
     if request.path.startswith("/api/"):
-        return jsonify({"error": "unauthorized"}), 401
+        return jsonify({"error": "unauthorized", "code": "UNAUTHORIZED"}), 401
     return redirect(url_for("login", next=request.path))
 
 
@@ -1217,7 +1242,7 @@ _duration_backfill_tried: set[str] = set()
 def _needs_duration_backfill(video: dict) -> bool:
     # ตอนใน playlist นำเข้าทีละหลายร้อย — ไม่ไล่ยิงหน้าฝังของ Facebook ทุกตอน ความยาวได้จากตัวเล่นตอนดูจริง
     return (not video.get("duration_seconds") and not video.get("playlist_id")
-            and video.get("provider") not in ("youtube", "anifume")
+            and video.get("provider") != "youtube" and not streams.get(video.get("provider"))
             and video["id"] not in _duration_backfill_tried)
 
 
@@ -1283,10 +1308,9 @@ def _public_video(video: dict, progress: dict | None = None, saved: dict | None 
         "id": video["id"],
         "title": _clean_video_title(video["title"]),  # คลิปที่เพิ่มก่อนมีตัวตัดยอดดู
         "facebook_url": video.get("facebook_url"),  # ชื่อฟิลด์เดิม: ลิงก์ต้นฉบับของ Facebook/YouTube
-        # ลิงก์หน้าต้นฉบับของทุกผู้ให้บริการ (ปุ่ม "เปิดใน ..."); Anifume เก็บที่ source_url ไม่ใช้ facebook_url
-        "source_url": (anifume.canonical_episode_url(video.get("source_url") or "") if video.get("provider") == "anifume"
-                       else video.get("source_url") or video.get("facebook_url")),
-        "embed_url": _anifume_embed_url(video),
+        # ลิงก์หน้าต้นฉบับของทุกผู้ให้บริการ (ปุ่ม "เปิดใน ..."); แหล่งใน streams เก็บที่ source_url ไม่ใช้ facebook_url
+        "source_url": _source_url(video),
+        "resolver": bool(streams.get(video.get("provider"))),  # เล่นผ่าน /playback (ถามแหล่งตอนกดเล่น)
         "thumbnail_url": video.get("thumbnail_url") or None,
         "external": bool(video.get("external")),
         "category_id": video.get("category_id"),
@@ -1303,12 +1327,14 @@ def _public_video(video: dict, progress: dict | None = None, saved: dict | None 
     }
 
 
-def _anifume_embed_url(video: dict) -> str | None:
-    """ลิงก์ที่หน้าเว็บใส่ iframe ได้ — สร้างใหม่จากลิงก์ที่ผ่าน parse_url แล้วเท่านั้น (ไม่เชื่อค่าที่เก็บ/ส่งมาตรง ๆ)"""
-    if video.get("provider") != "anifume" or video.get("external"):
-        return None
-    url = anifume.canonical_episode_url(video.get("source_url") or "")
-    return url and url + "#vpfi"  # เลื่อนหน้าไปที่กล่องตัวเล่น (div#vpfi) — กรอบเห็นแค่ตัวเล่น ไม่เห็นหัวเว็บ
+def _source_url(video: dict) -> str | None:
+    """ลิงก์หน้าต้นฉบับ — แหล่งใน streams ตรวจรูปแบบใหม่ทุกครั้ง (ข้อมูลที่ถูกแก้มือชี้โดเมนอื่น = ไม่มีลิงก์)"""
+    provider = video.get("provider")
+    if provider == "anifume":
+        return anifume.canonical_episode_url(video.get("source_url") or "")
+    if provider == "a037":
+        return a037.validate_series_url(video.get("source_url") or "")
+    return video.get("source_url") or video.get("facebook_url")
 
 
 @app.route("/api/videos", methods=["GET"])
@@ -1477,9 +1503,33 @@ def get_video_sources(video_id):
     if video.get("external"):
         return jsonify({})
     _record_activity(username or "local", "plays", video_id)  # เปิดตัวเล่น 1 ครั้ง = ดู 1 ครั้ง
-    if video.get("provider") in ("youtube", "anifume"):
-        return jsonify({})  # เล่นผ่านตัวเล่นของ YouTube / ฝังหน้าตอนของ Anifume เท่านั้น
+    if video.get("provider") == "youtube" or streams.get(video.get("provider")):
+        return jsonify({})  # เล่นผ่านตัวเล่นของ YouTube / แหล่งใน streams ใช้ /playback
     return jsonify(_facebook_video_sources(video["facebook_url"]))
+
+
+@app.route("/api/videos/<video_id>/playback", methods=["GET"])
+def get_video_playback(video_id):
+    """วิธีเล่นตอนจากแหล่งใน streams (ถามแหล่งตอนกดเล่น ไม่เก็บไฟล์) — ?refresh=1 = ลิงก์เดิมเล่นไม่ได้/หมดอายุ ขอใหม่
+    (จำกัดครั้งใน streams) ผิดพลาดตอบ {"code", "error", "retryable", "fallback_url"}"""
+    username = current_username()
+    if not username and storage.load_users():
+        return jsonify({"code": "UNAUTHORIZED", "error": "unauthorized", "retryable": False, "fallback_url": None}), 401
+    video = next((v for v in storage.load_videos() if v.get("id") == video_id), None)
+    if not video:
+        return jsonify({"code": "VIDEO_NOT_FOUND", "error": "ไม่พบวิดีโอ", "retryable": False, "fallback_url": None}), 404
+    fallback = _source_url(video)
+    if not streams.get(video.get("provider")):
+        return jsonify({"code": streams.PLAYBACK_UNSUPPORTED, "error": "คลิปนี้ไม่ได้เล่นผ่านตัวหาวิธีเล่น",
+                        "retryable": False, "fallback_url": fallback}), 400
+    try:
+        playback = streams.resolve(video, refresh=request.args.get("refresh") == "1",
+                                   ctx={"origin": PUBLIC_ORIGIN, "user": username or "local"})
+    except streams.StreamError as e:
+        print(f"[playback] {video.get('provider')} {video_id}: {e.code}", flush=True)
+        status = 422 if e.code in (streams.PROVIDER_RESTRICTION, streams.PLAYBACK_UNSUPPORTED) else 502
+        return jsonify({**e.to_dict(), "fallback_url": fallback}), status
+    return jsonify({k: playback[k] for k in ("kind", "url", "expires_at", "frame", "provider")} | {"fallback_url": fallback})
 
 
 @app.route("/api/videos/<video_id>/progress", methods=["GET"])
@@ -1919,7 +1969,7 @@ def _public_playlists(videos: list[dict], saved: dict | None = None) -> list[dic
                        for t in playlist.get("tracks", [])],
             "season_names": playlist.get("season_names") or {},
             "season_starts": playlist.get("season_starts") or [],
-            "provider": next((v["provider"] for v in items if v.get("provider") in ("youtube", "anifume")), "facebook"),
+            "provider": next((v["provider"] for v in items if v.get("provider")), "facebook"),
             "thumbnail_url": cover,
             "updated_at": max(v.get("created_at", "") for v in items),
         })
@@ -3042,7 +3092,7 @@ def admin_comments():
 def admin_check_videos():
     """ไล่หาไฟล์ตรงของทุกคลิปที่เล่นในเว็บ — คืนรายการที่หาไม่ได้ (จะกลับไปใช้ตัวเล่น Facebook)
     ยิงเน็ตนอก lock, ข้ามแคชเพื่อดูสถานะจริงตอนนี้"""
-    videos = [v for v in storage.load_videos() if not v.get("external") and v.get("provider") != "anifume"]
+    videos = [v for v in storage.load_videos() if not v.get("external") and not streams.get(v.get("provider"))]
     for video in videos:
         _video_sources_cache.pop(video["facebook_url"], None)
     with ThreadPoolExecutor(max_workers=4) as pool:

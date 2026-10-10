@@ -1311,6 +1311,8 @@ button, .nav-item, .home-tab, .video-tab { -webkit-user-select: none; user-selec
 /* Anifume: กรอบ 16:9 — ขนาด/scale ของ iframe คำนวณใน mountAnifumeVideo */
 .af-wrap { position: relative; width: 100%; max-width: min(854px, calc((100dvh - 260px) * 16 / 9)); aspect-ratio: 16 / 9; justify-self: center; background: #000; border-radius: 6px; overflow: hidden; }
 .af-wrap iframe { position: absolute; top: 0; left: 0; width: 100%; border: 0; transform-origin: 50% 0; }
+.playback-error { display: grid; gap: 8px; justify-items: center; text-align: center; padding: 0 16px; }
+.playback-code { font-size: 0.7rem; color: var(--text-dim); font-family: ui-monospace, monospace; }
 .af-note { justify-self: center; max-width: 520px; margin-top: 10px; padding: 0 8px; color: var(--text-dim); font-size: 0.78rem; text-align: center; line-height: 1.5; }
 .af-note a { color: inherit; text-decoration: underline; white-space: nowrap; }
 .video-player.mini .af-note { display: none; }
