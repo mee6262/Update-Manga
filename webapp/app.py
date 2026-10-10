@@ -1915,7 +1915,7 @@ def _public_playlists(videos: list[dict], saved: dict | None = None) -> list[dic
             "is_fresh": bool(playlist.get("fresh")),
             "count": len(items),
             "langs": sorted({v.get("lang") for v in items if v.get("lang")}),
-            "tracks": [{k: t.get(k) for k in ("list_id", "lang", "follow", "title", "checked_at", "error")}
+            "tracks": [{k: t.get(k) for k in ("kind", "list_id", "lang", "follow", "title", "checked_at", "error")}
                        for t in playlist.get("tracks", [])],
             "season_names": playlist.get("season_names") or {},
             "season_starts": playlist.get("season_starts") or [],
@@ -2473,6 +2473,49 @@ def _anifume_items(raw_items, name: str) -> tuple[list[dict], str | None]:
     return items, None
 
 
+def _set_anifume_track(playlist_id: str, url: str, name: str, lang: str | None, follow: bool):
+    """หน้ารวมตอนเป็น "แหล่งตอนใหม่" ของเรื่อง (ใช้ tracks เดียวกับ playlist YouTube: สวิตช์ติดตามในแผ่นแก้ไขเรื่อง
+    + รอบเช็คทุก 1 ชม. ของ run_youtube_watch) list_id = ลิงก์หน้ารวมตอน"""
+    with storage.state_lock:
+        playlists = storage.load_video_playlists(fresh=True)
+        playlist = next((p for p in playlists if p["id"] == playlist_id), None)
+        if not playlist:
+            return
+        tracks = playlist.setdefault("tracks", [])
+        track = next((t for t in tracks if t["list_id"] == url), None)
+        if not track:
+            track = {"kind": "anifume", "list_id": url, "title": f"Anifume: {name}", "name": name}
+            tracks.append(track)
+        track.update(lang=lang, follow=follow, checked_at=datetime.now(timezone.utc).isoformat())
+        track.pop("error", None)
+        storage.save_video_playlists(playlists)
+
+
+def _check_anifume_track(playlist: dict, track: dict) -> list[dict]:
+    """ดึงหน้ารวมตอน (นอก lock) → ตอนที่ยังไม่มีในคลังเพิ่มเข้าเรื่อง; คืนตอนที่เพิ่ม [{"episode", "lang"}]"""
+    info = anifume.fetch_series(track["list_id"])
+    known = {v.get("canonical_key") for v in storage.load_videos()}
+    lang = track.get("lang")
+    items = [{"url": item["url"], "title": item["title"][:MAX_VIDEO_TITLE], "episode": youtube.parse_episode(item["title"]),
+              "provider": "anifume", "image": info["image"], "lang": lang or youtube.detect_lang(item["title"])}
+             for item in info["items"] if _anifume_key(item["url"]) not in known]
+    # รวมเรื่องเป็นซีซั่นแล้ว (เช่น ภาค 2 → ซีซั่น 2 ของภาคแรก) track ย้ายตามมา ชื่อเดิมกลายเป็นชื่อแฝง — ใช้ชื่อแฝงนั้น
+    # ตอนใหม่จึงเข้าซีซั่น/ภาษา/เลขตอนต่อที่ตั้งไว้ตอนรวม; เปลี่ยนชื่อเรื่องเฉย ๆ (ไม่ใช่ชื่อแฝง) ใช้ชื่อปัจจุบัน
+    name = track.get("name")
+    if name != playlist["name"] and not any(a["name"] == name for a in playlist.get("aliases", [])):
+        name = playlist["name"]
+    result = _store_playlist_items([(name, items)], "", "auto", move_existing=False) if items else {"items": []}
+    with storage.state_lock:
+        playlists = storage.load_video_playlists(fresh=True)
+        for p in playlists:
+            for t in p.get("tracks", []):
+                if p["id"] == playlist["id"] and t["list_id"] == track["list_id"]:
+                    t["checked_at"] = datetime.now(timezone.utc).isoformat()
+                    t.pop("error", None)
+        storage.save_video_playlists(playlists)
+    return [{"episode": i["episode"], "lang": lang} for i in result["items"] if i["status"] == "added"]
+
+
 @app.route("/api/anifume/preview", methods=["POST"])
 @require_admin
 def anifume_preview():
@@ -2523,6 +2566,12 @@ def anifume_add():
     known = {v.get("canonical_key"): v for v in storage.load_videos()}
     if body.get("dry_run"):
         return jsonify({"name": name, "items": [{**item, "exists": _anifume_key(item["url"]) in known} for item in items]})
+    follow_url = None
+    if body.get("follow_url"):
+        parsed = anifume.parse_url(str(body["follow_url"]))
+        if not parsed:
+            return jsonify({"error": "ลิงก์หน้ารวมตอนไม่ใช่ของ Anifume"}), 400
+        follow_url = anifume.series_url(parsed[1])
     image = str(body.get("image") or "")
     lang = body.get("lang") if body.get("lang") in ("dub", "sub") else None
     for item in items:
@@ -2530,6 +2579,8 @@ def anifume_add():
     result = _store_playlist_items([(name, items)], category["name"] if category else "", username, move_existing=True,
                                    mark_fresh=True)  # เหมือนเพิ่มเรื่องจาก YouTube
     playlist = next((p for p in storage.load_video_playlists() if p["name"] == name), None)
+    if playlist and follow_url:
+        _set_anifume_track(playlist["id"], follow_url, name, lang, bool(body.get("follow", True)))
     return jsonify({"ok": True, "playlist_id": playlist and playlist["id"], "name": name,
                     "added": result["added"], "moved": result["moved"]})
 
@@ -2701,9 +2752,12 @@ def run_youtube_watch() -> bool:
             for track in [t for t in playlist.get("tracks", []) if t.get("follow")]:
                 error = None
                 try:
-                    info = youtube.fetch_playlist(track["list_id"])
-                    result = _store_youtube_items(track["list_id"], info, playlist_id=playlist["id"], name=playlist["name"],
-                                                  lang=track.get("lang"), category_id=None, follow=True, username="auto")
+                    if track.get("kind") == "anifume":
+                        result = {"added": _check_anifume_track(playlist, track)}
+                    else:
+                        info = youtube.fetch_playlist(track["list_id"])
+                        result = _store_youtube_items(track["list_id"], info, playlist_id=playlist["id"], name=playlist["name"],
+                                                      lang=track.get("lang"), category_id=None, follow=True, username="auto")
                     error = result.get("error")
                     if result.get("added"):
                         print(f"[youtube-watch] {playlist['name']} +{len(result['added'])} ตอน", flush=True)

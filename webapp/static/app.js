@@ -4950,7 +4950,7 @@ function ytSheetHtml(p) {
   }).join("");
   const names = seasons.length > 1 ? `<div class="vm-field">ชื่อซีซั่น (ว่าง = "ซีซั่น N")${seasons.map((n) =>
     `<label class="season-name">${n}<input data-season-name="${n}" value="${escapeHtml((p.season_names || {})[n] || "")}" placeholder="ซีซั่น ${n}" maxlength="30" /></label>`).join("")}</div>` : "";
-  return `${tracks.length ? `<div class="vm-field">playlist YouTube (เช็คตอนใหม่ทุก 1 ชม.)<ul class="settings-list vm-list">${rows}</ul></div>` : ""}${split}${names}`;
+  return `${tracks.length ? `<div class="vm-field">แหล่งตอนใหม่ (เช็คทุก 1 ชม.)<ul class="settings-list vm-list">${rows}</ul></div>` : ""}${split}${names}`;
 }
 
 function closeVmSheet() {
@@ -5281,6 +5281,7 @@ function setAfMode(mode) {
   afState.mode = mode;
   els("#afMode [data-af-mode]").forEach((b) => b.classList.toggle("active", b.dataset.afMode === mode));
   el("#afSeries").hidden = mode !== "series";
+  afState.seriesUrl = null; // ติดตามได้เฉพาะรายการที่ดึงจากหน้ารวมตอน
   afState.preview = null;
   el("#afPreview").innerHTML = "";
 }
@@ -5299,6 +5300,7 @@ function renderAfSeriesPreview(data) {
       <div class="meta">${data.items.length} ตอน${fresh < data.items.length ? ` · มีในคลังแล้ว ${data.items.length - fresh}` : ""}</div></div></div>
     <ul class="af-list">${data.items.map((item) => `<li${item.exists ? ' class="exists"' : ""}><span class="ep">ตอน ${escapeHtml(String(item.episode))}</span><span>${escapeHtml(item.title)}${item.exists ? " (มีแล้ว)" : ""}</span></li>`).join("")}</ul>
     ${afCategorySelect()}
+    ${afState.seriesUrl ? '<label class="switch-label">ติดตามตอนใหม่อัตโนมัติ (เช็คทุก 1 ชม.) <input type="checkbox" class="switch" id="afFollow" checked /></label>' : ""}
     <button type="button" class="btn primary" data-af-add-series>เพิ่มเป็นเรื่อง "${escapeHtml(data.name)}" (${data.items.length} ตอน)</button>`;
 }
 
@@ -5306,6 +5308,7 @@ async function afFillSeries(url) {
   const d = await sendJSON("POST", "/api/anifume/preview", { url });
   if (d.kind !== "series") throw new Error("ลิงก์นี้ไม่ใช่หน้ารวมตอน");
   setAfMode("series");
+  afState.seriesUrl = d.url;
   afState.image = d.image || "";
   afState.lang = d.lang || null;
   el("#afName").value = d.name;
@@ -5373,7 +5376,8 @@ function initAnifumeAdmin() {
         afMsg(res.already_exists ? `มีในคลังแล้ว: "${res.title}"` : `เพิ่มคลิป "${res.title}" แล้ว`);
       } else {
         const res = await sendJSON("POST", "/api/anifume/add", { name: afState.preview.name, items: afState.preview.items,
-          category_id, image: afState.image, lang: afState.lang });
+          category_id, image: afState.image, lang: afState.lang,
+          follow_url: afState.seriesUrl || null, follow: el("#afFollow")?.checked ?? false });
         afMsg(`เพิ่มเข้า "${res.name}" ${res.added} ตอน${res.moved ? ` (ย้ายตอนที่มีอยู่แล้ว ${res.moved})` : ""}`);
         el("#afItems").value = "";
         el("#afName").value = "";
