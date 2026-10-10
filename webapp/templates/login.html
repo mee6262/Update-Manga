@@ -32,6 +32,7 @@
         {% if registration_open %}<a href="/register" class="auth-tab{% if mode == 'register' %} active{% endif %}">สมัครสมาชิก</a>{% endif %}
       </nav>
       {% if error %}<div class="form-msg error">{{ error }}</div>{% endif %}
+      <div id="guestLocalHint" class="login-local" hidden></div>
       {% if mode == 'register' %}
       <form class="auth-form" method="POST" action="/register">
         <input type="text" name="username" placeholder="Username" value="{{ form.username or '' }}" autocomplete="username"
@@ -49,7 +50,21 @@
         <button type="submit" class="btn primary">เข้าสู่ระบบ</button>
       </form>
       {% endif %}
+      <a class="login-skip" href="/">ดูต่อโดยไม่เข้าสู่ระบบ ›</a>
     </div>
   </div>
+  <script>
+    // ตอนที่อ่าน/ดูค้างตอนยังไม่ล็อกอิน (เก็บในเครื่อง ดู GUEST_KEY ใน app.js) — ล็อกอิน/สมัครแล้วย้ายเข้าบัญชีให้
+    (function () {
+      try {
+        var d = JSON.parse(localStorage.getItem("meeGuest:v1") || "null");
+        var n = d ? Object.keys(d.manga || {}).length + Object.keys(d.videos || {}).length : 0;
+        if (!n) return;
+        var box = document.getElementById("guestLocalHint");
+        box.textContent = "เครื่องนี้มีเรื่องที่อ่าน/ดูค้าง " + n + " รายการ — เข้าสู่ระบบหรือสมัครแล้วเก็บเข้าบัญชีให้เลย";
+        box.hidden = false;
+      } catch (e) {}
+    })();
+  </script>
 </body>
 </html>

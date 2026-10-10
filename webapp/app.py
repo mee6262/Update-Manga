@@ -247,6 +247,46 @@ if os.environ.get("PUBLIC_ORIGIN", "").strip() and not PUBLIC_ORIGIN:
 def auth_disabled() -> bool:
     return DEV_NO_AUTH and not storage.load_users()
 
+
+def is_guest() -> bool:
+    """ผู้เยี่ยมชม = ระบบมีบัญชีแล้วแต่ยังไม่ได้ล็อกอิน (dev ที่ไม่มีบัญชีเลยใช้ "local" เหมือนเดิม ไม่นับเป็นผู้เยี่ยมชม)"""
+    return not current_username() and bool(storage.load_users())
+
+
+# ผู้เยี่ยมชมเข้าได้เฉพาะหน้าอ่าน/ดูที่ไม่บันทึกอะไรรายคน — ที่เหลือ (ติดตาม บันทึก แจ้งเตือน ดูค้าง คอมเมนต์ ตั้งค่า
+# แอดมิน) ตอบ 401 code LOGIN_REQUIRED ให้หน้าเว็บเปิดแผ่นชวนเข้าสู่ระบบ — ตอนที่อ่าน/ดูค้างของผู้เยี่ยมชมเก็บในเครื่อง
+# แล้วย้ายเข้าบัญชีทีหลังด้วย /api/guest/import
+GUEST_ENDPOINTS = {
+    "index", "list_manga", "list_catalog", "list_categories", "list_chapters", "get_chapter", "reading_history",
+    "proxy_image", "list_videos", "video_thumb", "video_speedtest", "get_video_sources", "get_video_playback",
+    "get_video_progress", "list_comments", "version", "logout",
+}
+# ผู้เยี่ยมชม = ใครก็ได้ (รวม bot): จำกัดคำขอที่ทำให้เซิร์ฟเวอร์ยิงเว็บต้นทาง/ใช้เน็ตมาก ต่อ IP (สมาชิกไม่จำกัด)
+GUEST_RATE_LIMITS = {  # endpoint → (ครั้ง, วินาที)
+    "get_chapter": (120, 600), "proxy_image": (6000, 600), "get_video_playback": (120, 600), "get_video_sources": (120, 600),
+}
+_guest_hits: dict[tuple[str, str], list[float]] = {}
+_guest_hits_lock = threading.Lock()
+
+
+def _guest_rate_ok(endpoint: str) -> bool:
+    limit = GUEST_RATE_LIMITS.get(endpoint)
+    if not limit:
+        return True
+    count, window = limit
+    key, now = (endpoint, client_ip()), time.time()
+    with _guest_hits_lock:
+        hits = [t for t in _guest_hits.get(key, []) if now - t < window]
+        if len(hits) >= count:
+            _guest_hits[key] = hits
+            return False
+        hits.append(now)
+        _guest_hits[key] = hits
+        if len(_guest_hits) > 5000:  # IP เยอะผิดปกติ: ทิ้งรายการที่หมดอายุ กันหน่วยความจำโต
+            for k in [k for k, v in _guest_hits.items() if not v or now - v[-1] >= window]:
+                _guest_hits.pop(k, None)
+    return True
+
 REQUEST_DELAY = 1.0  # เว้นระยะคำขอไปเว็บเดียวกันตอน refresh ทั้งหมด กันโดน block
 REFRESH_WORKERS = 4  # เว็บต่างกันดึงพร้อมกันได้ (เว็บเดียวกันยังเว้นระยะตาม REQUEST_DELAY)
 
@@ -320,6 +360,10 @@ def require_admin(view):
 def require_login():
     if request.endpoint in ("login", "register", "static", "healthz", "service_worker"):
         return None
+    if request.endpoint in GUEST_ENDPOINTS and not current_username():
+        if not _guest_rate_ok(request.endpoint):
+            return jsonify({"error": "ใช้งานถี่เกินไป เข้าสู่ระบบเพื่อใช้งานต่อ หรือรอสักครู่", "code": "RATE_LIMITED"}), 429
+        return None  # ผู้เยี่ยมชม (ถ้ามี session ค้าง ไปตรวจ pw_ver ข้างล่างตามปกติ)
     # ถ้ายังไม่มีผู้ใช้ในระบบเลย (เช่น dev บนเครื่องตัวเอง ไม่เคยตั้ง WEB_USERNAME/WEB_PASSWORD)
     # ปล่อยผ่านไม่บังคับ login
     if auth_disabled():
@@ -339,7 +383,7 @@ def require_login():
             return None
         session.clear()
     if request.path.startswith("/api/"):
-        return jsonify({"error": "unauthorized", "code": "UNAUTHORIZED"}), 401
+        return jsonify({"error": "เข้าสู่ระบบก่อนใช้งานส่วนนี้", "code": "LOGIN_REQUIRED"}), 401
     return redirect(url_for("login", next=request.path))
 
 
@@ -387,7 +431,7 @@ def _login_locked(username: str, ip: str, now: float) -> bool:
 
 def registration_open() -> bool:
     # ค่าเริ่มต้นปิด: เว็บเปิดให้เข้าจากอินเทอร์เน็ต ถ้าเปิดรับสมัครเองโดยไม่ตั้งใจ ใครรู้ลิงก์ก็สมัครใช้เซิร์ฟเวอร์ได้
-    return bool(storage.load_site_settings().get("registration_open", False))
+    return bool(storage.load_site_settings().get("registration_open", True))  # เปิดรับสมัครเป็นค่าเริ่มต้น (แอดมินปิดได้)
 
 
 def _validate_username(username: str) -> str | None:
@@ -522,7 +566,7 @@ def change_password():
 @app.route("/logout")
 def logout():
     session.clear()
-    return redirect(url_for("login"))
+    return redirect(url_for("index"))
 
 
 PREFS_MAX_KEYS = 40
@@ -941,6 +985,8 @@ def index():
             "username": username,
             "is_admin": is_admin(),
             "must_change_password": bool(storage.load_users().get(username, {}).get("must_change_password")) if username else False,
+            "guest": is_guest(),
+            "registration_open": registration_open(),
         },
         "prefs": storage.load_prefs(username) if username else {},
         "manga": manga_list_payload(username),
@@ -1342,9 +1388,9 @@ def list_videos():
     # ส่งทั้งคลังทีเดียว (คลิปเพิ่มด้วยมือ จำนวนไม่มาก) ให้หน้าเว็บแบ่งหน้า/แยกแท็บ หน้าหลัก-คลัง-ประวัติ เอง
     # เดิมแบ่งหน้าด้วย cursor ฝั่งเซิร์ฟเวอร์ แล้วปุ่ม "โหลดเพิ่ม" ที่ไม่มีหน้าถัดไปดึงหน้าแรกมาต่อซ้ำ
     videos = sorted(storage.load_videos(), key=lambda item: item.get("created_at", ""), reverse=True)
-    username = current_username() or "local"
-    progress = storage.load_video_progress(username)
-    saved = storage.load_video_saved(username)
+    username = current_username() or ("local" if not is_guest() else None)
+    progress = storage.load_video_progress(username) if username else {}  # ผู้เยี่ยมชม: หน้าเว็บใช้ของในเครื่อง
+    saved = storage.load_video_saved(username) if username else {}
     if any(_needs_duration_backfill(v) for v in videos):
         threading.Thread(target=_backfill_video_durations, daemon=True).start()
     return jsonify({
@@ -1494,15 +1540,14 @@ def video_speedtest():
 
 @app.route("/api/videos/<video_id>/sources", methods=["GET"])
 def get_video_sources(video_id):
-    username = current_username()
-    if not username and storage.load_users():
-        return jsonify({"error": "unauthorized"}), 401
+    username = current_username()  # ผู้เยี่ยมชมดูได้ (require_login คุมแล้ว)
     video = next((v for v in storage.load_videos() if v.get("id") == video_id), None)
     if not video:
         return jsonify({"error": "ไม่พบวิดีโอ"}), 404
     if video.get("external"):
         return jsonify({})
-    _record_activity(username or "local", "plays", video_id)  # เปิดตัวเล่น 1 ครั้ง = ดู 1 ครั้ง
+    if username or not is_guest():
+        _record_activity(username or "local", "plays", video_id)  # เปิดตัวเล่น 1 ครั้ง = ดู 1 ครั้ง (ผู้เยี่ยมชมไม่นับ)
     if video.get("provider") == "youtube" or streams.get(video.get("provider")):
         return jsonify({})  # เล่นผ่านตัวเล่นของ YouTube / แหล่งใน streams ใช้ /playback
     return jsonify(_facebook_video_sources(video["facebook_url"]))
@@ -1512,9 +1557,7 @@ def get_video_sources(video_id):
 def get_video_playback(video_id):
     """วิธีเล่นตอนจากแหล่งใน streams (ถามแหล่งตอนกดเล่น ไม่เก็บไฟล์) — ?refresh=1 = ลิงก์เดิมเล่นไม่ได้/หมดอายุ ขอใหม่
     (จำกัดครั้งใน streams) ผิดพลาดตอบ {"code", "error", "retryable", "fallback_url"}"""
-    username = current_username()
-    if not username and storage.load_users():
-        return jsonify({"code": "UNAUTHORIZED", "error": "unauthorized", "retryable": False, "fallback_url": None}), 401
+    username = current_username()  # ผู้เยี่ยมชมดูได้ (require_login คุมแล้ว)
     video = next((v for v in storage.load_videos() if v.get("id") == video_id), None)
     if not video:
         return jsonify({"code": "VIDEO_NOT_FOUND", "error": "ไม่พบวิดีโอ", "retryable": False, "fallback_url": None}), 404
@@ -1523,8 +1566,10 @@ def get_video_playback(video_id):
         return jsonify({"code": streams.PLAYBACK_UNSUPPORTED, "error": "คลิปนี้ไม่ได้เล่นผ่านตัวหาวิธีเล่น",
                         "retryable": False, "fallback_url": fallback}), 400
     try:
+        # โควตาขอลิงก์ใหม่: ผู้เยี่ยมชมนับตาม IP (ไม่ใช้ถังรวม "local")
+        actor = username or (f"guest:{client_ip()}" if is_guest() else "local")
         playback = streams.resolve(video, refresh=request.args.get("refresh") == "1",
-                                   ctx={"origin": PUBLIC_ORIGIN, "user": username or "local"})
+                                   ctx={"origin": PUBLIC_ORIGIN, "user": actor})
     except streams.StreamError as e:
         print(f"[playback] {video.get('provider')} {video_id}: {e.code}", flush=True)
         status = 422 if e.code in (streams.PROVIDER_RESTRICTION, streams.PLAYBACK_UNSUPPORTED) else 502
@@ -1535,10 +1580,10 @@ def get_video_playback(video_id):
 @app.route("/api/videos/<video_id>/progress", methods=["GET"])
 def get_video_progress(video_id):
     username = current_username()
-    if not username and storage.load_users():
-        return jsonify({"error": "unauthorized"}), 401
     if not _video_exists(video_id):
         return jsonify({"error": "ไม่พบวิดีโอ"}), 404
+    if not username and is_guest():
+        return jsonify({"position_seconds": 0})  # ผู้เยี่ยมชม: จุดดูค้างอยู่ในเครื่อง
     entry = storage.load_video_progress(username or "local").get(video_id) or {}
     return jsonify({"position_seconds": entry.get("position_seconds", 0)})
 
@@ -3865,6 +3910,106 @@ def save_scroll_position(manga_id):
         entry["last_scroll"] = None if fraction >= 0.95 else {"key": key, "fraction": fraction}
         storage.save_read_state(current_username(), read_state)
     return jsonify({"ok": True})
+
+
+GUEST_IMPORT_MAX = 200  # เรื่อง/คลิปต่อครั้ง (หน้าเว็บเก็บไม่เกินนี้อยู่แล้ว)
+GUEST_IMPORT_MAX_READS = 50  # ตอนที่อ่านต่อเรื่อง
+
+
+def _guest_time(value) -> datetime | None:
+    """เวลาจากเครื่องผู้ใช้ (ms) — ห้ามเกินตอนนี้ (นาฬิกาเครื่องเพี้ยนไปอนาคตจะชนะข้อมูลบัญชีเสมอ)"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        return None
+    try:
+        return min(datetime.fromtimestamp(value / 1000, timezone.utc), datetime.now(timezone.utc))
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _iso_time(value) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+@app.route("/api/guest/import", methods=["POST"])
+def import_guest_progress():
+    """ตอนที่อ่าน/ดูค้างตอนยังไม่ล็อกอิน (เก็บในเครื่อง) → เข้าบัญชีหลังล็อกอิน/สมัคร
+    body: {"manga": [{"id", "reads": [{"url", "at"}], "scroll": {"url", "fraction", "at"}}],
+           "videos": [{"id", "position_seconds", "duration_seconds", "watched", "at"}]}  (at = ms)
+    ข้อมูลที่ใหม่กว่าชนะ: เครื่องใหม่กว่าบัญชี → ตอนล่าสุด/จุดค้างตามเครื่อง; บัญชีใหม่กว่า → เติมตอนที่ขาดอย่างเดียว"""
+    username = current_username()
+    if not username:
+        return jsonify({"error": "เข้าสู่ระบบก่อน", "code": "LOGIN_REQUIRED"}), 401
+    body = request.get_json(force=True, silent=True) or {}
+    manga_in = body.get("manga") if isinstance(body.get("manga"), list) else []
+    videos_in = body.get("videos") if isinstance(body.get("videos"), list) else []
+    if len(manga_in) > GUEST_IMPORT_MAX or len(videos_in) > GUEST_IMPORT_MAX:
+        return jsonify({"error": "ข้อมูลมากเกินไป"}), 400
+    manga_done = videos_done = 0
+    with storage.state_lock:
+        read_state = storage.load_read_state(username, fresh=True)
+        for item in manga_in:
+            manga = storage.get_manga(str((item or {}).get("id") or "")) if isinstance(item, dict) else None
+            if not manga:
+                continue
+            chapters = manga.get("chapters") or []
+
+            def key_of(url):
+                chapter = next((c for c in chapters if c["url"] == url or url in (c.get("alts") or [])), None)
+                return _chapter_key(chapter["text"], url) if chapter else None
+
+            reads = []
+            raw_reads = item.get("reads") if isinstance(item.get("reads"), list) else []
+            for r in raw_reads[:GUEST_IMPORT_MAX_READS]:
+                if not isinstance(r, dict):
+                    continue
+                at, key = _guest_time(r.get("at")), key_of(str(r.get("url") or ""))
+                if at and key is not None:
+                    reads.append((at, key))
+            if not reads:
+                continue
+            reads.sort(key=lambda r: r[0])
+            entry = read_state.setdefault(manga["id"], {"read_keys": [], "last_read_at": None})
+            account_at = _iso_time(entry.get("last_read_at"))
+            if account_at is None or reads[-1][0] > account_at:
+                for _, key in reads:  # ตามลำดับเวลา: ตอนล่าสุดของเครื่องเป็นตอนล่าสุดของบัญชี
+                    mark_chapter_read(read_state, manga["id"], key)
+                entry["last_read_at"] = reads[-1][0].isoformat()
+                scroll = item.get("scroll") if isinstance(item.get("scroll"), dict) else None
+                fraction = scroll.get("fraction") if scroll else None
+                key = key_of(str(scroll.get("url") or "")) if scroll else None
+                if key is not None and isinstance(fraction, (int, float)) and not isinstance(fraction, bool):
+                    fraction = max(0.0, min(1.0, float(fraction)))
+                    entry["last_scroll"] = None if fraction >= 0.95 else {"key": key, "fraction": fraction}
+            else:  # บัญชีใหม่กว่า: เติมตอนที่ขาดไว้ต้นลิสต์ ไม่เปลี่ยน "ตอนล่าสุด"/จุดค้างของบัญชี
+                missing = [k for _, k in reads if k not in entry["read_keys"]]
+                entry["read_keys"] = list(dict.fromkeys(missing)) + entry["read_keys"]
+            manga_done += 1
+        storage.save_read_state(username, read_state)
+
+        progress = storage.load_video_progress(username, fresh=True)
+        known = {v["id"] for v in storage.load_videos()}
+        for item in videos_in:
+            if not isinstance(item, dict) or str(item.get("id") or "") not in known:
+                continue
+            at = _guest_time(item.get("at"))
+            pos, dur = item.get("position_seconds"), item.get("duration_seconds")
+            valid = lambda v: not isinstance(v, bool) and isinstance(v, (int, float)) and 0 <= v <= MAX_VIDEO_POSITION
+            if not at or not valid(pos) or (dur is not None and not valid(dur)):
+                continue
+            old = progress.get(item["id"]) or {}
+            old_at = _iso_time(old.get("updated_at"))
+            if old_at is not None and old_at >= at:
+                continue
+            entry = {"position_seconds": 0 if item.get("watched") else round(float(pos), 1), "updated_at": at.isoformat()}
+            if dur or old.get("duration_seconds"):
+                entry["duration_seconds"] = round(float(dur), 1) if dur else old["duration_seconds"]
+            progress[item["id"]] = entry
+            videos_done += 1
+        storage.save_video_progress(username, progress)
+    return jsonify({"ok": True, "manga": manga_done, "videos": videos_done})
 
 
 @app.route("/api/manga/<manga_id>/mark_read", methods=["POST"])

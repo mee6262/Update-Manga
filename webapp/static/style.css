@@ -1369,3 +1369,39 @@ button, .nav-item, .home-tab, .video-tab { -webkit-user-select: none; user-selec
 .brand-sub { font-weight: 600; color: var(--text-dim); font-size: 0.95rem; }
 .login-logo { display: block; width: 72px; height: 72px; border-radius: 16px; margin: 0 auto 10px; }
 .login-tagline { text-align: center; color: var(--text-dim); font-size: 0.85rem; margin: -2px 0 14px; }
+
+/* ผู้เยี่ยมชม: การ์ด "ใช้ Mee+ ให้ครบ" (เข้าสู่ระบบ + ติดตั้ง) */
+.setup-card { margin-bottom: 14px; padding: 12px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 10%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border)); }
+.setup-card[hidden] { display: none; }
+.setup-head { display: flex; align-items: center; gap: 8px; }
+.setup-heading { flex: 1; font-weight: 700; font-size: 0.92rem; }
+.setup-count { font-size: 0.75rem; color: var(--text-dim); }
+.setup-bar { height: 4px; border-radius: 2px; background: var(--border); margin: 8px 0 2px; overflow: hidden; }
+.setup-bar span { display: block; height: 100%; background: var(--accent); }
+.setup-step { display: flex; align-items: center; gap: 10px; padding: 9px 0; }
+.setup-step + .setup-step { border-top: 1px solid var(--border); }
+.setup-num { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 0.78rem; font-weight: 700; background: color-mix(in srgb, var(--accent) 22%, var(--bg-card)); color: var(--accent); }
+.setup-step.done .setup-num { background: color-mix(in srgb, var(--accent) 16%, var(--bg-card)); }
+.setup-step .grow { flex: 1; min-width: 0; }
+.setup-title { font-weight: 600; font-size: 0.86rem; }
+.setup-step.done .setup-title { color: var(--text-dim); font-weight: 500; }
+.setup-desc { font-size: 0.74rem; color: var(--text-dim); line-height: 1.45; }
+.setup-step .btn { flex: none; font-size: 0.8rem; padding: 6px 12px; }
+.setup-foot { text-align: center; font-size: 0.75rem; color: var(--text-dim); margin-top: 4px; }
+.setup-foot a { color: var(--accent); }
+
+/* แผ่นชวนเข้าสู่ระบบ */
+.login-sheet-title { margin: 4px 0 4px; font-size: 1.05rem; }
+.login-perks { list-style: none; margin: 4px 0 12px; padding: 0; display: grid; gap: 6px; font-size: 0.88rem; }
+.login-perks li::before { content: "✓"; color: var(--accent); font-weight: 700; margin-right: 8px; }
+.login-local { font-size: 0.8rem; line-height: 1.5; padding: 8px 10px; border-radius: 8px; margin: 0 0 12px; background: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); }
+.login-local[hidden] { display: none; }
+.btn.block { display: block; width: 100%; text-align: center; margin-top: 8px; box-sizing: border-box; text-decoration: none; }
+.btn.ghost { background: none; border-color: transparent; color: var(--text-dim); }
+.hint.center { text-align: center; margin-top: 8px; }
+.guest-actions { display: flex; gap: 8px; margin: -10px 0 20px; }
+.guest-actions[hidden] { display: none; }
+.guest-actions .btn { flex: 1; text-align: center; text-decoration: none; }
+.member-only[hidden] { display: none !important; }
+#pushBtn.locked { opacity: 0.6; }
+.login-skip { display: block; text-align: center; margin-top: 14px; font-size: 0.82rem; color: var(--text-dim); }

@@ -67,7 +67,7 @@ const nativeFetch = window.fetch.bind(window);
 window.fetch = async (input, init) => {
   const res = await nativeFetch(input, init);
   const url = typeof input === "string" ? input : input.url;
-  if (res.status === 401 && !goingToLogin && new URL(url, location.href).pathname.startsWith("/api/")) {
+  if (res.status === 401 && !goingToLogin && state.currentUser.username && new URL(url, location.href).pathname.startsWith("/api/")) {
     goingToLogin = true;
     location.href = "/login?next=" + encodeURIComponent(location.pathname + location.search);
   }
@@ -132,10 +132,218 @@ function reloadIfPending() {
   if (pendingReload) location.reload();
 }
 
+// ---------- ผู้เยี่ยมชม (ยังไม่ล็อกอิน) ----------
+// อ่าน/ดูได้ทุกอย่าง แต่เซิร์ฟเวอร์ไม่เก็บอะไรรายคน (ติดตาม บันทึก แจ้งเตือน คอมเมนต์ = ต้องล็อกอิน)
+// ตอนที่อ่าน/ดูค้างเก็บในเครื่องนี้ (GUEST_KEY) แล้วย้ายเข้าบัญชีตอนล็อกอิน/สมัคร (runGuestHandoff)
+// กดปุ่มที่ล็อกอยู่ → แผ่นชวนล็อกอิน + จำสิ่งที่กดไว้ (GUEST_PENDING_KEY) ล็อกอินเสร็จทำให้ต่อทันที
+const GUEST_KEY = "meeGuest:v1"; // ชื่อเดียวกับใน login.html
+const GUEST_PENDING_KEY = "meeGuestPending";
+const GUEST_MAX = 200;       // เรื่อง/คลิปที่จำ (ล่าสุดก่อน) — ตรงกับเพดานของ /api/guest/import
+const GUEST_MAX_READS = 50;  // ตอนที่จำต่อเรื่อง
+
+const isGuest = () => Boolean(state.currentUser.guest);
+
+function guestLoad() {
+  try {
+    const d = JSON.parse(localStorage.getItem(GUEST_KEY) || "null");
+    if (d && typeof d.manga === "object" && typeof d.videos === "object") return d;
+  } catch (e) { /* เสีย/ไม่มี = เริ่มใหม่ */ }
+  return { manga: {}, videos: {} };
+}
+
+function guestSave(d) {
+  const newest = (obj) => Object.fromEntries(Object.entries(obj).sort((a, b) => (b[1].at || 0) - (a[1].at || 0)).slice(0, GUEST_MAX));
+  try { localStorage.setItem(GUEST_KEY, JSON.stringify({ manga: newest(d.manga), videos: newest(d.videos) })); } catch (e) { /* เต็ม/ปิดไว้ */ }
+}
+
+function guestItemCount() {
+  const d = guestLoad();
+  return Object.keys(d.manga).length + Object.keys(d.videos).length;
+}
+
+function guestRecordRead(mangaId, url, text) {
+  if (!isGuest() || !mangaId || !url) return;
+  const d = guestLoad();
+  const e = d.manga[mangaId] || { reads: [], scroll: null, at: 0 };
+  const now = Date.now();
+  e.reads = e.reads.filter((r) => r.url !== url).concat({ url, text: text || null, at: now }).slice(-GUEST_MAX_READS);
+  if (e.scroll && e.scroll.url !== url) e.scroll = null; // จุดค้างใช้ได้กับตอนล่าสุดที่อ่านเท่านั้น (เหมือนเซิร์ฟเวอร์)
+  e.at = now;
+  d.manga[mangaId] = e;
+  guestSave(d);
+}
+
+function guestRecordScroll(mangaId, url, fraction) {
+  if (!isGuest() || !mangaId || !url) return;
+  const d = guestLoad();
+  const e = d.manga[mangaId];
+  if (!e) return;
+  e.scroll = fraction >= 0.95 ? null : { url, fraction, at: Date.now() };
+  e.at = Date.now();
+  guestSave(d);
+}
+
+function guestRecordVideo(videoId, position, duration, watched = false) {
+  if (!isGuest() || !videoId) return;
+  const d = guestLoad();
+  d.videos[videoId] = { pos: watched ? 0 : Math.round(position * 10) / 10, dur: duration || null, watched, at: Date.now() };
+  guestSave(d);
+}
+
+// รายชื่อตอนจากเซิร์ฟเวอร์ (ผู้เยี่ยมชมได้ is_read=false หมด) + ที่อ่านในเครื่อง
+function guestApplyChapters(mangaId, data) {
+  if (!isGuest()) return data;
+  const e = guestLoad().manga[mangaId];
+  if (!e || !e.reads.length) return data;
+  const read = new Set(e.reads.map((r) => r.url));
+  const last = e.reads[e.reads.length - 1].url;
+  return {
+    ...data,
+    chapters: (data.chapters || []).map((c) => (read.has(c.url) ? { ...c, is_read: true } : c)),
+    last_read_url: last,
+    last_scroll: e.scroll && e.scroll.url === last ? { url: last, fraction: e.scroll.fraction } : null,
+  };
+}
+
+// ประวัติการอ่าน/การ์ดอ่านต่อของผู้เยี่ยมชม — รูปแบบเดียวกับ /api/history (state.manga ของผู้เยี่ยมชม = ทุกเรื่อง)
+function guestHistory() {
+  const d = guestLoad();
+  return Object.entries(d.manga).map(([id, e]) => {
+    const m = mangaById(id);
+    const last = e.reads[e.reads.length - 1];
+    if (!m || !last) return null;
+    return {
+      id, name: m.name, cover_url: m.cover_url, categories: m.categories || [],
+      latest_chapter: m.latest_chapter, latest_chapter_url: m.latest_chapter_url,
+      chapter_text: last.text, chapter_url: last.url,
+      fraction: e.scroll && e.scroll.url === last.url ? e.scroll.fraction : null,
+      last_read_at: new Date(e.at).toISOString(), is_new: false, unread_count: 0,
+      next_chapter_text: null, next_chapter_url: null,
+    };
+  }).filter(Boolean).sort((a, b) => b.last_read_at.localeCompare(a.last_read_at));
+}
+
+// ป้าย NEW EP ของผู้เยี่ยมชม: เซิร์ฟเวอร์ไม่รู้ว่าอ่านอะไรไปแล้ว (ทุกเรื่อง = "ยังไม่อ่านตอนล่าสุด")
+// → ใหม่ = อัปเดตภายใน 3 วัน และตอนล่าสุดยังไม่ได้อ่านในเครื่องนี้
+function guestApplyManga() {
+  if (!isGuest()) return;
+  const d = guestLoad();
+  state.manga.forEach((m) => {
+    const read = (d.manga[m.id]?.reads || []).some((r) => r.url === m.latest_chapter_url);
+    m.is_new = isRecent(mangaDate(m)) && !read;
+    m.unread_count = 0;
+  });
+}
+
+function guestApplyVideos() {
+  if (!isGuest()) return;
+  const d = guestLoad();
+  state.videos.forEach((v) => {
+    const g = d.videos[v.id];
+    if (!g) return;
+    v.watched_at = new Date(g.at).toISOString();
+    v.position_seconds = g.watched ? 0 : g.pos;
+    if (g.dur) v.duration_seconds = g.dur;
+  });
+}
+
+const LOGIN_TITLES = {
+  follow: "ติดตามเรื่องต้องเข้าสู่ระบบ",
+  save: "บันทึกไว้ดูทีหลังต้องเข้าสู่ระบบ",
+  notify: "การแจ้งเตือนต้องเข้าสู่ระบบ",
+  comment: "แสดงความคิดเห็นต้องเข้าสู่ระบบ",
+};
+
+// คืน true = ผู้เยี่ยมชม (เปิดแผ่นชวนแล้ว ผู้เรียกต้องหยุด) — pending: {type, id, label} ทำต่อให้หลังล็อกอิน
+function requireLogin(kind, pending = null) {
+  if (!isGuest()) return false;
+  openLoginSheet(kind, pending);
+  return true;
+}
+
+function openLoginSheet(kind = "", pending = null) {
+  el("#loginSheetTitle").textContent = LOGIN_TITLES[kind] || "ส่วนนี้ต้องเข้าสู่ระบบ";
+  const n = guestItemCount();
+  el("#loginSheetLocal").hidden = !n;
+  el("#loginSheetLocal").textContent = `เครื่องนี้มีเรื่องที่อ่าน/ดูค้าง ${n} รายการ — เข้าสู่ระบบแล้วเก็บเข้าบัญชีให้`;
+  try {
+    if (pending) localStorage.setItem(GUEST_PENDING_KEY, JSON.stringify({ ...pending, at: Date.now() }));
+    else localStorage.removeItem(GUEST_PENDING_KEY);
+  } catch (e) { /* ไม่จำก็แค่ต้องกดซ้ำหลังล็อกอิน */ }
+  el("#loginSheetPending").hidden = !pending;
+  el("#loginSheetPending").textContent = pending ? `เข้าสู่ระบบเสร็จ จะ${pending.label} ให้ทันที` : "";
+  const next = encodeURIComponent(location.pathname + location.search);
+  el("#loginSheetLogin").href = `/login?next=${next}`;
+  el("#loginSheetRegister").hidden = !state.currentUser.registration_open;
+  el("#loginSheet").hidden = false;
+}
+
+function closeLoginSheet() {
+  el("#loginSheet").hidden = true;
+  try { localStorage.removeItem(GUEST_PENDING_KEY); } catch (e) { /* ไม่เป็นไร */ }
+}
+
+function initLoginSheet() {
+  el("#loginSheetLater").addEventListener("click", closeLoginSheet);
+  el("#loginSheet").addEventListener("click", (e) => { if (e.target === e.currentTarget) closeLoginSheet(); });
+}
+
+// ล็อกอิน/สมัครเสร็จ (หน้าโหลดใหม่ในฐานะสมาชิก): ย้ายตอนค้างในเครื่องเข้าบัญชี แล้วทำสิ่งที่กดค้างไว้
+async function runGuestHandoff() {
+  if (isGuest() || !state.currentUser.username) return;
+  const done = []; // ข้อความแจ้งรวมครั้งเดียว (แยกกันข้อความหลังทับข้อความแรก)
+  const d = guestLoad();
+  if (Object.keys(d.manga).length || Object.keys(d.videos).length) {
+    try {
+      const res = await sendJSON("POST", "/api/guest/import", {
+        manga: Object.entries(d.manga).map(([id, e]) => ({ id, reads: e.reads.map((r) => ({ url: r.url, at: r.at })), scroll: e.scroll })),
+        videos: Object.entries(d.videos).map(([id, v]) => ({ id, position_seconds: v.pos || 0, duration_seconds: v.dur || null, watched: Boolean(v.watched), at: v.at })),
+      });
+      try { localStorage.removeItem(GUEST_KEY); } catch (e) { /* ไม่เป็นไร */ }
+      const parts = [res.manga ? `มังงะ ${res.manga} เรื่อง` : "", res.videos ? `วิดีโอ ${res.videos} ตอน` : ""].filter(Boolean);
+      if (parts.length) done.push(`เก็บตอนที่ค้างเข้าบัญชีแล้ว (${parts.join(" ")})`);
+      loadHistory();
+      loadVideos();
+    } catch (e) { /* ลองใหม่ตอนเปิดเว็บครั้งหน้า (ข้อมูลยังอยู่ในเครื่อง) */ }
+  }
+  let pending = null;
+  try {
+    pending = JSON.parse(localStorage.getItem(GUEST_PENDING_KEY) || "null");
+    localStorage.removeItem(GUEST_PENDING_KEY);
+  } catch (e) { /* ไม่มี */ }
+  if (pending && Date.now() - (pending.at || 0) <= 3600000) { // เกิน 1 ชม. = ไม่ทำแล้ว (กันทำของเก่าโดยไม่ตั้งใจ)
+    const label = await runPendingAction(pending);
+    if (label) done.push(`${label} แล้ว`);
+  }
+  if (done.length) toast(done.join(" · "));
+}
+
+async function runPendingAction(pending) {
+  const id = encodeURIComponent(pending.id || "");
+  try {
+    if (pending.type === "follow") {
+      await sendJSON("POST", `/api/catalog/${id}/subscribe`);
+      loadManga();
+      loadCatalog();
+    } else if (pending.type === "save-video") {
+      await sendJSON("POST", `/api/videos/${id}/save`, { saved: true });
+      loadVideos();
+    } else if (pending.type === "save-playlist") {
+      await sendJSON("POST", `/api/video-playlists/${id}/save`, { saved: true });
+      loadVideos();
+    } else return null;
+    return pending.label;
+  } catch (e) { return null; } // ไม่สำเร็จก็กดเองได้
+}
+
 function applyAdminGating() {
   els(".admin-only").forEach((elm) => { elm.hidden = !state.currentUser.is_admin; });
-  el("#accountName").textContent = state.currentUser.username || "ผู้ใช้";
-  el("#accountRole").textContent = state.currentUser.is_admin ? "ผู้ดูแลระบบ" : "สมาชิก";
+  const guest = isGuest();
+  el("#accountName").textContent = guest ? "ผู้เยี่ยมชม" : state.currentUser.username || "ผู้ใช้";
+  el("#accountRole").textContent = guest ? "ยังไม่ได้เข้าสู่ระบบ" : state.currentUser.is_admin ? "ผู้ดูแลระบบ" : "สมาชิก";
+  el("#guestAccountActions").hidden = !guest;
+  el("#guestRegisterBtn").hidden = !state.currentUser.registration_open;
+  els(".member-only").forEach((elm) => { elm.hidden = guest; });
 }
 
 // ---------- Tabs (เมนูล่าง) ----------
@@ -282,6 +490,7 @@ async function loadVideos() {
     // เซิร์ฟเวอร์ส่งทั้งคลัง หน้าเว็บแบ่งแสดงเอง
     const data = await getJSON("/api/videos");
     state.videos = data.items || [];
+    guestApplyVideos();
     state.videoCategories = data.categories || [];
     state.videoPlaylists = data.playlists || [];
     renderVideos();
@@ -692,6 +901,7 @@ function playlistSaveButton(p) {
 async function togglePlaylistSave(id, btn) {
   const p = playlistById(id);
   if (!p) return;
+  if (requireLogin("save", { type: "save-playlist", id, label: `บันทึก "${p.name}"` })) return;
   btn.disabled = true;
   try {
     const data = await sendJSON("POST", `/api/video-playlists/${encodeURIComponent(id)}/save`, { saved: !p.saved_at });
@@ -1772,7 +1982,8 @@ async function openVideo(video, { autoplay = false } = {}) {
     if (!activeVideo || activeVideo.id !== video.id || gen !== playGen) return;
     // ตอนนี้ยังไม่เคยดูในภาษานี้ แต่ดูค้างในอีกภาษา (สลับพากย์ ↔ ซับ) → ต่อจากจุดเดิม
     const sibling = episodeProgress(video);
-    const position = Number(progress.position_seconds) || (sibling.watched_at && sibling.pos) || 0;
+    const own = isGuest() ? guestLoad().videos[video.id] : null; // ผู้เยี่ยมชม: จุดดูค้างอยู่ในเครื่อง
+    const position = (own ? (own.watched ? 0 : own.pos) : Number(progress.position_seconds)) || (sibling.watched_at && sibling.pos) || 0;
     if (video.resolver) {
       await mountResolvedVideo(video, position, autoplay);
       return;
@@ -1858,6 +2069,7 @@ function saveActiveVideoProgress(force = false) {
   video.position_seconds = position;
   video.watched_at = new Date().toISOString();
   if (activeVideoDuration) video.duration_seconds = activeVideoDuration;
+  if (isGuest()) return guestRecordVideo(video.id, position, activeVideoDuration);
   fetch(`/api/videos/${encodeURIComponent(video.id)}/progress`, {
     method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true,
     body: JSON.stringify({ position_seconds: position, duration_seconds: activeVideoDuration || undefined }),
@@ -1867,7 +2079,8 @@ function saveActiveVideoProgress(force = false) {
 function clearActiveVideoProgress() {
   if (!activeVideo) return;
   activeVideoFinished = true; // กัน close หลัง event จบเขียนเวลาสุดท้ายกลับเข้ามาแข่งกับ DELETE
-  fetch(`/api/videos/${encodeURIComponent(activeVideo.id)}/progress`, { method: "DELETE", keepalive: true }).catch(() => {});
+  if (isGuest()) guestRecordVideo(activeVideo.id, 0, activeVideoDuration, true);
+  else fetch(`/api/videos/${encodeURIComponent(activeVideo.id)}/progress`, { method: "DELETE", keepalive: true }).catch(() => {});
   activeVideo.position_seconds = 0;
   activeVideo.watched_at = new Date().toISOString();
   lastSavedVideoPosition = 0;
@@ -1936,6 +2149,7 @@ function initVideos() {
     if (saveBtn) {
       const item = state.videos.find((v) => v.id === saveBtn.closest(".video-item")?.dataset.videoId);
       if (!item) return;
+      if (requireLogin("save", { type: "save-video", id: item.id, label: `บันทึก "${item.title}"` })) return;
       saveBtn.disabled = true;
       try {
         const data = await sendJSON("POST", `/api/videos/${encodeURIComponent(item.id)}/save`, { saved: !item.saved_at });
@@ -2161,7 +2375,7 @@ function initHomeTabs() {
 
 async function loadHistory() {
   try {
-    state.history = (await getJSON("/api/history")).items;
+    state.history = isGuest() ? guestHistory() : (await getJSON("/api/history")).items;
     renderHistory();
     renderMangaHome();
   } catch (e) {
@@ -2186,7 +2400,9 @@ function renderHistory() {
   const all = withoutSpecial(state.history);
   const items = q ? all.filter((h) => h.name.toLowerCase().includes(q)) : all;
   el("#historyEmpty").hidden = items.length > 0;
-  el("#historyEmpty").textContent = q ? "ไม่พบในประวัติการอ่าน" : "ยังไม่มีประวัติการอ่าน เปิดอ่านเรื่องไหนก็ตามจะขึ้นที่นี่";
+  el("#historyEmpty").textContent = q ? "ไม่พบในประวัติการอ่าน"
+    : isGuest() ? "ยังไม่มีประวัติในเครื่องนี้ เปิดอ่านเรื่องไหนก็ตามจะขึ้นที่นี่ (เข้าสู่ระบบเพื่อเก็บไว้ทุกเครื่อง)"
+      : "ยังไม่มีประวัติการอ่าน เปิดอ่านเรื่องไหนก็ตามจะขึ้นที่นี่";
   let label = "";
   el("#historyList").innerHTML = items.map((h) => {
     const day = h.last_read_at ? historyDayLabel(h.last_read_at) : "เก่ากว่านั้น";
@@ -2652,6 +2868,7 @@ let lastMangaLoadAt = Date.now(); // ข้อมูลชุดแรกฝั�
 async function loadManga() {
   try {
     state.manga = await getJSON("/api/manga");
+    guestApplyManga();
     lastMangaLoadAt = Date.now();
     renderGrid();
   } catch (e) {
@@ -2750,7 +2967,7 @@ function renderGrid() {
   empty.hidden = state.manga.length > 0 || state.homeMode !== "grid";
 
   el("#followHead").hidden = state.homeMode !== "grid" || !state.manga.length;
-  el("#followTitle").textContent = `ติดตาม · ${state.manga.length}`;
+  el("#followTitle").textContent = `${isGuest() ? "อัปเดตล่าสุด" : "ติดตาม"} · ${state.manga.length}`;
   renderMangaHome();
   const sort = el("#followSort").value;
   const signature = JSON.stringify([
@@ -3089,6 +3306,7 @@ function renderCatalog(items = state.catalog) {
 
 // สลับสถานะในจอทันที ไม่รอเซิร์ฟเวอร์ตอบ (ถ้าพลาดค่อยสลับกลับ) — กดแล้วรู้สึกตอบสนองทันที
 async function toggleSubscribe(manga) {
+  if (requireLogin("follow", { type: "follow", id: manga.id, label: `ติดตาม "${manga.name}"` })) return;
   const wasSubscribed = manga.is_subscribed;
   manga.is_subscribed = !wasSubscribed;
   renderCatalog(filterCatalog());
@@ -3176,6 +3394,7 @@ async function sendJSON(method, url, body) {
     throw new Error(e.body?.error || "บันทึกไม่สำเร็จ");
   }
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && data.code === "LOGIN_REQUIRED" && isGuest()) openLoginSheet();
   if (!res.ok) throw new Error(data.error || "บันทึกไม่สำเร็จ");
   return data;
 }
@@ -3595,6 +3814,7 @@ function openChapterList(manga) {
 }
 
 function applyChapterData(data) {
+  data = guestApplyChapters(currentManga?.id, data);
   currentChapters = data.chapters || [];
   lastReadUrl = data.last_read_url || null;
   lastScrollInfo = data.last_scroll || null;
@@ -3684,6 +3904,7 @@ function chapterTileHtml(c, { fresh = false } = {}) {
 }
 
 function mangaSubscribed(id) {
+  if (isGuest()) return false; // state.manga ของผู้เยี่ยมชม = ทุกเรื่อง ไม่ใช่เรื่องที่ติดตาม
   const fromCatalog = state.catalog.find((m) => m.id === id);
   return fromCatalog ? fromCatalog.is_subscribed : state.manga.some((m) => m.id === id);
 }
@@ -3895,6 +4116,10 @@ function saveScrollPosition() {
   const signature = `${currentChapterData.url}|${currentScrollFraction.toFixed(3)}`;
   if (signature === lastSavedScroll) return Promise.resolve();
   lastSavedScroll = signature;
+  if (isGuest()) {
+    guestRecordScroll(readerMangaId, currentChapterData.url, currentScrollFraction);
+    return Promise.resolve();
+  }
   return fetch(`/api/manga/${readerMangaId}/scroll_position`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -4078,6 +4303,7 @@ function renderChapter(data, chapterUrl, restoreFraction) {
 
   // อ่านตอนนี้แล้ว: อัปเดตสถานะในรายชื่อตอนที่ถืออยู่ในมือเลย ไม่ต้องรอโหลดใหม่จากเซิร์ฟเวอร์
   const row = currentChapters.find((c) => c.url === currentChapterData.url);
+  guestRecordRead(readerMangaId, currentChapterData.url, row?.text || data.chapter_text);
   if (row) {
     row.is_read = true;
     lastReadUrl = row.url;
@@ -4507,14 +4733,38 @@ function dismissInstallBanner(forever) {
   el("#installBanner").hidden = true;
 }
 
+// การ์ด "ใช้ Mee+ ให้ครบ" (หน้าแรก): ขั้นเข้าสู่ระบบ (มีบัญชีในระบบ) + ขั้นติดตั้ง (เครื่องที่ติดตั้งได้/ติดตั้งแล้ว)
+// แสดงเฉพาะขั้นที่ใช้กับเครื่องนี้ ครบทุกขั้น = ซ่อน, ✕ = ซ่อน 14 วัน (กติกาเดิมของแถบติดตั้ง)
+// ปุ่มเด่นอันเดียวที่ขั้นแรกที่ยังไม่ทำ
+let justInstalled = false;
 function renderInstallBanner() {
-  const banner = el("#installBanner");
-  banner.hidden = el("#installBtn").hidden || installBannerDismissed();
-  if (banner.hidden) return;
-  const direct = !!installPromptEvent; // Android/Chrome ติดตั้งได้ทันที
-  el("#installBannerTitle").textContent = direct ? "ติดตั้ง Mee+" : "เพิ่มไปหน้าจอโฮม";
-  el("#installBannerDesc").textContent = direct ? "ไม่ต้องเปิดเบราว์เซอร์ทุกครั้ง" : "เปิดเร็วเหมือนแอป + แจ้งเตือนตอนใหม่";
-  el("#installBannerBtn").textContent = direct ? "ติดตั้ง" : "วิธีเพิ่ม";
+  const card = el("#installBanner");
+  const steps = [];
+  if (state.currentUser.username || isGuest()) {
+    const n = guestItemCount();
+    steps.push({ key: "login", done: !isGuest(), title: isGuest() ? "เข้าสู่ระบบ" : "เข้าสู่ระบบแล้ว",
+      desc: isGuest() ? (n ? `เครื่องนี้มีเรื่องที่อ่าน/ดูค้าง ${n} รายการ เก็บเข้าบัญชีได้` : "ติดตามเรื่อง + จำตอนที่อ่านค้างทุกเครื่อง")
+        : state.currentUser.username, btn: "เข้าสู่ระบบ" });
+  }
+  const installed = isStandalone || justInstalled;
+  if (installed || !el("#installBtn").hidden) {
+    const direct = !!installPromptEvent; // Android/Chrome ติดตั้งได้ทันที
+    steps.push({ key: "install", done: installed, title: installed ? "ติดตั้งแล้ว" : direct ? "ติดตั้ง Mee+" : "เพิ่มไปหน้าจอโฮม",
+      desc: installed ? "" : isIOS ? "iPhone ต้องติดตั้งก่อนจึงแจ้งเตือนได้" : direct ? "ไม่ต้องเปิดเบราว์เซอร์ทุกครั้ง" : "เปิดเร็วเหมือนแอป + แจ้งเตือนตอนใหม่",
+      btn: direct ? "ติดตั้ง" : "วิธีเพิ่ม" });
+  }
+  const done = steps.filter((x) => x.done).length;
+  card.hidden = !steps.length || done === steps.length || installBannerDismissed();
+  if (card.hidden) return;
+  const primary = steps.find((x) => !x.done);
+  const rows = steps.map((x, i) => `<div class="setup-step${x.done ? " done" : ""}">
+      <span class="setup-num" aria-hidden="true">${x.done ? "✓" : i + 1}</span>
+      <div class="grow"><div class="setup-title">${escapeHtml(x.title)}</div>${x.desc ? `<div class="setup-desc">${escapeHtml(x.desc)}</div>` : ""}</div>
+      ${x.done ? "" : `<button class="btn${x === primary ? " primary" : ""}" data-setup="${x.key}">${escapeHtml(x.btn)}</button>`}</div>`).join("");
+  card.innerHTML = `<div class="setup-head"><span class="setup-heading">${done ? "อีกขั้นเดียว" : "ใช้ Mee+ ให้ครบ"}</span>
+      <span class="setup-count">${done}/${steps.length}</span><button class="install-banner-close" data-setup="close" aria-label="ปิด">✕</button></div>
+    <div class="setup-bar"><span style="width:${(done / steps.length) * 100}%"></span></div>${rows}
+    ${isGuest() && state.currentUser.registration_open ? '<div class="setup-foot">ยังไม่มีบัญชี? <a href="/register">สมัครสมาชิก</a></div>' : ""}`;
 }
 
 // forPush = เปิดจากปุ่มเปิดแจ้งเตือน (iPhone ต้องเปิดจากไอคอนหน้าจอโฮมก่อนถึงจะรับแจ้งเตือนได้) — เพิ่มขั้นที่ 4
@@ -4572,11 +4822,17 @@ function initInstallButton() {
   });
   window.addEventListener("appinstalled", () => {
     installPromptEvent = null;
+    justInstalled = true;
     el("#installBtn").hidden = true;
+    renderInstallBanner();
   });
   el("#installBtn").addEventListener("click", runInstall);
-  el("#installBannerBtn").addEventListener("click", runInstall);
-  el("#installBannerClose").addEventListener("click", () => dismissInstallBanner(false));
+  el("#installBanner").addEventListener("click", (e) => {
+    const action = e.target.closest("[data-setup]")?.dataset.setup;
+    if (action === "install") runInstall();
+    else if (action === "login") location.href = "/login?next=" + encodeURIComponent(location.pathname + location.search);
+    else if (action === "close") dismissInstallBanner(false);
+  });
   el("#installSheetOk").addEventListener("click", closeInstallSheet);
   el("#installSheetNever").addEventListener("click", () => { dismissInstallBanner(true); closeInstallSheet(); });
   el("#installSheet").addEventListener("click", (e) => { if (e.target === el("#installSheet")) closeInstallSheet(); });
@@ -4585,6 +4841,12 @@ function initInstallButton() {
 
 async function initPush() {
   const btn = el("#pushBtn");
+  if (isGuest()) { // เห็นกระดิ่งได้ กดแล้วชวนเข้าสู่ระบบ
+    btn.hidden = false;
+    btn.classList.add("locked");
+    btn.addEventListener("click", () => requireLogin("notify"));
+    return;
+  }
   if (!state.currentUser.username) return; // ไม่ได้ login = ไม่มีแจ้งเตือนส่วนตัว
   // กระดิ่ง = เปิดแผงการแจ้งเตือน (การเปิด/ปิดแจ้งเตือนแบบพุชย้ายไปอยู่ในแผง)
   btn.hidden = false;
@@ -4617,6 +4879,7 @@ function postJSON(url, body) {
 }
 
 async function togglePush() {
+  if (requireLogin("notify")) return;
   if (!pushSupported) {
     if (isIOS && !isStandalone) {
       toggleNotifPanel(false);
@@ -4791,8 +5054,11 @@ async function deleteCommentById(id) {
 
 function initComments() {
   els("[data-close-comments]").forEach((b) => b.addEventListener("click", closeComments));
+  if (isGuest()) el("#commentInput").placeholder = "เข้าสู่ระบบเพื่อแสดงความคิดเห็น";
+  el("#commentInput").addEventListener("focus", () => { if (requireLogin("comment")) el("#commentInput").blur(); });
   el("#commentForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (requireLogin("comment")) return;
     const input = el("#commentInput");
     const text = input.value.trim();
     if (!text || !commentTarget) return;
@@ -5689,6 +5955,7 @@ function initAndroidBack(force = false) {
 
 function init() {
   applyAdminGating();
+  guestApplyManga();
   renderGrid();
   initInstallButton();
   initPush();
@@ -5720,6 +5987,8 @@ function init() {
   initLibrary();
   initSettingsPanes();
   initConfirmSheet();
+  initLoginSheet();
+  runGuestHandoff();
   initHomeAutoRefresh();
   initPullToRefresh();
   initAdminSearch();

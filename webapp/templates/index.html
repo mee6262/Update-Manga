@@ -56,12 +56,8 @@
 
   <main>
     <section id="listView" class="view active">
-      <div id="installBanner" class="install-banner" hidden>
-        <span class="install-banner-ic" aria-hidden="true">📲</span>
-        <div class="grow"><div id="installBannerTitle" class="install-banner-title"></div><div id="installBannerDesc" class="install-banner-desc"></div></div>
-        <button id="installBannerBtn" class="btn primary"></button>
-        <button id="installBannerClose" class="install-banner-close" aria-label="ปิด">✕</button>
-      </div>
+      <!-- การ์ด "ใช้ Mee+ ให้ครบ": ขั้นเข้าสู่ระบบ + ขั้นติดตั้ง (วาดใน renderInstallBanner) -->
+      <div id="installBanner" class="setup-card" hidden></div>
       <button id="homePwNotice" class="notice-card notice-btn" hidden>รหัสผ่านของคุณถูกรีเซ็ต แตะเพื่อไปตั้งรหัสผ่านใหม่ ›</button>
       <div id="mangaHome"></div>
       <div id="followHead" class="mm-row-head follow-head" hidden>
@@ -170,6 +166,10 @@
           <div id="accountRole" class="account-role"></div>
         </div>
       </div>
+      <div id="guestAccountActions" class="guest-actions" hidden>
+        <a class="btn primary" href="/login">เข้าสู่ระบบ</a>
+        <a id="guestRegisterBtn" class="btn" href="/register">สมัครสมาชิก</a>
+      </div>
 
       <div id="pwNotice" class="notice-card" hidden>
         รหัสผ่านของคุณถูกรีเซ็ตเป็นรหัสเริ่มต้น กรุณาตั้งรหัสผ่านใหม่ด้านล่าง
@@ -202,7 +202,7 @@
 
       <h3 class="set-group-title">บัญชีและแอป</h3>
       <div class="set-group">
-      <details id="passwordCard" class="set-item set-details collapsible">
+      <details id="passwordCard" class="set-item set-details collapsible member-only">
         <summary class="set-row">
           <span class="set-ic">🔒</span><span class="set-label">เปลี่ยนรหัสผ่าน</span>
           <span class="chev" aria-hidden="true">›</span>
@@ -216,7 +216,7 @@
         </form>
       </details>
         <button id="setInstallRow" class="set-item set-row" hidden><span class="set-ic">📲</span><span class="set-label">เพิ่มไปหน้าจอโฮม</span><span class="chev" aria-hidden="true">›</span></button>
-        <a href="/logout" class="set-item set-row set-danger"><span class="set-ic">↩</span><span class="set-label">ออกจากระบบ</span></a>
+        <a href="/logout" class="set-item set-row set-danger member-only"><span class="set-ic">↩</span><span class="set-label">ออกจากระบบ</span></a>
       </div>
 
       <div class="admin-only" hidden>
@@ -531,6 +531,23 @@
     <div class="sheet confirm-sheet" role="alertdialog" aria-modal="true" aria-labelledby="confirmText"><div class="sheet-grip" aria-hidden="true"></div>
       <p id="confirmText" class="confirm-text"></p>
       <div class="confirm-actions"><button id="confirmOk" class="btn primary"></button><button id="confirmCancel" class="btn">ยกเลิก</button></div>
+    </div>
+  </div>
+  <div id="loginSheet" class="sheet-backdrop" hidden>
+    <div class="sheet login-sheet" role="dialog" aria-modal="true" aria-labelledby="loginSheetTitle"><div class="sheet-grip" aria-hidden="true"></div>
+      <h3 id="loginSheetTitle" class="login-sheet-title"></h3>
+      <p class="hint">บัญชีฟรี ใช้ได้ทุกเครื่อง</p>
+      <ul class="login-perks">
+        <li>แจ้งเตือนเมื่อมีตอนใหม่</li>
+        <li>จำตอนและตำแหน่งที่อ่านค้าง ทุกเครื่อง</li>
+        <li>ดูวิดีโอต่อจากจุดเดิม</li>
+        <li>ติดตาม บันทึกเรื่อง และคอมเมนต์</li>
+      </ul>
+      <p id="loginSheetLocal" class="login-local" hidden></p>
+      <a id="loginSheetLogin" class="btn primary block" href="/login">เข้าสู่ระบบ</a>
+      <a id="loginSheetRegister" class="btn block" href="/register">สมัครสมาชิก</a>
+      <button id="loginSheetLater" class="btn ghost block" type="button">ไว้ทีหลัง</button>
+      <p id="loginSheetPending" class="hint center" hidden></p>
     </div>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

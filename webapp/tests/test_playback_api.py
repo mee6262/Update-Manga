@@ -50,11 +50,12 @@ class PlaybackApiTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual((d["kind"], d["url"], d["frame"], d["fallback_url"]), ("page_embed", EP + "#vpfi", {"pad": 12, "max": 854}, EP))
         self.assertEqual(self.play("af1", self.member)[0], 200)
+        self.assertEqual(self.play("af1", self.anon)[0], 200)  # ผู้เยี่ยมชมดูได้
 
     def test_error_shape(self):
         for vid, c, status, code in [("af2", None, 422, "PROVIDER_RESTRICTION"), ("afbad", None, 502, "PLAYER_INFO_MISSING"),
                                      ("fb1", None, 400, "PLAYBACK_UNSUPPORTED"), ("nope", None, 404, "VIDEO_NOT_FOUND"),
-                                     ("af1", self.anon, 401, "UNAUTHORIZED")]:
+                                     ("af2", self.anon, 422, "PROVIDER_RESTRICTION")]:  # ผู้เยี่ยมชมได้ผลแบบเดียวกัน
             got, d = self.play(vid, c)
             self.assertEqual((got, d.get("code")), (status, code), vid)
             self.assertIn("error", d)
