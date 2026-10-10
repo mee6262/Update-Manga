@@ -357,7 +357,7 @@ function showTab(tab, fromBack = false) {
   document.body.dataset.tab = tab;
   els(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   els(".view").forEach((v) => v.classList.toggle("active", v.id === `${tab}View`));
-  els(".topbar-title").forEach((t) => { t.hidden = t.dataset.for !== tab; });
+  els(".topbar-title, .topbar-actions").forEach((t) => { t.hidden = t.dataset.for !== tab; });
   updateCategoryBar();
   window.scrollTo(0, 0);
 
@@ -450,13 +450,13 @@ function isLibraryTab() {
 function renderVideos() {
   const library = isLibraryTab();
   const rows = videoTab === "home"; // "ทั้งหมด" และหน้าหมวด วาดใน #videoHome ทั้งคู่
-  els(".video-tab").forEach((b) => b.classList.toggle("active", b.dataset.videoTab === (library ? "library" : "home")));
+  el("#videoLibraryBtn").classList.toggle("active", library);
   els("#librarySeg [data-video-tab]").forEach((b) => b.classList.toggle("active", b.dataset.videoTab === videoTab));
-  el("#librarySeg").hidden = !library;
+  el("#libraryHead").hidden = !library;
   // ผลค้นหาในหน้าค้นหาใช้ข้อมูลคลิปชุดเดียวกัน — บันทึก/ลบ/ดูค้างแล้วต้องอัปเดตตามด้วย
   if (el("#searchInput").value.trim()) renderSearch();
-  renderVideoCategoryChips();
-  el("#videoToolbar").hidden = videoTab !== "home" || !state.currentUser.is_admin; // เพิ่มคลิปได้เฉพาะแอดมิน
+  renderVideoCatPicker();
+  el("#addVideoBtn").hidden = !state.currentUser.is_admin; // เพิ่มคลิปได้เฉพาะแอดมิน
   el("#videoHome").hidden = !rows;
   if (rows) renderVideoHome();
   el("#libraryView").hidden = !library;
@@ -694,6 +694,29 @@ function renderVideoHome() {
 const CAT_PAGE = 24;
 let catShown = CAT_PAGE; // ตารางเติมทีละหน้าตอนเลื่อนใกล้ท้าย (loadMoreVideoCards)
 
+// แนวเรื่อง: เดาจากคำในชื่อเรื่อง/ชื่อคลิป (ไม่ต้องติดป้ายเอง) — ชื่อที่ไม่มีคำเหล่านี้ไม่มีแนว
+const VIDEO_GENRES = [
+  ["ระบบ", /ระบบ|เลเวล|level\s*up/i],
+  ["ทะลุมิติ/เกิดใหม่", /ทะลุมิติ|ข้ามมิติ|ย้อนเวลา|ย้อนอดีต|เกิดใหม่|คืนชีพ|กลับชาติ/],
+  ["เซียน/กำลังภายใน", /เซียน|จอมยุทธ์|ยุทธภพ|ฝึกตน|บำเพ็ญ|กระบี่|กำลังภายใน|ลัทธิ|สำนัก/],
+  ["จอมมาร/เทพ", /จอมมาร|ราชันย์|มหาเทพ|เทพเจ้า|เทพสงคราม|จักรพรรดิ/],
+  ["ล้างแค้น", /ล้างแค้น|แก้แค้น|แค้น/],
+  ["โรแมนติก", /ท่านประธาน|ภรรยา|ชายา|แต่งงาน|สามี|เจ้าสาว|รัก/],
+  ["วันสิ้นโลก", /สิ้นโลก|ซอมบี้|หายนะ/],
+  ["ตลก", /ตลก|ฮา|ป่วน/],
+];
+const GENRE_MIN = 2; // ชิปแนวขึ้นเฉพาะแนวที่มีอย่างน้อยเท่านี้
+let videoGenre = ""; // แนวที่เลือกในหน้าหมวด ("" = ทั้งหมด)
+
+function genresOf(text) {
+  return VIDEO_GENRES.filter(([, re]) => re.test(text || "")).map(([g]) => g);
+}
+
+function genreTagsHtml(text) {
+  const tags = genresOf(text).slice(0, 2);
+  return tags.length ? `<span class="mm-tags">${tags.map((g) => `#${escapeHtml(g)}`).join(" ")}</span>` : "";
+}
+
 // clipsOnly = ตารางเป็นคลิป: ชิป "คลิปเดี่ยว" หรือหมวดที่ไม่มีเรื่องเลย (มีแต่คลิปเดี่ยว — ห้ามเป็นแถวเลื่อนข้าง)
 function categoryContent() {
   const cat = videoCategoryFilter;
@@ -711,7 +734,16 @@ function catSortKey(clipsOnly) {
   return clipsOnly ? (value === "short" ? "short" : "updated") : (value === "name" ? "name" : "updated");
 }
 
+// ชื่อที่ใช้เดาแนวของรายการในตาราง
+function gridItemText(item) {
+  return item.name ?? item.title;
+}
+
 function categoryGridItems() {
+  return sortedCategoryItems().filter((x) => !videoGenre || genresOf(gridItemText(x)).includes(videoGenre));
+}
+
+function sortedCategoryItems() {
   const { clipsOnly, lists, clips } = categoryContent();
   const sort = catSortKey(clipsOnly);
   if (!clipsOnly) return sort === "name" ? [...lists].sort((a, b) => a.name.localeCompare(b.name, "th", { numeric: true })) : lists;
@@ -732,7 +764,7 @@ function playlistGridTileHtml(p) {
   const langs = seriesLangs(p).map((l) => `<span>${LANG_LABEL[l].replace("ไทย", "")}</span>`).join("");
   const status = started ? `ดูต่อ ${episodeLabel(playlistResume(eps))}` : "ยังไม่เคยดู";
   return `<button class="mm-tile" data-playlist-id="${escapeHtml(p.id)}"><span class="mm-thumb">${thumbHtml(p.thumbnail_url)}${ytBadge(p)}${playlistBadge(p, eps)}<span class="mm-count">${eps.length} ตอน</span>${saveDotHtml(p.saved_at, `data-save-playlist="${escapeHtml(p.id)}"`)}</span>
-    <span class="mm-name">${escapeHtml(p.name)}</span>${langs ? `<span class="mm-langs">${langs}</span>` : ""}
+    <span class="mm-name">${escapeHtml(p.name)}</span>${genreTagsHtml(p.name)}${langs ? `<span class="mm-langs">${langs}</span>` : ""}
     ${started ? `<span class="lib-bar"><span style="width:${((watched / Math.max(1, eps.length)) * 100).toFixed(1)}%"></span></span>` : ""}<span class="mm-meta">${status}</span></button>`;
 }
 
@@ -741,7 +773,7 @@ function clipGridTileHtml(v) {
   const fresh = !v.watched_at && isRecent(v.created_at) ? '<span class="new-badge">NEW</span>' : "";
   const save = saveDotHtml(v.saved_at, `data-save-clip="${escapeHtml(v.id)}"`);
   const meta = `${clipTileMeta(v)}${Number(v.duration_seconds) ? ` · ${timeAgo(v.created_at, "เมื่อสักครู่")}` : ""}`;
-  const inner = `<span class="mm-thumb">${thumbHtml(v.thumbnail_url)}${ytBadge(v)}${fresh}${save}${progressBarHtml(Number(v.position_seconds) || 0, Number(v.duration_seconds) || 0)}</span><span class="mm-name">${escapeHtml(v.title)}</span><span class="mm-meta">${escapeHtml(meta)}</span>`;
+  const inner = `<span class="mm-thumb">${thumbHtml(v.thumbnail_url)}${ytBadge(v)}${fresh}${save}${progressBarHtml(Number(v.position_seconds) || 0, Number(v.duration_seconds) || 0)}</span><span class="mm-name">${escapeHtml(v.title)}</span>${genreTagsHtml(v.title)}<span class="mm-meta">${escapeHtml(meta)}</span>`;
   return v.external
     ? `<a class="mm-tile" href="${escapeHtml(v.source_url || "#")}" target="_blank" rel="noopener">${inner}</a>`
     : `<button class="mm-tile" data-video-id="${escapeHtml(v.id)}">${inner}</button>`;
@@ -754,23 +786,44 @@ function renderCategoryGrid() {
   box.innerHTML = categoryGridItems().slice(0, catShown).map(clipsOnly ? clipGridTileHtml : playlistGridTileHtml).join("");
 }
 
+function videoCategoryName(id) {
+  return id === CLIPS_FILTER ? "คลิปเดี่ยว" : (state.videoCategories || []).find((c) => c.id === id)?.name || "";
+}
+
+// หัวหน้าหมวด: ชื่อหมวด + จำนวน แล้วชิปแนว (นับจากรายการในตาราง ไม่รวมแนวที่มีน้อยกว่า GENRE_MIN)
+function categoryHeadHtml(clipsOnly, items) {
+  const counts = new Map();
+  for (const x of items) for (const g of genresOf(gridItemText(x))) counts.set(g, (counts.get(g) || 0) + 1);
+  const genres = [...counts].filter(([, n]) => n >= GENRE_MIN).sort((a, b) => b[1] - a[1]);
+  if (videoGenre && !counts.has(videoGenre)) videoGenre = "";
+  const chips = genres.length
+    ? `<div class="mm-genres"><button class="${videoGenre ? "" : "active"}" data-genre="">ทั้งหมด</button>${genres.map(([g, n]) =>
+      `<button class="${g === videoGenre ? "active" : ""}" data-genre="${escapeHtml(g)}">${escapeHtml(g)}<b>${n}</b></button>`).join("")}</div>`
+    : "";
+  return `<div class="mm-cat-head"><h2>${escapeHtml(videoCategoryName(videoCategoryFilter))}</h2><span>${items.length} ${clipsOnly ? "คลิป" : "เรื่อง"}</span></div>${chips}`;
+}
+
 function renderCategoryHome() {
   const { clipsOnly, lists, clips } = categoryContent();
   const cat = videoCategoryFilter;
   const inCat = (v) => (cat === CLIPS_FILTER ? !v.playlist_id : videoCategoryOf(v) === cat);
-  const parts = [];
-  const heroes = pickHeroPlaylists(lists);
-  if (heroes.length) parts.push(heroCarouselHtml(heroes));
-  parts.push(continueRowHtml(inCat), latestRowHtml("ตอนใหม่ในหมวดนี้", inCat));
-  const total = clipsOnly ? clips.length : lists.length;
+  const parts = [categoryHeadHtml(clipsOnly, clipsOnly ? clips : lists)];
+  // เลือกแนวอยู่ = เหลือแค่ตารางของแนวนั้น (ไม่มีแบนเนอร์/แถวมาดันลง)
+  if (!videoGenre) {
+    const heroes = pickHeroPlaylists(lists);
+    if (heroes.length) parts.push(heroCarouselHtml(heroes));
+    parts.push(continueRowHtml(inCat), latestRowHtml("ตอนใหม่ในหมวดนี้", inCat));
+  }
+  const total = videoGenre ? categoryGridItems().length : clipsOnly ? clips.length : lists.length;
   if (total) {
     const sort = catSortKey(clipsOnly);
     const opts = clipsOnly ? [["updated", "เพิ่มล่าสุด"], ["short", "สั้นสุด"]] : [["updated", "อัปเดตล่าสุด"], ["name", "ชื่อ ก–ฮ"]];
     const sortHtml = `<div class="mm-sort">${opts.map(([k, label]) => `<button class="${k === sort ? "active" : ""}" data-cat-sort="${k}">${label}</button>`).join("")}</div>`;
-    parts.push(`<section class="mm-section"><div class="mm-row-head mm-grid-head"><h2 class="section-title">${clipsOnly ? "คลิปเดี่ยว" : "ทุกเรื่อง"} · ${total}</h2>${sortHtml}</div><div id="mmCatGrid" class="mm-grid"></div></section>`);
+    parts.push(`<section class="mm-section"><div class="mm-row-head mm-grid-head"><h2 class="section-title">${videoGenre ? escapeHtml(videoGenre) : clipsOnly ? "คลิปเดี่ยว" : "ทุกเรื่อง"} · ${total}</h2>${sortHtml}</div><div id="mmCatGrid" class="mm-grid"></div></section>`);
   }
-  if (!clipsOnly && clips.length) parts.push(homeRowHtml("คลิปเดี่ยวในหมวดนี้", clips.map((v) => clipGridTileHtml(v)).join("")));
-  el("#videoHome").innerHTML = parts.join("") || '<div class="empty-state">ยังไม่มีคลิปในหมวดนี้</div>';
+  if (!clipsOnly && clips.length && !videoGenre) parts.push(homeRowHtml("คลิปเดี่ยวในหมวดนี้", clips.map((v) => clipGridTileHtml(v)).join("")));
+  if (!lists.length && !clips.length) parts.push('<div class="empty-state">ยังไม่มีคลิปในหมวดนี้</div>');
+  el("#videoHome").innerHTML = `<div class="mm-cat">${parts.join("")}</div>`;
   renderCategoryGrid();
   initHeroCarousel();
 }
@@ -1004,6 +1057,7 @@ function loadMoreVideoCards() {
 
 function resetVideoPaging() {
   catShown = CAT_PAGE;
+  videoGenre = "";
   heroIndex = 0; // สลับหมวด = ชุดแบนเนอร์ใหม่ เริ่มเรื่องแรก
 }
 
@@ -2233,12 +2287,20 @@ function initVideos() {
     if (video && !video.external) openVideo(video);
   };
   el("#searchVideoGrid").addEventListener("click", onVideoGridClick);
-  el("#videoCategoryChips").addEventListener("click", (event) => {
+  el("#videoCatPicker").addEventListener("click", (event) => {
+    if (event.target.closest("[data-cat-sheet-open]")) return setVideoCatSheet(true);
     const chip = event.target.closest("[data-video-category]");
-    if (!chip) return;
-    videoCategoryFilter = chip.dataset.videoCategory || null;
-    resetVideoPaging();
-    renderVideos();
+    if (chip) pickVideoCategory(chip.dataset.videoCategory);
+  });
+  el("#videoCatSheet").addEventListener("click", (event) => {
+    if (event.target.closest("[data-cat-sheet-close]")) return setVideoCatSheet(false);
+    const view = event.target.closest("[data-cat-view]")?.dataset.catView;
+    if (view) { savePref("video_cat_view", view); return renderVideoCatSheet(); }
+    const chip = event.target.closest("[data-video-category]");
+    if (chip) pickVideoCategory(chip.dataset.videoCategory);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !el("#videoCatSheet").hidden) setVideoCatSheet(false);
   });
   els("[data-video-tab]").forEach((button) => button.addEventListener("click", () => {
     // "คลังของฉัน" = กลับไปแท็บย่อยล่าสุด (บันทึกไว้ / ประวัติการดู)
@@ -2264,6 +2326,12 @@ function initVideos() {
     if (saveBtn) { event.preventDefault(); return togglePlaylistSave(saveBtn.dataset.savePlaylist, saveBtn); }
     const saveClip = event.target.closest("[data-save-clip]");
     if (saveClip) { event.preventDefault(); return toggleVideoSave(saveClip.dataset.saveClip, saveClip); }
+    const genre = event.target.closest("[data-genre]")?.dataset.genre;
+    if (genre !== undefined) {
+      videoGenre = genre;
+      catShown = CAT_PAGE;
+      return renderCategoryHome();
+    }
     const sort = event.target.closest("[data-cat-sort]")?.dataset.catSort;
     if (sort) {
       savePref(categoryContent().clipsOnly ? "video_clip_sort" : "video_cat_sort", sort);
@@ -2271,13 +2339,7 @@ function initVideos() {
       return renderCategoryHome();
     }
     const filter = event.target.closest("[data-row-filter]")?.dataset.rowFilter;
-    if (filter) {
-      videoCategoryFilter = filter;
-      resetVideoPaging();
-      renderVideos();
-      window.scrollTo(0, 0);
-      return;
-    }
+    if (filter) return pickVideoCategory(filter);
     const tile = event.target.closest(".mm-tile[data-video-id]");
     if (tile) {
       const v = state.videos.find((x) => x.id === tile.dataset.videoId);
@@ -5163,13 +5225,78 @@ function initComments() {
 // ---------- หมวดคลิป (แอดมินตั้ง) — ชิปกรองในแท็บหน้าหลักของ MeeMovie ----------
 let videoCategoryFilter = null;
 
-function renderVideoCategoryChips() {
-  const cats = state.videoCategories || [];
-  const box = el("#videoCategoryChips");
+// หมวดมีเยอะขึ้นได้เรื่อย ๆ — ไม่เรียงชิปทุกหมวดให้เลื่อนข้าง ใช้ปุ่มเลือกหมวด + ชิปหมวดที่เปิดล่าสุดแทน
+const RECENT_CATS = 3;
+
+function videoCatOptions() {
+  const clips = state.videos.filter((v) => !v.playlist_id).length;
+  return [{ id: "", name: "ทั้งหมด" }, ...(state.videoCategories || []), ...(clips ? [{ id: CLIPS_FILTER, name: "คลิปเดี่ยว" }] : [])];
+}
+
+function videoCatCount(id) {
+  if (!id) return "";
+  if (id === CLIPS_FILTER) return `${state.videos.filter((v) => !v.playlist_id).length} คลิป`;
+  const lists = (state.videoPlaylists || []).filter((p) => p.category_id === id).length;
+  const clips = state.videos.filter((v) => !v.playlist_id && v.category_id === id).length;
+  return [lists && `${lists} เรื่อง`, clips && `${clips} คลิป`].filter(Boolean).join(" · ") || "ว่าง";
+}
+
+function videoCatCover(id) {
+  const p = (state.videoPlaylists || []).find((x) => !id || x.category_id === id);
+  const v = state.videos.find((x) => !x.playlist_id && (id === CLIPS_FILTER || x.category_id === id));
+  return (id === CLIPS_FILTER ? v?.thumbnail_url : p?.thumbnail_url || v?.thumbnail_url) || "";
+}
+
+// ชิปข้างปุ่ม: หมวดที่คนนี้เปิดล่าสุด (จำตามบัญชี) — ยังไม่เคยเปิด เติมด้วยหมวดแรก ๆ; อยู่ในหมวดอยู่ = มี "ทั้งหมด" ให้กลับ
+function recentVideoCats() {
+  const opts = videoCatOptions();
+  const cur = videoCategoryFilter || "";
+  const ids = [...(Array.isArray(state.prefs.video_cat_recent) ? state.prefs.video_cat_recent : []), ...opts.map((c) => c.id)];
+  const picked = [];
+  for (const id of [...(cur ? [""] : []), ...ids]) {
+    if (id === cur || picked.includes(id) || (!id && !cur) || !opts.some((c) => c.id === id)) continue;
+    picked.push(id);
+    if (picked.length >= RECENT_CATS) break;
+  }
+  return picked.map((id) => opts.find((c) => c.id === id));
+}
+
+function renderVideoCatPicker() {
+  const box = el("#videoCatPicker");
   box.hidden = videoTab === "history";
-  if (videoCategoryFilter && videoCategoryFilter !== CLIPS_FILTER && !cats.some((c) => c.id === videoCategoryFilter)) videoCategoryFilter = null;
-  box.innerHTML = [{ id: "", name: "ทั้งหมด" }, ...cats, { id: CLIPS_FILTER, name: "คลิปเดี่ยว" }].map((c) =>
-    `<button class="video-chip${(videoCategoryFilter || "") === c.id ? " active" : ""}" data-video-category="${escapeHtml(c.id)}">${escapeHtml(c.name)}</button>`).join("");
+  if (videoCategoryFilter && !videoCatOptions().some((c) => c.id === videoCategoryFilter)) videoCategoryFilter = null;
+  const name = videoCategoryName(videoCategoryFilter) || "ทั้งหมด";
+  box.innerHTML = `<button class="vcat-btn" data-cat-sheet-open aria-haspopup="dialog">${escapeHtml(name)}<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <div class="vcat-recent">${recentVideoCats().map((c) => `<button class="video-chip" data-video-category="${escapeHtml(c.id)}">${escapeHtml(c.name)}</button>`).join("")}</div>`;
+  if (!el("#videoCatSheet").hidden) renderVideoCatSheet();
+}
+
+function videoCatView() {
+  return state.prefs.video_cat_view === "grid" ? "grid" : "list";
+}
+
+function renderVideoCatSheet() {
+  const cur = videoCategoryFilter || "";
+  const view = videoCatView();
+  els("#videoCatSheet [data-cat-view]").forEach((b) => b.classList.toggle("active", b.dataset.catView === view));
+  el("#videoCatSheetBody").innerHTML = view === "grid"
+    ? `<div class="vcat-grid">${videoCatOptions().map((c) => `<button class="${c.id === cur ? "active" : ""}" data-video-category="${escapeHtml(c.id)}"><span>${escapeHtml(c.name)}</span><b>${videoCatCount(c.id)}</b></button>`).join("")}</div>`
+    : `<div class="vcat-list">${videoCatOptions().map((c) => `<button class="${c.id === cur ? "active" : ""}" data-video-category="${escapeHtml(c.id)}"><span class="vcat-thumb">${thumbHtml(videoCatCover(c.id))}</span><span class="vcat-name">${escapeHtml(c.name)}</span><b>${videoCatCount(c.id)}</b></button>`).join("")}</div>`;
+}
+
+function setVideoCatSheet(open) {
+  el("#videoCatSheet").hidden = !open;
+  document.body.classList.toggle("sheet-open", open);
+  if (open) renderVideoCatSheet();
+}
+
+function pickVideoCategory(id) {
+  videoCategoryFilter = id || null;
+  if (id) savePref("video_cat_recent", [id, ...(state.prefs.video_cat_recent || []).filter((x) => x !== id)].slice(0, 8));
+  setVideoCatSheet(false);
+  resetVideoPaging();
+  renderVideos();
+  window.scrollTo(0, 0);
 }
 
 // ---------- หน้าแอดมิน: คลิป / คอมเมนต์ / ระบบ ----------

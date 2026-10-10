@@ -33,6 +33,10 @@
       <h1 class="topbar-title brand-title" data-for="search" hidden><img class="brand-icon" src="{{ url_for('static', filename='icon-192.png') }}" alt="" /><span>Mee<span class="brand-plus">+</span></span><span class="brand-sub">ค้นหา</span></h1>
       <h1 class="topbar-title brand-title" data-for="videos" hidden><img class="brand-icon" src="{{ url_for('static', filename='icon-192.png') }}" alt="" /><span>Mee<span class="brand-plus">+</span></span><span class="brand-sub">ดูหนัง</span></h1>
       <h1 class="topbar-title brand-title" data-for="settings" hidden><img class="brand-icon" src="{{ url_for('static', filename='icon-192.png') }}" alt="" /><span>Mee<span class="brand-plus">+</span></span><span class="brand-sub">ตั้งค่า</span></h1>
+      <div class="topbar-actions" data-for="videos" hidden>
+        <button id="videoLibraryBtn" class="topbar-pill" data-video-tab="library">คลังของฉัน</button>
+        <button id="addVideoBtn" class="topbar-pill primary" hidden>+ เพิ่ม</button>
+      </div>
       <button id="installBtn" class="icon-btn" title="เพิ่มไปยังหน้าจอโฮม" hidden>
         <svg viewBox="0 0 24 24" width="20" height="20"><rect x="6" y="2" width="12" height="20" rx="2.5" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 8v7M8.5 11.5h7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
@@ -125,19 +129,14 @@
     </section>
 
     <section id="videosView" class="view">
-      <div class="video-tabs" role="tablist">
-        <button class="video-tab active" data-video-tab="home">หน้าหลัก</button>
-        <button class="video-tab" data-video-tab="library">คลังของฉัน</button>
+      <div id="libraryHead" class="library-head" hidden>
+        <button class="link-btn" data-video-tab="home">‹ หน้าหลัก</button>
+        <div id="librarySeg" class="seg">
+          <button data-video-tab="saved">บันทึกไว้</button>
+          <button data-video-tab="history">ประวัติการดู</button>
+        </div>
       </div>
-      <div id="librarySeg" class="seg" hidden>
-        <button data-video-tab="saved">บันทึกไว้</button>
-        <button data-video-tab="history">ประวัติการดู</button>
-      </div>
-      <div id="videoCategoryChips" class="video-chips" hidden></div>
-      <div id="videoToolbar" class="video-toolbar">
-        <p>เพิ่มคลิปจาก YouTube, Facebook หรือ Anifume</p>
-        <button id="addVideoBtn" class="btn primary">+ เพิ่มคลิป</button>
-      </div>
+      <div id="videoCatPicker" class="vcat-picker" hidden></div>
       <div id="videoHome" hidden></div>
       <div id="libraryView" hidden>
         <div class="library-tools">
@@ -147,6 +146,20 @@
         <div id="libraryBody"></div>
       </div>
       <div id="videoSentinel" aria-hidden="true"></div>
+      <div id="videoCatSheet" class="vcat-sheet-wrap" hidden>
+        <div class="vcat-sheet-bg" data-cat-sheet-close></div>
+        <div class="vcat-sheet" role="dialog" aria-label="เลือกหมวด">
+          <div class="vcat-grab" aria-hidden="true"></div>
+          <div class="vcat-sheet-head">
+            <h3>เลือกหมวด</h3>
+            <div class="vcat-view" role="radiogroup" aria-label="รูปแบบการแสดง">
+              <button data-cat-view="list"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>รายการ</button>
+              <button data-cat-view="grid"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2" fill="none"/><rect x="13" y="4" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2" fill="none"/><rect x="4" y="13" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2" fill="none"/><rect x="13" y="13" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2" fill="none"/></svg>ตาราง</button>
+            </div>
+          </div>
+          <div id="videoCatSheetBody"></div>
+        </div>
+      </div>
     </section>
 
     <section id="settingsView" class="view">
