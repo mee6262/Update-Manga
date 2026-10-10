@@ -335,12 +335,29 @@
             <ul id="playlistManageList" class="settings-list vm-list"></ul>
           </div>
           <div id="vmCats" class="vm-pane" hidden>
-            <form id="addVideoCategoryForm" class="add-form">
-              <input type="text" id="newVideoCategoryName" placeholder="ชื่อหมวดคลิปใหม่ เช่น พากย์ไทย" maxlength="40" required />
-              <button type="submit" class="btn primary">+ เพิ่มหมวด</button>
-            </form>
-            <div id="videoCategoryMsg" class="form-msg"></div>
-            <ul id="videoCategoryList" class="settings-list vm-list"></ul>
+            <div id="vcSeg" class="seg vc-seg">
+              <button data-vc-tab="main" class="active">หมวดหลัก</button>
+              <button data-vc-tab="genre">แนว (หมวดย่อย)</button>
+            </div>
+            <div id="vcMain">
+              <p class="hint">หมวดที่ผู้ใช้เลือกจากปุ่ม "หมวด ▾" · ลากที่ ≡ เพื่อเรียงลำดับ · หมวดที่ซ่อนจะไม่ขึ้นในตัวเลือกหมวดและแถวหน้าหลัก (คลิปยังค้นหาเจอ)</p>
+              <form id="addVideoCategoryForm" class="add-form">
+                <input type="text" id="newVideoCategoryName" placeholder="ชื่อหมวดหลักใหม่ เช่น Full Movie" maxlength="40" required />
+                <button type="submit" class="btn primary">+ เพิ่ม</button>
+              </form>
+              <div id="videoCategoryMsg" class="form-msg"></div>
+              <ul id="videoCategoryList" class="vc-list"></ul>
+            </div>
+            <div id="vcGenre" hidden>
+              <p class="hint">ระบบติดแนวให้เองจาก <b>คำในชื่อ</b> เรื่อง/คลิป — เพิ่มคำแล้วของเก่าเข้าแนวทันที ไม่ต้องไล่ติดทีละเรื่อง · แนวที่ปิดจะไม่ขึ้นเป็นชิปในหน้าหมวด · ติดเอง/เอาออกรายเรื่องได้ในแผ่นแก้ไขเรื่อง</p>
+              <form id="addVideoGenreForm" class="add-form">
+                <input type="text" id="newVideoGenreName" placeholder="ชื่อแนวใหม่ เช่น สืบสวน" maxlength="30" required />
+                <button type="submit" class="btn primary">+ เพิ่มแนว</button>
+              </form>
+              <div id="videoGenreMsg" class="form-msg"></div>
+              <ul id="videoGenreList" class="vc-list"></ul>
+            </div>
+            <div id="vcMenu" class="vc-menu" hidden></div>
           </div>
           <div id="vmAdd" class="vm-pane" hidden>
             <div class="vm-card">

@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import os
@@ -16,6 +17,7 @@ SITE_SETTINGS_FILE = DATA_DIR / "site_settings.json"
 VIDEOS_FILE = DATA_DIR / "videos.json"
 VIDEO_THUMBS_DIR = DATA_DIR / "video_thumbs"
 VIDEO_CATEGORIES_FILE = DATA_DIR / "video_categories.json"
+VIDEO_GENRES_FILE = DATA_DIR / "video_genres.json"
 VIDEO_PLAYLISTS_FILE = DATA_DIR / "video_playlists.json"
 PLAYLIST_WATCH_FILE = DATA_DIR / "playlist_watch.json"
 COMMENTS_FILE = DATA_DIR / "comments.json"
@@ -270,6 +272,30 @@ def load_video_categories(fresh: bool = False) -> list[dict]:
 
 def save_video_categories(categories: list[dict]):
     _save_json(VIDEO_CATEGORIES_FILE, categories)
+
+
+# แนว (หมวดย่อย) ตั้งต้น — ระบบติดแนวให้เองจากคำในชื่อเรื่อง/ชื่อคลิป แอดมินแก้คำ/เพิ่มแนวได้ในหน้าตั้งค่า
+DEFAULT_VIDEO_GENRES = [
+    {"id": "system", "name": "ระบบ", "keywords": ["ระบบ", "เลเวล", "level up"], "enabled": True},
+    {"id": "isekai", "name": "ทะลุมิติ/เกิดใหม่", "keywords": ["ทะลุมิติ", "ข้ามมิติ", "ย้อนเวลา", "ย้อนอดีต", "เกิดใหม่", "คืนชีพ", "กลับชาติ"], "enabled": True},
+    {"id": "wuxia", "name": "เซียน/กำลังภายใน", "keywords": ["เซียน", "จอมยุทธ์", "ยุทธภพ", "ฝึกตน", "บำเพ็ญ", "กระบี่", "กำลังภายใน", "ลัทธิ", "สำนัก"], "enabled": True},
+    {"id": "demon", "name": "จอมมาร/เทพ", "keywords": ["จอมมาร", "ราชันย์", "มหาเทพ", "เทพเจ้า", "เทพสงคราม", "จักรพรรดิ"], "enabled": True},
+    {"id": "revenge", "name": "ล้างแค้น", "keywords": ["ล้างแค้น", "แก้แค้น", "แค้น"], "enabled": True},
+    {"id": "romance", "name": "โรแมนติก", "keywords": ["ท่านประธาน", "ภรรยา", "ชายา", "แต่งงาน", "สามี", "เจ้าสาว", "รัก"], "enabled": True},
+    {"id": "apocalypse", "name": "วันสิ้นโลก", "keywords": ["สิ้นโลก", "ซอมบี้", "หายนะ"], "enabled": True},
+    {"id": "comedy", "name": "ตลก", "keywords": ["ตลก", "ฮา", "ป่วน"], "enabled": True},
+]
+
+
+def load_video_genres(fresh: bool = False) -> list[dict]:
+    """แนว: [{"id", "name", "keywords": [...], "enabled"}] ลำดับ = ลำดับในหน้าตั้งค่า
+    ยังไม่เคยแก้ (ไม่มีไฟล์) = ชุดตั้งต้น — คืนสำเนาใหม่ทุกครั้ง กันแก้ค่าตั้งต้นที่แชร์ทั้ง process"""
+    data = _load_json(VIDEO_GENRES_FILE, None, fresh)
+    return data if data is not None else copy.deepcopy(DEFAULT_VIDEO_GENRES)
+
+
+def save_video_genres(genres: list[dict]):
+    _save_json(VIDEO_GENRES_FILE, genres)
 
 
 def load_video_playlists(fresh: bool = False) -> list[dict]:

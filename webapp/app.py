@@ -1360,6 +1360,8 @@ def _public_video(video: dict, progress: dict | None = None, saved: dict | None 
         "thumbnail_url": video.get("thumbnail_url") or None,
         "external": bool(video.get("external")),
         "category_id": video.get("category_id"),
+        "genres_add": video.get("genres_add") or [],
+        "genres_remove": video.get("genres_remove") or [],
         "playlist_id": video.get("playlist_id"),
         "episode": video.get("episode"),
         "season": video.get("season"),
@@ -1396,6 +1398,7 @@ def list_videos():
     return jsonify({
         "items": [_public_video(video, progress, saved) for video in videos],
         "categories": storage.load_video_categories(),
+        "genres": storage.load_video_genres(),
         "playlists": _public_playlists(videos, saved),
         "next_cursor": None,
     })
@@ -1932,6 +1935,9 @@ def update_video(video_id):
             if category_id and not any(c["id"] == category_id for c in storage.load_video_categories()):
                 return jsonify({"error": "ไม่พบหมวดนี้"}), 400
             video["category_id"] = category_id
+        error = _apply_genre_override(video, body)
+        if error:
+            return jsonify({"error": error}), 400
         if "episode" in body:  # แก้เลขตอนที่ตัวแยกชื่อให้ผิด (เฉพาะตอนใน playlist)
             if not video.get("playlist_id"):
                 return jsonify({"error": "คลิปนี้ไม่ได้อยู่ใน playlist"}), 400
@@ -1960,27 +1966,196 @@ def update_video(video_id):
 
 @app.route("/api/video-categories/<category_id>", methods=["PATCH"])
 @require_admin
-def rename_video_category(category_id):
-    name = " ".join(str((request.get_json(force=True, silent=True) or {}).get("name") or "").split())
-    if not name or len(name) > 40:
+def update_video_category(category_id):
+    """body: {"name"?, "hidden"?} — hidden = ไม่ขึ้นในตัวเลือกหมวด/แถวหน้าหลักของผู้ใช้ (คลิปยังค้นเจอ)"""
+    body = request.get_json(force=True, silent=True) or {}
+    name = " ".join(str(body.get("name") or "").split()) if "name" in body else None
+    if name is not None and (not name or len(name) > 40):
         return jsonify({"error": "ชื่อหมวดต้องมี 1-40 ตัวอักษร"}), 400
     with storage.state_lock:
         categories = storage.load_video_categories(fresh=True)
         category = next((c for c in categories if c["id"] == category_id), None)
         if not category:
             return jsonify({"error": "ไม่พบหมวดนี้"}), 404
-        if any(c["name"] == name and c["id"] != category_id for c in categories):
+        if name is not None and any(c["name"] == name and c["id"] != category_id for c in categories):
             return jsonify({"error": "มีหมวดชื่อนี้อยู่แล้ว"}), 400
-        old_name, category["name"] = category["name"], name
+        old_name = category["name"]
+        if name is not None:
+            category["name"] = name
+        if "hidden" in body:
+            category["hidden"] = bool(body.get("hidden"))
         storage.save_video_categories(categories)
-        # เพจที่ติดตามอ้างหมวดด้วยชื่อ — เปลี่ยนตาม ไม่งั้นรอบเช็คถัดไปจะสร้างหมวดชื่อเดิมขึ้นมาใหม่
-        watch = storage.load_playlist_watch(fresh=True)
-        if any(s.get("category") == old_name for s in watch.get("sources", [])):
-            for s in watch["sources"]:
-                if s.get("category") == old_name:
-                    s["category"] = name
-            storage.save_playlist_watch(watch)
+        if name is not None and name != old_name:
+            _rename_watch_category(old_name, name)
     return jsonify(category)
+
+
+def _rename_watch_category(old_name: str, new_name: str):
+    """เพจที่ติดตามอ้างหมวดด้วยชื่อ — เปลี่ยนตาม ไม่งั้นรอบเช็คถัดไปจะสร้างหมวดชื่อเดิมขึ้นมาใหม่ (เรียกใน state_lock)"""
+    watch = storage.load_playlist_watch(fresh=True)
+    if any(s.get("category") == old_name for s in watch.get("sources", [])):
+        for s in watch["sources"]:
+            if s.get("category") == old_name:
+                s["category"] = new_name
+        storage.save_playlist_watch(watch)
+
+
+@app.route("/api/video-categories/<category_id>/move", methods=["POST"])
+@require_admin
+def move_video_category_items(category_id):
+    """ย้ายคลิป/เรื่องทั้งหมดในหมวดนี้ไปหมวด "to" (หมวดเดิมยังอยู่ ว่างเปล่า) — รวมหมวดซ้ำ/จัดหมวดใหม่"""
+    target = str((request.get_json(force=True, silent=True) or {}).get("to") or "")
+    with storage.state_lock:
+        categories = storage.load_video_categories(fresh=True)
+        source = next((c for c in categories if c["id"] == category_id), None)
+        dest = next((c for c in categories if c["id"] == target), None)
+        if not source or not dest:
+            return jsonify({"error": "ไม่พบหมวด ลองโหลดหน้าใหม่"}), 404
+        if source is dest:
+            return jsonify({"error": "เลือกหมวดปลายทางที่ต่างจากเดิม"}), 400
+        videos = storage.load_videos(fresh=True)
+        moved = 0
+        for video in videos:
+            if video.get("category_id") == category_id:
+                video["category_id"] = target
+                moved += 1
+        if moved:
+            storage.save_videos(videos)
+        playlists = storage.load_video_playlists(fresh=True)
+        moved_pl = 0
+        for p in playlists:
+            if p.get("category_id") == category_id:
+                p["category_id"] = target
+                moved_pl += 1
+        if moved_pl:
+            storage.save_video_playlists(playlists)
+        _rename_watch_category(source["name"], dest["name"])  # เพจที่ติดตาม: ตอนใหม่เข้าหมวดปลายทางด้วย
+    return jsonify({"ok": True, "videos": moved, "playlists": moved_pl})
+
+
+def _body_category_name(body: dict) -> tuple[str, str | None]:
+    """หมวดจากฟอร์ม: category_id (ไม่พังเมื่อหมวดถูกเปลี่ยนชื่อระหว่างเปิดฟอร์มค้าง) หรือชื่อ (แบบเดิม)
+    ฟังก์ชันปลายทางรับเป็นชื่อ (หาไม่เจอ = สร้างหมวดใหม่) จึงแปลง id → ชื่อปัจจุบันตรงนี้"""
+    category_id = str(body.get("category_id") or "")
+    if category_id:
+        category = next((c for c in storage.load_video_categories() if c["id"] == category_id), None)
+        if not category:
+            return "", "ไม่พบหมวดนี้ ลองโหลดหน้าใหม่"
+        return category["name"], None
+    return " ".join(str(body.get("category") or "").split()), None
+
+
+# ---------- แนว (หมวดย่อย): ระบบเดาจากคำในชื่อ + แอดมินแก้คำ/ติดเองรายเรื่องได้ ----------
+MAX_GENRES = 40
+MAX_GENRE_KEYWORDS = 40
+
+
+def _genre_name(body: dict) -> tuple[str | None, str | None]:
+    name = " ".join(str(body.get("name") or "").split())
+    if not name or len(name) > 30:
+        return None, "ชื่อแนวต้องมี 1-30 ตัวอักษร"
+    return name, None
+
+
+def _genre_keywords(raw) -> tuple[list[str] | None, str | None]:
+    if not isinstance(raw, list) or len(raw) > MAX_GENRE_KEYWORDS:
+        return None, f"คำต้องเป็นรายการ ไม่เกิน {MAX_GENRE_KEYWORDS} คำ"
+    words, seen = [], set()
+    for item in raw:
+        word = " ".join(str(item or "").split())
+        if not word or len(word) > 30:
+            return None, "แต่ละคำต้องมี 1-30 ตัวอักษร"
+        if word.lower() not in seen:
+            seen.add(word.lower())
+            words.append(word)
+    return words, None
+
+
+def _apply_genre_override(item: dict, body: dict) -> str | None:
+    """ติดแนวเอง/เอาแนวที่ระบบเดาออก รายเรื่อง: genres_add / genres_remove = รายการ id แนว (เรียกใน state_lock)"""
+    known = {g["id"] for g in storage.load_video_genres()}
+    for key in ("genres_add", "genres_remove"):
+        if key not in body:
+            continue
+        ids = body.get(key)
+        if not isinstance(ids, list) or len(ids) > MAX_GENRES or any(i not in known for i in ids):
+            return "แนวไม่ถูกต้อง ลองโหลดหน้าใหม่"
+        if ids:
+            item[key] = list(dict.fromkeys(ids))
+        else:
+            item.pop(key, None)
+    return None
+
+
+@app.route("/api/video-genres", methods=["POST"])
+@require_admin
+def add_video_genre():
+    body = request.get_json(force=True, silent=True) or {}
+    name, error = _genre_name(body)
+    if error:
+        return jsonify({"error": error}), 400
+    with storage.state_lock:
+        genres = storage.load_video_genres(fresh=True)
+        if len(genres) >= MAX_GENRES:
+            return jsonify({"error": f"มีแนวได้ไม่เกิน {MAX_GENRES} แนว"}), 400
+        if any(g["name"] == name for g in genres):
+            return jsonify({"error": "มีแนวนี้อยู่แล้ว"}), 400
+        genre = {"id": secrets.token_hex(4), "name": name, "keywords": [name], "enabled": True}
+        genres.append(genre)
+        storage.save_video_genres(genres)
+    return jsonify(genre), 201
+
+
+@app.route("/api/video-genres/order", methods=["PUT"])
+@require_admin
+def reorder_video_genres():
+    ids = (request.get_json(force=True, silent=True) or {}).get("ids")
+    with storage.state_lock:
+        genres = storage.load_video_genres(fresh=True)
+        by_id = {g["id"]: g for g in genres}
+        if not isinstance(ids, list) or sorted(ids) != sorted(by_id):
+            return jsonify({"error": "ลำดับไม่ครบหรือมีแนวที่ไม่รู้จัก ลองโหลดหน้าใหม่"}), 400
+        storage.save_video_genres([by_id[i] for i in ids])
+    return jsonify({"ok": True})
+
+
+@app.route("/api/video-genres/<genre_id>", methods=["PATCH"])
+@require_admin
+def update_video_genre(genre_id):
+    body = request.get_json(force=True, silent=True) or {}
+    with storage.state_lock:
+        genres = storage.load_video_genres(fresh=True)
+        genre = next((g for g in genres if g["id"] == genre_id), None)
+        if not genre:
+            return jsonify({"error": "ไม่พบแนวนี้"}), 404
+        if "name" in body:
+            name, error = _genre_name(body)
+            if error:
+                return jsonify({"error": error}), 400
+            if any(g["name"] == name and g["id"] != genre_id for g in genres):
+                return jsonify({"error": "มีแนวชื่อนี้อยู่แล้ว"}), 400
+            genre["name"] = name
+        if "keywords" in body:
+            words, error = _genre_keywords(body.get("keywords"))
+            if error:
+                return jsonify({"error": error}), 400
+            genre["keywords"] = words
+        if "enabled" in body:
+            genre["enabled"] = bool(body.get("enabled"))
+        storage.save_video_genres(genres)
+    return jsonify(genre)
+
+
+@app.route("/api/video-genres/<genre_id>", methods=["DELETE"])
+@require_admin
+def delete_video_genre(genre_id):
+    # id ที่ค้างใน genres_add/genres_remove ของคลิป/เรื่อง ไม่ต้องตามลบ — หน้าเว็บข้าม id ที่ไม่รู้จักอยู่แล้ว
+    with storage.state_lock:
+        genres = storage.load_video_genres(fresh=True)
+        if not any(g["id"] == genre_id for g in genres):
+            return jsonify({"error": "ไม่พบแนวนี้"}), 404
+        storage.save_video_genres([g for g in genres if g["id"] != genre_id])
+    return jsonify({"ok": True})
 
 
 # ---------- playlist (เรื่องยาวหลายตอน นำเข้าทีละเรื่อง แอดมินเท่านั้น) ----------
@@ -2004,6 +2179,8 @@ def _public_playlists(videos: list[dict], saved: dict | None = None) -> list[dic
             "id": playlist["id"],
             "name": playlist["name"],
             "category_id": playlist.get("category_id"),
+            "genres_add": playlist.get("genres_add") or [],
+            "genres_remove": playlist.get("genres_remove") or [],
             "saved_at": (saved or {}).get(f"playlist:{playlist['id']}"),  # บันทึกทั้งเรื่องไว้ในคลังวิดีโอ
             "created_at": playlist.get("created_at"),
             # สร้างจากตอนใหม่ (เช็คเพจ/วางลิงก์) = ป้าย NEW ได้; ชุดที่นำเข้าทีเดียวทั้งคลังไม่นับว่าเรื่องใหม่
@@ -2143,7 +2320,9 @@ def import_video_playlists():
     เพิ่มตอนที่ยังไม่มี / ตอนที่มีอยู่แล้วย้ายเข้า playlist ให้ (นำเข้าซ้ำได้ เช่น ตอนใหม่ออก)
     ไม่ยิงเน็ตใน request — ลิงก์ /reel/ แปลงเป็น URL มาตรฐานได้เลย ปกโหลดตามหลัง"""
     body = request.get_json(force=True, silent=True) or {}
-    category_name = " ".join(str(body.get("category") or "").split())
+    category_name, error = _body_category_name(body)
+    if error:
+        return jsonify({"error": error}), 400
     if len(category_name) > 40:
         return jsonify({"error": "ชื่อหมวดต้องไม่เกิน 40 ตัวอักษร"}), 400
     groups = body.get("playlists")
@@ -2220,6 +2399,9 @@ def update_video_playlist(playlist_id):
             if category_id and not any(c["id"] == category_id for c in storage.load_video_categories()):
                 return jsonify({"error": "ไม่พบหมวดนี้"}), 400
             playlist["category_id"] = category_id
+        error = _apply_genre_override(playlist, body)
+        if error:
+            return jsonify({"error": error}), 400
         if "season_name" in body:  # {"season": 2, "name": "ภาคพิเศษ"} — ชื่อว่าง = กลับไปใช้ "ซีซั่น N"
             item = body.get("season_name") or {}
             name = " ".join(str(item.get("name") or "").split())[:30]
@@ -2423,7 +2605,10 @@ def add_playlist_links():
         if not playlist:
             return jsonify({"error": "ไม่พบ playlist"}), 404
         forced = playlist["name"]
-    category = " ".join(str(body.get("category") or "").split())[:40]
+    category, error = _body_category_name(body)
+    if error:
+        return jsonify({"error": error}), 400
+    category = category[:40]
     username = current_username() or "local"
     mode = body.get("mode") or "auto"  # auto = มีเลขตอนเข้าเรื่อง ไม่มีเป็นคลิปเดี่ยว / clip = คลิปเดี่ยวทั้งหมด
     if mode == "clip" and not forced:
@@ -3000,7 +3185,10 @@ def save_playlist_watch_sources():
         parsed = urlsplit(url)
         if parsed.scheme != "https" or (parsed.hostname or "").lower() not in FACEBOOK_VIDEO_HOSTS:
             return jsonify({"error": "ลิงก์เพจต้องเป็น https://www.facebook.com/..."}), 400
-        sources.append({"url": url, "category": " ".join(str(raw.get("category") or "").split())[:40]})
+        category, error = _body_category_name(raw)
+        if error:
+            return jsonify({"error": error}), 400
+        sources.append({"url": url, "category": category[:40]})
     with storage.state_lock:
         data = storage.load_playlist_watch(fresh=True)
         data["sources"] = sources

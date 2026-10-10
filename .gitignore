@@ -17,5 +17,6 @@ webapp/data/site_settings.json
 webapp/data/videos.json
 webapp/data/video_thumbs/
 webapp/data/video_categories.json
+webapp/data/video_genres.json
 webapp/data/comments.json
 webapp/data/activity.json
