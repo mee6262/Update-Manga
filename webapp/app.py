@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 from flask import Flask, copy_current_request_context, jsonify, redirect, render_template, request, Response, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import anifume
 import playlist_parse
 import scraper
 import storage
@@ -1215,7 +1216,8 @@ _duration_backfill_tried: set[str] = set()
 
 def _needs_duration_backfill(video: dict) -> bool:
     # ตอนใน playlist นำเข้าทีละหลายร้อย — ไม่ไล่ยิงหน้าฝังของ Facebook ทุกตอน ความยาวได้จากตัวเล่นตอนดูจริง
-    return (not video.get("duration_seconds") and not video.get("playlist_id") and video.get("provider") != "youtube"
+    return (not video.get("duration_seconds") and not video.get("playlist_id")
+            and video.get("provider") not in ("youtube", "anifume")
             and video["id"] not in _duration_backfill_tried)
 
 
@@ -1246,10 +1248,12 @@ def _fetch_video_thumb(video_id: str, image_url: str) -> bool:
     """ดาวน์โหลดรูปปกจาก Facebook มาย่อเก็บบนเซิร์ฟเวอร์ — ลิงก์รูปของ fbcdn มีวันหมดอายุ (พารามิเตอร์ oe=)
     ถ้าเก็บแค่ลิงก์ ปกจะหายเองภายในไม่กี่สัปดาห์ รับเฉพาะรูปจาก fbcdn.net (กันใช้เซิร์ฟเวอร์ยิงที่อยู่อื่น)"""
     host = (urlsplit(image_url).hostname or "").lower()
-    if urlsplit(image_url).scheme != "https" or not host.endswith(".fbcdn.net"):
+    from_anifume = anifume.is_image_url(image_url)
+    if not from_anifume and (urlsplit(image_url).scheme != "https" or not host.endswith(".fbcdn.net")):
         return False
     try:
-        resp = requests.get(image_url, headers={"User-Agent": FB_META_UA}, timeout=(5, 10))
+        resp = requests.get(image_url, headers={"User-Agent": FB_META_UA}, timeout=(5, 10),
+                            allow_redirects=not from_anifume)
         resp.raise_for_status()
         if len(resp.content) > MAX_RESIZE_BYTES:
             return False
@@ -1278,7 +1282,11 @@ def _public_video(video: dict, progress: dict | None = None, saved: dict | None 
         "duration_seconds": entry.get("duration_seconds") or video.get("duration_seconds"),
         "id": video["id"],
         "title": _clean_video_title(video["title"]),  # คลิปที่เพิ่มก่อนมีตัวตัดยอดดู
-        "facebook_url": video["facebook_url"],
+        "facebook_url": video.get("facebook_url"),  # ชื่อฟิลด์เดิม: ลิงก์ต้นฉบับของ Facebook/YouTube
+        # ลิงก์หน้าต้นฉบับของทุกผู้ให้บริการ (ปุ่ม "เปิดใน ..."); Anifume เก็บที่ source_url ไม่ใช้ facebook_url
+        "source_url": (anifume.canonical_episode_url(video.get("source_url") or "") if video.get("provider") == "anifume"
+                       else video.get("source_url") or video.get("facebook_url")),
+        "embed_url": _anifume_embed_url(video),
         "thumbnail_url": video.get("thumbnail_url") or None,
         "external": bool(video.get("external")),
         "category_id": video.get("category_id"),
@@ -1293,6 +1301,13 @@ def _public_video(video: dict, progress: dict | None = None, saved: dict | None 
         "created_at": video["created_at"],
         "can_delete": _can_delete_video(video),
     }
+
+
+def _anifume_embed_url(video: dict) -> str | None:
+    """ลิงก์ที่หน้าเว็บใส่ iframe ได้ — สร้างใหม่จากลิงก์ที่ผ่าน parse_url แล้วเท่านั้น (ไม่เชื่อค่าที่เก็บ/ส่งมาตรง ๆ)"""
+    if video.get("provider") != "anifume" or video.get("external"):
+        return None
+    return anifume.canonical_episode_url(video.get("source_url") or "")
 
 
 @app.route("/api/videos", methods=["GET"])
@@ -1327,6 +1342,12 @@ def add_video():
         return jsonify(payload), status
     if parsed:
         return jsonify({"error": "ลิงก์ playlist ให้แอดมินเพิ่มเป็นเรื่องที่หน้าจัดการคลิป (แท็บ เพิ่ม)"}), 400
+    af = anifume.parse_url(url)
+    if af and af[0] == "episode":
+        payload, status = _create_anifume_clip(url, username or "local")
+        return jsonify(payload), status
+    if af or "anifume.com" in url.lower():
+        return jsonify({"error": "ลิงก์ Anifume ต้องเป็นหน้าตอน (anifume.com/<เลข>/<รหัสตอน>) — ทั้งเรื่องเพิ่มที่หน้าจัดการคลิป"}), 400
     payload, status = _create_clip(
         url, username or "local",
         title=" ".join(str(body.get("title") or "").split()),
@@ -1455,8 +1476,8 @@ def get_video_sources(video_id):
     if video.get("external"):
         return jsonify({})
     _record_activity(username or "local", "plays", video_id)  # เปิดตัวเล่น 1 ครั้ง = ดู 1 ครั้ง
-    if video.get("provider") == "youtube":
-        return jsonify({})  # เล่นผ่านตัวเล่นของ YouTube เท่านั้น
+    if video.get("provider") in ("youtube", "anifume"):
+        return jsonify({})  # เล่นผ่านตัวเล่นของ YouTube / ฝังหน้าตอนของ Anifume เท่านั้น
     return jsonify(_facebook_video_sources(video["facebook_url"]))
 
 
@@ -1897,7 +1918,7 @@ def _public_playlists(videos: list[dict], saved: dict | None = None) -> list[dic
                        for t in playlist.get("tracks", [])],
             "season_names": playlist.get("season_names") or {},
             "season_starts": playlist.get("season_starts") or [],
-            "provider": "youtube" if any(v.get("provider") == "youtube" for v in items) else "facebook",
+            "provider": next((v["provider"] for v in items if v.get("provider") in ("youtube", "anifume")), "facebook"),
             "thumbnail_url": cover,
             "updated_at": max(v.get("created_at", "") for v in items),
         })
@@ -1990,6 +2011,10 @@ def _store_playlist_items(groups: list[tuple[str, list[dict]]], category_name: s
                         "thumbnail_url": None, "duration_seconds": None, "external": False,
                         "added_by": username, "created_at": now,
                     }
+                    if item.get("provider") == "anifume":
+                        video["source_url"] = video.pop("facebook_url")
+                        video["provider"] = "anifume"
+                        video["external"] = bool(item.get("external"))
                     videos.append(video)
                     by_key[key] = video
                     added += 1
@@ -2002,6 +2027,8 @@ def _store_playlist_items(groups: list[tuple[str, list[dict]]], category_name: s
                     video["season"] = _season_of(item["title"], episode, playlist["season_starts"])
                 if alias and alias.get("lang"):
                     video["lang"] = alias["lang"]
+                elif item.get("lang"):
+                    video["lang"] = item["lang"]
                 items_out.append({"title": item["title"], "playlist": name, "episode": episode,
                                   "status": "added", "new_playlist": created})
                 if not video.get("thumbnail_url") and item["image"]:
@@ -2363,6 +2390,146 @@ def _create_youtube_clip(video_id: str, username: str, category_id: str | None =
         videos.append(video)
         storage.save_videos(videos)
     return _public_video(video), 201
+
+
+# ---------- Anifume: ฝังหน้าตอนต้นฉบับใน iframe (ดู anifume.py) — เก็บลิงก์ที่ source_url ไม่ใช้ facebook_url ----------
+def _anifume_key(url: str) -> str:
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()[:20]
+
+
+def _anifume_cover(series: str | None) -> str:
+    """ปกจากหน้ารวมตอน (หน้าตอนไม่มีรูป) — อ่านไม่ได้ก็ไม่มีปก"""
+    if not series:
+        return ""
+    try:
+        return anifume.fetch_series(series)["image"]
+    except ValueError:
+        return ""
+
+
+def _create_anifume_clip(url: str, username: str, category_id: str | None = None) -> tuple[dict, int]:
+    canonical = anifume.canonical_episode_url(url)
+    if not canonical:
+        return {"error": "ไม่ใช่ลิงก์ตอนของ Anifume"}, 400
+    key = _anifume_key(canonical)
+    existing = next((v for v in storage.load_videos() if v.get("canonical_key") == key), None)
+    if existing:  # มีแล้วไม่ต้องยิงเน็ต
+        return {**_public_video(existing), "already_exists": True}, 200
+    try:
+        meta = anifume.fetch_episode(canonical)  # ยิงเน็ตก่อนเข้า lock
+    except ValueError as e:
+        return {"error": str(e)}, 502
+    image = _anifume_cover(meta["series_url"])
+    if image and not storage.video_thumb_path(key).exists():
+        _fetch_video_thumb(key, image)
+    with storage.state_lock:
+        videos = storage.load_videos(fresh=True)
+        existing = next((v for v in videos if v.get("canonical_key") == key), None)
+        if existing:
+            return {**_public_video(existing), "already_exists": True}, 200
+        video = {
+            "id": key, "canonical_key": key, "provider": "anifume", "source_url": canonical,
+            "title": _clean_video_title(meta["title"])[:MAX_VIDEO_TITLE] or "ตอนจาก Anifume",
+            "thumbnail_url": f"/api/videos/{key}/thumb" if storage.video_thumb_path(key).exists() else None,
+            "duration_seconds": None,
+            "external": not meta["embeddable"],  # หน้าเว็บห้ามฝัง → การ์ดเปิดหน้าต้นฉบับแทน
+            "lang": youtube.detect_lang(meta["title"]),
+            "added_by": username, "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if category_id:
+            video["category_id"] = category_id
+        videos.append(video)
+        storage.save_videos(videos)
+    return _public_video(video), 201
+
+
+def _anifume_items(raw_items, name: str) -> tuple[list[dict], str | None]:
+    """ตรวจรายการตอนที่ส่งมา (ไม่ยิงเน็ต): ลิงก์ตอนของ anifume.com เท่านั้น ตัดซ้ำ เลขตอนไม่ใส่ = จากชื่อ หรือลำดับ"""
+    if not isinstance(raw_items, list) or not raw_items:
+        return [], "ใส่ลิงก์ตอนอย่างน้อย 1 ลิงก์"
+    if len(raw_items) > 500:
+        return [], "เพิ่มได้ครั้งละไม่เกิน 500 ตอน"
+    items, seen = [], set()
+    for index, raw in enumerate(raw_items, 1):
+        raw = raw if isinstance(raw, dict) else {"url": raw}
+        url = anifume.canonical_episode_url(str(raw.get("url") or ""))
+        if not url:
+            return [], f"บรรทัด {index}: ไม่ใช่ลิงก์ตอนของ Anifume (anifume.com/<เลข>/<รหัสตอน>)"
+        if url in seen:
+            continue
+        seen.add(url)
+        title = " ".join(str(raw.get("title") or "").split())[:MAX_VIDEO_TITLE]
+        episode = raw.get("episode")
+        if episode in (None, ""):
+            episode = youtube.parse_episode(title) if title else None
+        try:
+            episode = float(episode) if episode is not None else float(index)
+        except (TypeError, ValueError):
+            return [], f"บรรทัด {index}: เลขตอนต้องเป็นตัวเลข"
+        if not 0 <= episode <= 100000:
+            return [], f"บรรทัด {index}: เลขตอนไม่ถูกต้อง"
+        items.append({"url": url, "title": title or f"{name} ตอนที่ {episode:g}", "episode": episode})
+    return items, None
+
+
+@app.route("/api/anifume/preview", methods=["POST"])
+@require_admin
+def anifume_preview():
+    """ดูก่อนเพิ่ม: ลิงก์ตอน → ชื่อตอน/ฝังได้ไหม/หน้ารวมตอน; ลิงก์หน้ารวมตอน → ชื่อเรื่อง + รายชื่อตอนทั้งหมด"""
+    url = str((request.get_json(force=True, silent=True) or {}).get("url") or "")
+    parsed = anifume.parse_url(url)
+    if not parsed:
+        return jsonify({"error": "ไม่ใช่ลิงก์ Anifume (https://anifume.com/<เลข> หรือ /<เลข>/<รหัสตอน>)"}), 400
+    try:
+        if parsed[0] == "episode":
+            meta = anifume.fetch_episode(url)
+            key = _anifume_key(meta["url"])
+            return jsonify({"kind": "episode", **meta,
+                            "already_added": any(v.get("canonical_key") == key for v in storage.load_videos())})
+        info = anifume.fetch_series(url)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 502
+    if not info["items"]:
+        return jsonify({"error": "ไม่พบรายชื่อตอนในหน้านี้"}), 404
+    known = {v.get("canonical_key") for v in storage.load_videos()}
+    items = [{**item, "episode": youtube.parse_episode(item["title"]), "exists": _anifume_key(item["url"]) in known}
+             for item in info["items"]]
+    return jsonify({"kind": "series", "url": info["url"], "name": info["name"], "title": info["title"],
+                    "image": info["image"], "lang": youtube.detect_lang(info["title"]), "items": items})
+
+
+@app.route("/api/anifume/add", methods=["POST"])
+@require_admin
+def anifume_add():
+    """คลิปเดี่ยว: {"url", "category_id"}
+    ซีรีส์: {"name", "items": [{"url", "title"?, "episode"?}], "category_id", "lang", "image"?, "dry_run"?}
+    ซีรีส์ใช้ระบบ playlist เดิม (ชื่อตรงกับเรื่องเดิม = เพิ่มเข้าเรื่องนั้น) ไม่ยิงเน็ต — ชื่อตอนที่ไม่ใส่ใช้ "<เรื่อง> ตอนที่ N" """
+    body = request.get_json(force=True, silent=True) or {}
+    category_id = body.get("category_id") or None
+    category = next((c for c in storage.load_video_categories() if c["id"] == category_id), None)
+    if category_id and not category:
+        return jsonify({"error": "ไม่พบหมวดนี้"}), 400
+    username = current_username() or "local"
+    if body.get("items") is None:
+        payload, status = _create_anifume_clip(str(body.get("url") or ""), username, category_id)
+        return jsonify(payload), status
+    name = " ".join(str(body.get("name") or "").split())
+    if not name or len(name) > MAX_PLAYLIST_NAME:
+        return jsonify({"error": f"ชื่อเรื่องต้องมี 1-{MAX_PLAYLIST_NAME} ตัวอักษร"}), 400
+    items, error = _anifume_items(body.get("items"), name)
+    if error:
+        return jsonify({"error": error}), 400
+    known = {v.get("canonical_key"): v for v in storage.load_videos()}
+    if body.get("dry_run"):
+        return jsonify({"name": name, "items": [{**item, "exists": _anifume_key(item["url"]) in known} for item in items]})
+    image = str(body.get("image") or "")
+    lang = body.get("lang") if body.get("lang") in ("dub", "sub") else None
+    for item in items:
+        item.update(provider="anifume", image=image if anifume.is_image_url(image) else "", lang=lang)
+    result = _store_playlist_items([(name, items)], category["name"] if category else "", username, move_existing=True)
+    playlist = next((p for p in storage.load_video_playlists() if p["name"] == name), None)
+    return jsonify({"ok": True, "playlist_id": playlist and playlist["id"], "name": name,
+                    "added": result["added"], "moved": result["moved"]})
 
 
 def _match_series(name: str) -> dict | None:
@@ -2819,7 +2986,7 @@ def admin_comments():
 def admin_check_videos():
     """ไล่หาไฟล์ตรงของทุกคลิปที่เล่นในเว็บ — คืนรายการที่หาไม่ได้ (จะกลับไปใช้ตัวเล่น Facebook)
     ยิงเน็ตนอก lock, ข้ามแคชเพื่อดูสถานะจริงตอนนี้"""
-    videos = [v for v in storage.load_videos() if not v.get("external")]
+    videos = [v for v in storage.load_videos() if not v.get("external") and v.get("provider") != "anifume"]
     for video in videos:
         _video_sources_cache.pop(video["facebook_url"], None)
     with ThreadPoolExecutor(max_workers=4) as pool:

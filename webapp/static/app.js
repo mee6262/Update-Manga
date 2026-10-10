@@ -215,7 +215,7 @@ function videoCardHtml(video) {
   // คลิปที่ Facebook ไม่ให้เล่นแบบฝัง (ไม่สาธารณะ/ปิดการฝัง): เป็นลิงก์จริงให้ iPhone เปิดในแอป Facebook ที่ล็อกอินอยู่
   // (universal link ทำงานกับการแตะ <a> เท่านั้น window.open จาก JS จะไปเปิดในเบราว์เซอร์แทน) ไม่มีจำจุดดูค้าง
   if (video.external) {
-    return videoItemHtml(video, `<a class="video-card" data-video-id="${escapeHtml(video.id)}" href="${escapeHtml(video.facebook_url)}" target="_blank" rel="noopener"><span class="video-media">${image}<span class="video-resume-badge video-external-badge">เปิดใน ${video.provider === "youtube" ? "YouTube" : "Facebook"}</span>${video.can_delete ? '<span class="video-card-delete" data-delete-video role="button">ลบ</span>' : ""}</span>${info}</a>`);
+    return videoItemHtml(video, `<a class="video-card" data-video-id="${escapeHtml(video.id)}" href="${escapeHtml(video.source_url || "#")}" target="_blank" rel="noopener"><span class="video-media">${image}<span class="video-resume-badge video-external-badge">เปิดใน ${providerName(video)}</span>${video.can_delete ? '<span class="video-card-delete" data-delete-video role="button">ลบ</span>' : ""}</span>${info}</a>`);
   }
   // คลิปเดี่ยวที่เพิ่มภายใน 3 วันและยังไม่ได้ดู (ตอนของ playlist ใช้ป้ายบนการ์ดเรื่องแทน)
   const fresh = !video.playlist_id && !video.watched_at && isRecent(video.created_at) ? '<span class="new-badge">NEW</span>' : "";
@@ -850,6 +850,10 @@ function renderPlaylistRow() {
   el("#playlistRow").innerHTML = lists.slice(0, playlistShown).map(playlistCardHtml).join("");
 }
 
+function providerName(item) {
+  return { youtube: "YouTube", anifume: "Anifume" }[item?.provider] || "Facebook";
+}
+
 function ytBadge(item) {
   return item && item.provider === "youtube" ? '<span class="yt-badge">YouTube</span>' : "";
 }
@@ -1209,6 +1213,26 @@ async function mountYouTubeVideo(video, position, autoplay) {
   }
   activeFbPlayer = { getCurrentPosition: () => ytPlayer.getCurrentTime(), getDuration: () => ytPlayer.getDuration() };
   videoApiWorks = true;
+}
+
+// Anifume ไม่มี embed แยก: ฝังหน้าตอนต้นฉบับทั้งหน้า (เว็บไม่ห้ามฝัง) — sandbox ไม่มี allow-popups กันโฆษณาเด้งหน้าใหม่
+// embed_url มาจากเซิร์ฟเวอร์ (สร้างจากลิงก์ anifume.com ที่ตรวจแล้ว) ปุ่มเปิดหน้าต้นฉบับอยู่ใต้ตัวเล่นเสมอ
+function mountAnifumeVideo(video) {
+  const body = el("#videoPlayerBody");
+  const open = video.source_url ? `<a class="btn small" href="${escapeHtml(video.source_url)}" target="_blank" rel="noopener">เปิดใน Anifume ↗</a>` : "";
+  if (!video.embed_url) {
+    body.innerHTML = `<div class="reader-msg">ตอนนี้เล่นในแอปไม่ได้ ${open}</div>`;
+    return;
+  }
+  body.innerHTML = `<div class="af-wrap"><iframe title="${escapeHtml(video.title)}" allowfullscreen
+      allow="fullscreen; autoplay; encrypted-media; picture-in-picture"
+      sandbox="allow-scripts allow-same-origin allow-presentation"></iframe></div>
+    <div id="afError" class="yt-error" hidden>ตัวเล่นยังไม่ขึ้น? ${open}</div>
+    <a class="yt-open" href="${escapeHtml(video.source_url)}" target="_blank" rel="noopener">เล่นไม่ได้? เปิดใน Anifume ↗</a>`;
+  const frame = body.querySelector("iframe");
+  const timer = setTimeout(() => { if (frame.isConnected) el("#afError").hidden = false; }, 20000);
+  frame.addEventListener("load", () => clearTimeout(timer), { once: true });
+  frame.src = video.embed_url;
 }
 
 async function mountFacebookVideo(video, position) {
@@ -1628,6 +1652,13 @@ async function openVideo(video, { autoplay = false } = {}) {
     // ตอนนี้ยังไม่เคยดูในภาษานี้ แต่ดูค้างในอีกภาษา (สลับพากย์ ↔ ซับ) → ต่อจากจุดเดิม
     const sibling = episodeProgress(video);
     const position = Number(progress.position_seconds) || (sibling.watched_at && sibling.pos) || 0;
+    if (video.provider === "anifume") {
+      unmountNativeVideo();
+      unmountYouTube();
+      mountAnifumeVideo(video);
+      clearActiveVideoProgress(); // อ่านเวลาใน iframe ข้ามโดเมนไม่ได้: เปิดแล้วนับว่าดูแล้ว (ประวัติ/ป้ายดูแล้ว) ไม่มีจุดดูค้าง
+      return;
+    }
     if (video.provider === "youtube") {
       unmountNativeVideo();
       await mountYouTubeVideo(video, position, autoplay);
@@ -4839,7 +4870,7 @@ function renderVideoManage() {
     .map((v) => {
       const dur = Number(v.duration_seconds) || 0;
       return `<li class="vm-row" data-vm-open="v:${escapeHtml(v.id)}">${vmThumb(v.thumbnail_url)}
-        <div class="grow"><div class="name">${escapeHtml(v.title)}</div><div class="meta">${escapeHtml(categoryName(v.category_id) || "ไม่มีหมวด")} · ${escapeHtml(v.added_by)}${dur ? ` · ${Math.max(1, Math.round(dur / 60))} นาที` : ""}${v.external ? " · เปิดใน Facebook" : ""}</div></div><span class="vm-more" aria-hidden="true">⋯</span></li>`;
+        <div class="grow"><div class="name">${escapeHtml(v.title)}</div><div class="meta">${escapeHtml(categoryName(v.category_id) || "ไม่มีหมวด")} · ${escapeHtml(v.added_by)}${dur ? ` · ${Math.max(1, Math.round(dur / 60))} นาที` : ""}${v.external ? ` · เปิดใน ${providerName(v)}` : ""}</div></div><span class="vm-more" aria-hidden="true">⋯</span></li>`;
     }).join("") || '<li class="hint">ไม่มีคลิปตามตัวกรองนี้</li>';
 
   // หมวด
@@ -5199,6 +5230,129 @@ function initYouTubeAdmin() {
   });
 }
 
+// ---------- เพิ่มจาก Anifume (แอดมิน): คลิปเดี่ยว หรือซีรีส์ (ลิงก์หลายตอน → เรื่องในระบบ playlist เดิม) ----------
+const afState = { mode: "clip", preview: null, image: "", lang: null };
+
+function afMsg(text, error = false) {
+  el("#afMsg").textContent = text;
+  el("#afMsg").classList.toggle("error", error);
+}
+
+function afCategorySelect() {
+  return `<label class="vm-field">หมวด <select id="afCategory" class="form-select"><option value="">— ไม่มีหมวด —</option>${(state.videoCategories || []).map((c) =>
+    `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join("")}</select></label>`;
+}
+
+function setAfMode(mode) {
+  afState.mode = mode;
+  els("#afMode [data-af-mode]").forEach((b) => b.classList.toggle("active", b.dataset.afMode === mode));
+  el("#afSeries").hidden = mode !== "series";
+  afState.preview = null;
+  el("#afPreview").innerHTML = "";
+}
+
+// "ลิงก์ | เลขตอน | ชื่อตอน" ทีละบรรทัด — ตรวจจริงที่เซิร์ฟเวอร์ (dry_run)
+function afParseLines() {
+  return el("#afItems").value.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+    const [url, episode, ...title] = line.split("|").map((part) => part.trim());
+    return { url, episode: episode || null, title: title.join(" | ") };
+  });
+}
+
+function renderAfSeriesPreview(data) {
+  const fresh = data.items.filter((item) => !item.exists).length;
+  el("#afPreview").innerHTML = `<div class="yt-preview">${vmThumb(afState.image)}<div><div class="name">${escapeHtml(data.name)}</div>
+      <div class="meta">${data.items.length} ตอน${fresh < data.items.length ? ` · มีในคลังแล้ว ${data.items.length - fresh}` : ""}</div></div></div>
+    <ul class="af-list">${data.items.map((item) => `<li${item.exists ? ' class="exists"' : ""}><span class="ep">ตอน ${escapeHtml(String(item.episode))}</span><span>${escapeHtml(item.title)}${item.exists ? " (มีแล้ว)" : ""}</span></li>`).join("")}</ul>
+    ${afCategorySelect()}
+    <button type="button" class="btn primary" data-af-add-series>เพิ่มเป็นเรื่อง "${escapeHtml(data.name)}" (${data.items.length} ตอน)</button>`;
+}
+
+async function afFillSeries(url) {
+  const d = await sendJSON("POST", "/api/anifume/preview", { url });
+  if (d.kind !== "series") throw new Error("ลิงก์นี้ไม่ใช่หน้ารวมตอน");
+  setAfMode("series");
+  afState.image = d.image || "";
+  afState.lang = d.lang || null;
+  el("#afName").value = d.name;
+  el("#afItems").value = d.items.map((item) => `${item.url} | ${item.episode ?? ""} | ${item.title}`).join("\n");
+  el("#afUrl").value = d.url;
+  return d;
+}
+
+function initAnifumeAdmin() {
+  el("#afMode").addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-af-mode]");
+    if (btn) { setAfMode(btn.dataset.afMode); afMsg(""); }
+  });
+  el("#afForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const btn = event.submitter || el("#afForm button");
+    const url = el("#afUrl").value.trim();
+    btn.disabled = true;
+    afMsg("กำลังอ่านข้อมูลจาก Anifume...");
+    try {
+      const d = await sendJSON("POST", "/api/anifume/preview", { url });
+      if (d.kind === "series") {
+        await afFillSeries(d.url);
+        afMsg(`พบ ${d.items.length} ตอน — แก้รายการได้ แล้วกด "ตรวจรายการ"`);
+      } else if (afState.mode === "series") {
+        // โหมดซีรีส์ + ลิงก์ตอนเดียว: ต่อท้ายรายการ
+        el("#afItems").value = [el("#afItems").value.trim(), `${d.url} |  | ${d.title}`].filter(Boolean).join("\n");
+        afMsg("เพิ่มลงรายการแล้ว");
+      } else {
+        afState.preview = d;
+        el("#afPreview").innerHTML = `<div class="yt-preview">${vmThumb("")}<div><div class="name">${escapeHtml(d.title)}</div>
+            <div class="meta">${d.embeddable ? "เล่นในแอปได้ (ฝังหน้าตอน)" : "⚠️ เว็บไม่ให้ฝัง จะเปิดหน้า Anifume แทน"}${d.already_added ? " · มีในคลังแล้ว" : ""}</div></div></div>
+          ${afCategorySelect()}
+          <div class="pl-controls"><button type="button" class="btn primary" data-af-add-clip>เพิ่มเป็นคลิปเดี่ยว</button>
+          ${d.series_url ? `<button type="button" class="btn" data-af-series="${escapeHtml(d.series_url)}">ดึงทุกตอนของเรื่องนี้</button>` : ""}</div>`;
+        afMsg("");
+      }
+    } catch (e) { afMsg(e.message, true); }
+    finally { btn.disabled = false; }
+  });
+  el("#afCheck").addEventListener("click", async () => {
+    afMsg("กำลังตรวจ...");
+    try {
+      afState.preview = await sendJSON("POST", "/api/anifume/add", { name: el("#afName").value.trim(), items: afParseLines(), dry_run: true });
+      renderAfSeriesPreview(afState.preview);
+      afMsg("");
+    } catch (e) { afState.preview = null; el("#afPreview").innerHTML = ""; afMsg(e.message, true); }
+  });
+  el("#afPreview").addEventListener("click", async (event) => {
+    const series = event.target.closest("[data-af-series]");
+    if (series) {
+      afMsg("กำลังดึงรายชื่อตอน...");
+      try { const d = await afFillSeries(series.dataset.afSeries); afMsg(`พบ ${d.items.length} ตอน — แก้รายการได้ แล้วกด "ตรวจรายการ"`); }
+      catch (e) { afMsg(e.message, true); }
+      return;
+    }
+    const add = event.target.closest("[data-af-add-clip], [data-af-add-series]");
+    if (!add) return;
+    add.disabled = true;
+    afMsg("กำลังเพิ่ม...");
+    try {
+      const category_id = el("#afCategory")?.value || null;
+      if (add.matches("[data-af-add-clip]")) {
+        const res = await sendJSON("POST", "/api/anifume/add", { url: afState.preview.url, category_id });
+        afMsg(res.already_exists ? `มีในคลังแล้ว: "${res.title}"` : `เพิ่มคลิป "${res.title}" แล้ว`);
+      } else {
+        const res = await sendJSON("POST", "/api/anifume/add", { name: afState.preview.name, items: afState.preview.items,
+          category_id, image: afState.image, lang: afState.lang });
+        afMsg(`เพิ่มเข้า "${res.name}" ${res.added} ตอน${res.moved ? ` (ย้ายตอนที่มีอยู่แล้ว ${res.moved})` : ""}`);
+        el("#afItems").value = "";
+        el("#afName").value = "";
+      }
+      afState.preview = null;
+      el("#afPreview").innerHTML = "";
+      el("#afUrl").value = "";
+      await loadVideos();
+      renderVideoManage();
+    } catch (e) { afMsg(e.message, true); add.disabled = false; }
+  });
+}
+
 function initAdminPanels() {
   els(".sub-tab-btn").forEach((btn) => btn.addEventListener("click", () => {
     if (btn.dataset.subtab === "systemManage") loadSystemStatus();
@@ -5284,6 +5438,7 @@ function initAdminPanels() {
   el("#vmSheet").addEventListener("click", vmSheetAction);
   el("#vmSheet").addEventListener("change", vmSheetChange);
   initYouTubeAdmin();
+  initAnifumeAdmin();
   el("#vmSheetBody").addEventListener("change", async (event) => {
     const input = event.target.closest("[data-ep-id]");
     if (!input) return;

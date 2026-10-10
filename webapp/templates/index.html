@@ -139,7 +139,7 @@
       </div>
       <div id="videoCategoryChips" class="video-chips" hidden></div>
       <div id="videoToolbar" class="video-toolbar">
-        <p>เพิ่มคลิปจาก YouTube หรือ Facebook</p>
+        <p>เพิ่มคลิปจาก YouTube, Facebook หรือ Anifume</p>
         <button id="addVideoBtn" class="btn primary">+ เพิ่มคลิป</button>
       </div>
       <div id="videoHome" hidden></div>
@@ -349,6 +349,25 @@
               <div class="hint">playlist ที่ชื่อเรื่องตรงกับเรื่องเดิม (เช่น พากย์ไทย + ซับไทย) รวมเป็นเรื่องเดียว เลือกภาษาได้ในหน้าเรื่อง</div>
             </div>
             <div class="vm-card">
+              <h3>🎬 Anifume</h3>
+              <div id="afMode" class="pl-controls">
+                <button type="button" class="video-chip active" data-af-mode="clip">คลิปเดี่ยว</button>
+                <button type="button" class="video-chip" data-af-mode="series">ซีรีส์ (หลายตอน)</button>
+              </div>
+              <form id="afForm" class="yt-add-row">
+                <input type="url" id="afUrl" placeholder="ลิงก์ตอน หรือหน้ารวมตอน anifume.com/…" />
+                <button type="submit" class="btn">ดูข้อมูล</button>
+              </form>
+              <div id="afSeries" hidden>
+                <label class="vm-field">ชื่อเรื่อง<input id="afName" maxlength="80" /></label>
+                <textarea id="afItems" rows="5" placeholder="ทีละบรรทัด: ลิงก์ตอน | เลขตอน | ชื่อตอน (เลขตอน/ชื่อตอน ไม่ใส่ก็ได้)"></textarea>
+                <button type="button" id="afCheck" class="btn">ตรวจรายการ</button>
+              </div>
+              <div id="afPreview"></div>
+              <div id="afMsg" class="form-msg"></div>
+              <div class="hint">เล่นโดยฝังหน้าตอนของ Anifume ในแอป (จำจุดดูค้างไม่ได้) — มีปุ่มเปิดหน้าต้นฉบับใต้ตัวเล่นเสมอ · ใส่ลิงก์หน้ารวมตอนในโหมดซีรีส์ = ดึงรายชื่อตอนให้</div>
+            </div>
+            <div class="vm-card">
               <h3>🔗 วางลิงก์ Facebook</h3>
               <textarea id="addLinksText" rows="3" placeholder="วางลิงก์ reel / ลิงก์แชร์ ทีละบรรทัด"></textarea>
               <div id="addLinksMode" class="pl-controls">
@@ -439,7 +458,7 @@
     <div class="modal-content">
       <h2>เพิ่มคลิปเข้า Mee+</h2>
       <form id="videoForm" class="video-form">
-        <input name="facebook_url" type="url" placeholder="ลิงก์ YouTube หรือ Facebook (Video, Reel, fb.watch)" required />
+        <input name="facebook_url" type="url" placeholder="ลิงก์ YouTube, Facebook (Video, Reel, fb.watch) หรือตอนของ Anifume" required />
         <div id="videoFormMsg" class="form-msg"></div>
         <div class="modal-actions"><button type="button" class="btn" data-close-video-form>ยกเลิก</button><button class="btn primary">เพิ่มคลิป</button></div>
       </form>
