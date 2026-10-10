@@ -855,6 +855,7 @@ function providerName(item) {
 }
 
 function ytBadge(item) {
+  if (item?.provider === "anifume") return '<span class="yt-badge af-badge">Anifume</span>';
   return item && item.provider === "youtube" ? '<span class="yt-badge">YouTube</span>' : "";
 }
 
@@ -983,6 +984,7 @@ function renderPlaylistView() {
     <div class="pl-meta">${seasons.length > 1 ? `${seasons.length} ซีซั่น · ` : ""}${episodes.length} ตอน · อัปเดต ${timeAgo(playlist.updated_at, "เมื่อสักครู่")} · ดูไป ${watched}/${episodes.length}</div>
     <div class="lib-bar pl-bar"><span style="width:${((watched / episodes.length) * 100).toFixed(1)}%"></span></div>
     ${langSeg}
+    ${playlist.provider === "anifume" ? `<div class="hint pl-hint">⚠️ ${AF_LIMITS}</div>` : ""}
     <div class="pl-actions"><button class="btn primary" data-episode-id="${escapeHtml(resume.id)}">▶ ${started ? "ดูต่อ" : "เริ่มดู"} ${resumeWhere}</button>${playlistSaveButton(playlist)}</div>
     <div class="pl-controls">${chips}<button class="video-chip" data-ep-sort>${playlistDesc ? "ล่าสุดก่อน" : "ตอนแรกก่อน"} ⇅</button></div>
     <div class="ep-grid">${tiles}</div>
@@ -1053,8 +1055,17 @@ function setAutoNextPref(on) {
 }
 
 function renderAutoNext() {
-  const on = autoNextOn();
   const btn = el("#autoNextBtn");
+  const unsupported = activeVideo?.provider === "anifume";
+  btn.disabled = unsupported;
+  if (unsupported) {
+    btn.textContent = "⏭ เล่นต่อ: ไม่รองรับ";
+    btn.title = "Anifume ไม่บอกว่าจบตอนเมื่อไร — กด \"ตอนถัดไป\" เอง";
+    btn.classList.remove("active");
+    btn.setAttribute("aria-pressed", "false");
+    return;
+  }
+  const on = autoNextOn();
   btn.textContent = on ? "⏭ เล่นต่อ: เปิด" : "⏭ เล่นต่อ: ปิด";
   btn.title = "เล่นตอนถัดไปอัตโนมัติเมื่อจบตอน";
   btn.classList.toggle("active", on);
@@ -1094,6 +1105,7 @@ function isVideoMini() {
 }
 
 function renderMiniPlay() {
+  el("#miniPlay").hidden = activeVideo?.provider === "anifume"; // คุมตัวเล่นใน iframe ไม่ได้
   const paused = nativeVideo ? nativeVideo.paused : ytPlayer ? ytPaused() : false;
   el("#miniPlay").textContent = paused ? "▶" : "⏸";
 }
@@ -1215,6 +1227,9 @@ async function mountYouTubeVideo(video, position, autoplay) {
   videoApiWorks = true;
 }
 
+// ตัวเล่นใน iframe ข้ามโดเมน (JW Player ของ Anifume ไม่รับ/ส่ง postMessage) — อ่านเวลา/สั่งเล่นไม่ได้
+const AF_LIMITS = "ตัวเล่นของ Anifume: ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
+
 // Anifume ไม่มี embed แยก: ฝังหน้าตอนต้นฉบับทั้งหน้า (เว็บไม่ห้ามฝัง) — sandbox ไม่มี allow-popups กันโฆษณาเด้งหน้าใหม่
 // embed_url มาจากเซิร์ฟเวอร์ (สร้างจากลิงก์ anifume.com ที่ตรวจแล้ว) ปุ่มเปิดหน้าต้นฉบับอยู่ใต้ตัวเล่นเสมอ
 function mountAnifumeVideo(video) {
@@ -1228,7 +1243,7 @@ function mountAnifumeVideo(video) {
       allow="fullscreen; autoplay; encrypted-media; picture-in-picture"
       sandbox="allow-scripts allow-same-origin allow-presentation"></iframe></div>
     <div id="afError" class="yt-error" hidden>ตัวเล่นยังไม่ขึ้น? ${open}</div>
-    <a class="yt-open" href="${escapeHtml(video.source_url)}" target="_blank" rel="noopener">เล่นไม่ได้? เปิดใน Anifume ↗</a>`;
+    <div class="af-note">${AF_LIMITS} · <a href="${escapeHtml(video.source_url)}" target="_blank" rel="noopener">เปิดใน Anifume ↗</a></div>`;
   const frame = body.querySelector("iframe");
   const timer = setTimeout(() => { if (frame.isConnected) el("#afError").hidden = false; }, 20000);
   let loaded = false, width = 0;
