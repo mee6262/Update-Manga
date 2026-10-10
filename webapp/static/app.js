@@ -670,21 +670,25 @@ function renderVideoHome() {
   const heroes = pickHeroPlaylists();
   if (heroes.length) parts.push(heroCarouselHtml(heroes));
   parts.push(continueRowHtml(() => true), latestRowHtml("ตอนใหม่ล่าสุด", () => true));
+  // แถวละหมวด: เรื่องก่อน ตามด้วยคลิปเดี่ยวของหมวด (หมวดที่มีแต่คลิป เช่น ภาพยนตร์ ก็ได้แถวของตัวเอง)
+  const clips = state.videos.filter((v) => !v.playlist_id);
+  const clipTile = (v) => videoTileHtml(v, { name: v.title, meta: clipTileMeta(v), badge: !v.watched_at && isRecent(v.created_at) ? '<span class="new-badge">NEW</span>' : "" });
   for (const cat of (state.videoCategories || []).filter((c) => !c.hidden)) {
     const inCat = playlists.filter((p) => p.category_id === cat.id);
-    if (!inCat.length) continue;
-    const more = `<button class="link-btn mm-more" data-row-filter="${escapeHtml(cat.id)}">ทั้งหมด ${inCat.length} ›</button>`;
-    parts.push(homeRowHtml(escapeHtml(cat.name), inCat.slice(0, HOME_ROW_LIMIT).map(playlistCardHtml).join(""), more));
+    const catClips = clips.filter((v) => v.category_id === cat.id);
+    const total = inCat.length + catClips.length;
+    if (!total) continue;
+    const more = `<button class="link-btn mm-more" data-row-filter="${escapeHtml(cat.id)}">ทั้งหมด ${total} ›</button>`;
+    const tiles = [...inCat.slice(0, HOME_ROW_LIMIT).map(playlistCardHtml), ...catClips.slice(0, Math.max(0, HOME_ROW_LIMIT - inCat.length)).map(clipTile)];
+    parts.push(homeRowHtml(escapeHtml(cat.name), tiles.join(""), more));
   }
   const loose = playlists.filter((p) => !p.category_id);
   if (loose.length) parts.push(homeRowHtml("เรื่องยาวอื่น ๆ", loose.map(playlistCardHtml).join("")));
-  const clips = state.videos.filter((v) => !v.playlist_id);
-  if (clips.length) {
-    const more = `<button class="link-btn mm-more" data-row-filter="${CLIPS_FILTER}">ทั้งหมด ${clips.length} ›</button>`;
-    parts.push(homeRowHtml("คลิปเดี่ยว", clips.slice(0, HOME_ROW_LIMIT).map((v) => {
-      const fresh = !v.watched_at && isRecent(v.created_at) ? '<span class="new-badge">NEW</span>' : "";
-      return videoTileHtml(v, { name: v.title, meta: clipTileMeta(v), badge: fresh });
-    }).join(""), more));
+  // ท้ายหน้า: เฉพาะคลิปที่ไม่มีหมวด (คลิปในหมวดอยู่ในแถวหมวดแล้ว) — ปุ่ม "ทั้งหมด" ยังพาไปดูคลิปเดี่ยวทุกหมวด
+  const looseClips = clips.filter((v) => !v.category_id);
+  if (looseClips.length) {
+    const more = `<button class="link-btn mm-more" data-row-filter="${CLIPS_FILTER}">คลิปเดี่ยวทั้งหมด ${clips.length} ›</button>`;
+    parts.push(homeRowHtml("คลิปเดี่ยวอื่น ๆ", looseClips.slice(0, HOME_ROW_LIMIT).map(clipTile).join(""), more));
   }
   el("#videoHome").innerHTML = parts.join("") || '<div class="empty-state">ยังไม่มีคลิปในคลัง</div>';
   initHeroCarousel();
