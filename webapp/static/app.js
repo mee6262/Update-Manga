@@ -694,13 +694,14 @@ function renderVideoHome() {
 const CAT_PAGE = 24;
 let catShown = CAT_PAGE; // ตารางเติมทีละหน้าตอนเลื่อนใกล้ท้าย (loadMoreVideoCards)
 
+// clipsOnly = ตารางเป็นคลิป: ชิป "คลิปเดี่ยว" หรือหมวดที่ไม่มีเรื่องเลย (มีแต่คลิปเดี่ยว — ห้ามเป็นแถวเลื่อนข้าง)
 function categoryContent() {
   const cat = videoCategoryFilter;
-  const clipsOnly = cat === CLIPS_FILTER;
+  const lists = cat === CLIPS_FILTER ? [] : (state.videoPlaylists || []).filter((p) => p.category_id === cat);
   return {
-    clipsOnly,
-    lists: clipsOnly ? [] : (state.videoPlaylists || []).filter((p) => p.category_id === cat),
-    clips: state.videos.filter((v) => !v.playlist_id && (clipsOnly || v.category_id === cat)),
+    clipsOnly: !lists.length,
+    lists,
+    clips: state.videos.filter((v) => !v.playlist_id && (cat === CLIPS_FILTER || v.category_id === cat)),
   };
 }
 
@@ -756,7 +757,7 @@ function renderCategoryGrid() {
 function renderCategoryHome() {
   const { clipsOnly, lists, clips } = categoryContent();
   const cat = videoCategoryFilter;
-  const inCat = (v) => (clipsOnly ? !v.playlist_id : videoCategoryOf(v) === cat);
+  const inCat = (v) => (cat === CLIPS_FILTER ? !v.playlist_id : videoCategoryOf(v) === cat);
   const parts = [];
   const heroes = pickHeroPlaylists(lists);
   if (heroes.length) parts.push(heroCarouselHtml(heroes));
@@ -2265,7 +2266,7 @@ function initVideos() {
     if (saveClip) { event.preventDefault(); return toggleVideoSave(saveClip.dataset.saveClip, saveClip); }
     const sort = event.target.closest("[data-cat-sort]")?.dataset.catSort;
     if (sort) {
-      savePref(videoCategoryFilter === CLIPS_FILTER ? "video_clip_sort" : "video_cat_sort", sort);
+      savePref(categoryContent().clipsOnly ? "video_clip_sort" : "video_cat_sort", sort);
       catShown = CAT_PAGE;
       return renderCategoryHome();
     }
