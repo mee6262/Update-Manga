@@ -1244,7 +1244,8 @@ function mountAnifumeVideo(video) {
     width = w;
     const inner = Math.min(w, 854) - 24;
     frame.style.height = `${(inner * 9) / 16}px`;
-    frame.style.transform = `scale(${(w + 2) / inner})`; // +2px กันเส้นขอบจากการปัดเศษ
+    // ขยายเผื่อ 6px + ดันขึ้น 2px: iPhone เลื่อนไป #vpfi แบบปัดเศษ เห็นพื้น #ececec ของกล่องตัวเล่นเป็นเส้นบางที่ขอบบน
+    frame.style.transform = `translateY(-2px) scale(${(w + 6) / inner})`;
     if (loaded) try { frame.contentWindow.location.replace(video.embed_url); } catch (e) { /* เลื่อนไม่ได้ก็ยังเล่นได้ */ }
   };
   const observer = new ResizeObserver(fit);
