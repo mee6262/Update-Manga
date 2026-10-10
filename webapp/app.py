@@ -1956,7 +1956,7 @@ def _fetch_playlist_thumbs(todo: list[tuple[str, str]]):
 
 
 def _store_playlist_items(groups: list[tuple[str, list[dict]]], category_name: str, username: str,
-                          move_existing: bool) -> dict:
+                          move_existing: bool, mark_fresh: bool = False) -> dict:
     """บันทึกตอนลง playlist ตามชื่อเรื่อง (ไม่มีก็สร้าง) — item: {"url", "title", "episode" (None = ต่อท้ายตอนล่าสุด), "image"}
     move_existing=False: คลิปที่มีในคลังแล้วไม่แตะ (ใช้กับเพิ่มตอนใหม่อัตโนมัติ) ห้ามยิงเน็ตในนี้ (อยู่ใน state_lock)"""
     now = datetime.now(timezone.utc).isoformat()
@@ -1985,8 +1985,8 @@ def _store_playlist_items(groups: list[tuple[str, list[dict]]], category_name: s
             created = not playlist
             if created:
                 playlist = {"id": secrets.token_hex(4), "name": name, "created_at": now}
-                if not move_existing:
-                    playlist["fresh"] = True  # เรื่องใหม่จากเพจจริง (ไม่ใช่นำเข้าย้อนหลัง)
+                if not move_existing or mark_fresh:
+                    playlist["fresh"] = True  # เรื่องใหม่จากเพจจริง/แอดมินเพิ่มเอง (ไม่ใช่นำเข้าย้อนหลัง) = ป้าย NEW + แบนเนอร์
                 playlists.append(playlist)
             if category_id and (created or move_existing):
                 playlist["category_id"] = category_id
@@ -2527,7 +2527,8 @@ def anifume_add():
     lang = body.get("lang") if body.get("lang") in ("dub", "sub") else None
     for item in items:
         item.update(provider="anifume", image=image if anifume.is_image_url(image) else "", lang=lang)
-    result = _store_playlist_items([(name, items)], category["name"] if category else "", username, move_existing=True)
+    result = _store_playlist_items([(name, items)], category["name"] if category else "", username, move_existing=True,
+                                   mark_fresh=True)  # เหมือนเพิ่มเรื่องจาก YouTube
     playlist = next((p for p in storage.load_video_playlists() if p["name"] == name), None)
     return jsonify({"ok": True, "playlist_id": playlist and playlist["id"], "name": name,
                     "added": result["added"], "moved": result["moved"]})
