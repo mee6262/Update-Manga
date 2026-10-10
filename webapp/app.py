@@ -1307,7 +1307,8 @@ def _anifume_embed_url(video: dict) -> str | None:
     """ลิงก์ที่หน้าเว็บใส่ iframe ได้ — สร้างใหม่จากลิงก์ที่ผ่าน parse_url แล้วเท่านั้น (ไม่เชื่อค่าที่เก็บ/ส่งมาตรง ๆ)"""
     if video.get("provider") != "anifume" or video.get("external"):
         return None
-    return anifume.canonical_episode_url(video.get("source_url") or "")
+    url = anifume.canonical_episode_url(video.get("source_url") or "")
+    return url and url + "#vpfi"  # เลื่อนหน้าไปที่กล่องตัวเล่น (div#vpfi) — กรอบเห็นแค่ตัวเล่น ไม่เห็นหัวเว็บ
 
 
 @app.route("/api/videos", methods=["GET"])

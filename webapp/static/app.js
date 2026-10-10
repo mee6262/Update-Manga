@@ -1224,9 +1224,9 @@ function mountAnifumeVideo(video) {
     body.innerHTML = `<div class="reader-msg">ตอนนี้เล่นในแอปไม่ได้ ${open}</div>`;
     return;
   }
-  body.innerHTML = `<div class="af-wrap"><iframe title="${escapeHtml(video.title)}" allowfullscreen
+  body.innerHTML = `<div class="af-wrap"><div class="af-box"><iframe title="${escapeHtml(video.title)}" allowfullscreen
       allow="fullscreen; autoplay; encrypted-media; picture-in-picture"
-      sandbox="allow-scripts allow-same-origin allow-presentation"></iframe></div>
+      sandbox="allow-scripts allow-same-origin allow-presentation"></iframe></div></div>
     <div id="afError" class="yt-error" hidden>ตัวเล่นยังไม่ขึ้น? ${open}</div>
     <a class="yt-open" href="${escapeHtml(video.source_url)}" target="_blank" rel="noopener">เล่นไม่ได้? เปิดใน Anifume ↗</a>`;
   const frame = body.querySelector("iframe");

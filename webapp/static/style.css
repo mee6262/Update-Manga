@@ -1308,12 +1308,14 @@ button, .nav-item, .home-tab, .video-tab { -webkit-user-select: none; user-selec
 .yt-error[hidden] { display: none; }
 .video-player.mini .yt-wrap { width: 128px; height: 72px; aspect-ratio: auto; border-radius: 0; }
 .video-player.mini .yt-open, .video-player.mini .yt-error { display: none; }
-/* Anifume: ฝังหน้าตอนทั้งหน้า (มีหัวเว็บเหนือตัวเล่น) จึงสูงกว่า 16:9 และเลื่อนในกรอบได้ */
-.video-player-body:has(> .af-wrap) { grid-template-rows: minmax(0, 1fr) auto auto; align-content: stretch; }
-.af-wrap { width: 100%; max-width: 900px; height: 100%; min-height: 0; justify-self: center; background: #000; border-radius: 6px; overflow: hidden; }
-.af-wrap iframe { display: block; width: 100%; height: 100%; min-height: 300px; border: 0; background: #fff; }
-.video-player.mini .af-wrap { width: 128px; height: 72px; }
-.video-player.mini .af-wrap iframe { height: 72px; }
+/* Anifume: ฝังหน้าตอนที่เลื่อนไปที่ตัวเล่น (#vpfi = กล่อง 16:9 ใน .content padding ซ้ายขวา 12px, กว้างสุด 854px)
+   สูง = (กว้าง - 24px) × 9/16 พอดีตัวเล่น เหลือขอบขาวข้างละ 12px — ไม่ครอปข้าง: iframe กว้างกว่ากรอบแล้วหน้าในนั้นเลื่อนแนวนอนตาม
+   จำกัดความกว้างตามความสูงจอ: กรอบสูงเกินส่วนที่เหลือของหน้า หน้าจะเลื่อนไม่ถึงตัวเล่น */
+.af-wrap { width: 100%; max-width: min(878px, calc((100dvh - 300px) * 16 / 9 + 24px)); justify-self: center; background: #fff; border-radius: 6px; overflow: hidden; }
+.af-box { position: relative; padding-top: calc(56.25% - 13.5px); }
+.af-box iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.video-player.mini .af-wrap { width: 128px; height: 72px; border-radius: 0; }
+.video-player.mini .af-box { height: 72px; padding-top: 0; }
 .af-list { max-height: 260px; overflow: auto; margin: 6px 0; padding: 0; list-style: none; font-size: 0.85rem; }
 .af-list li { display: flex; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--border); }
 .af-list .ep { min-width: 3.5em; color: var(--text-dim); }
