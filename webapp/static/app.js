@@ -1224,14 +1224,32 @@ function mountAnifumeVideo(video) {
     body.innerHTML = `<div class="reader-msg">ตอนนี้เล่นในแอปไม่ได้ ${open}</div>`;
     return;
   }
-  body.innerHTML = `<div class="af-wrap"><div class="af-box"><iframe title="${escapeHtml(video.title)}" allowfullscreen
+  body.innerHTML = `<div class="af-wrap"><iframe title="${escapeHtml(video.title)}" allowfullscreen scrolling="no"
       allow="fullscreen; autoplay; encrypted-media; picture-in-picture"
-      sandbox="allow-scripts allow-same-origin allow-presentation"></iframe></div></div>
+      sandbox="allow-scripts allow-same-origin allow-presentation"></iframe></div>
     <div id="afError" class="yt-error" hidden>ตัวเล่นยังไม่ขึ้น? ${open}</div>
     <a class="yt-open" href="${escapeHtml(video.source_url)}" target="_blank" rel="noopener">เล่นไม่ได้? เปิดใน Anifume ↗</a>`;
   const frame = body.querySelector("iframe");
   const timer = setTimeout(() => { if (frame.isConnected) el("#afError").hidden = false; }, 20000);
-  frame.addEventListener("load", () => clearTimeout(timer), { once: true });
+  let loaded = false, width = 0;
+  frame.addEventListener("load", () => { loaded = true; clearTimeout(timer); }, { once: true });
+  // embed_url ลงท้าย #vpfi: หน้าเลื่อนไปที่กล่องตัวเล่น (16:9 ใน .content padding ซ้ายขวา 12px border-box กว้างสุด 854px)
+  // iframe สูงเท่าตัวเล่น แล้ว scale ให้ตัวเล่นเต็มกรอบ ขอบหน้าเว็บล้นออกนอกกรอบ (ไม่ขยาย iframe จริง — หน้าในนั้นจะเลื่อนแนวนอน)
+  // กว้างเปลี่ยน (หมุนจอ/ย่อจอ) หัวเว็บสูงไม่เท่าเดิม: location.replace ไป #vpfi ซ้ำ = เลื่อนกลับโดยไม่โหลดใหม่ ไม่เพิ่มประวัติ
+  const wrap = body.querySelector(".af-wrap");
+  const fit = () => {
+    if (!frame.isConnected) return observer.disconnect();
+    const w = wrap.clientWidth;
+    if (!w || w === width) return;
+    width = w;
+    const inner = Math.min(w, 854) - 24;
+    frame.style.height = `${(inner * 9) / 16}px`;
+    frame.style.transform = `scale(${(w + 2) / inner})`; // +2px กันเส้นขอบจากการปัดเศษ
+    if (loaded) try { frame.contentWindow.location.replace(video.embed_url); } catch (e) { /* เลื่อนไม่ได้ก็ยังเล่นได้ */ }
+  };
+  const observer = new ResizeObserver(fit);
+  observer.observe(wrap);
+  fit();
   frame.src = video.embed_url;
 }
 
