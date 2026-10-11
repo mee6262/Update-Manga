@@ -159,8 +159,9 @@ def _send_one(username: str, sub: dict, data: str) -> bool:
     return False
 
 
-def notify_new_chapter(manga_id: str, name: str, chapter: str):
-    """แจ้งทุกคนที่ติดตามเรื่องนี้ — tag = id เรื่อง: ตอนใหม่ของเรื่องเดิมแทนที่แจ้งเตือนอันเก่า ไม่กองซ้อนกัน"""
+def notify_new_chapter(manga_id: str, name: str, chapter: str, allow=None):
+    """แจ้งทุกคนที่ติดตามเรื่องนี้ — tag = id เรื่อง: ตอนใหม่ของเรื่องเดิมแทนที่แจ้งเตือนอันเก่า ไม่กองซ้อนกัน
+    allow(username) = False ข้ามคนนั้น (เช่น เรื่องหมวดพิเศษ ที่ผู้ใช้ปิดการแสดงไว้)"""
     if not available():
         return
     payload = {
@@ -170,5 +171,5 @@ def notify_new_chapter(manga_id: str, name: str, chapter: str):
         "url": f"/?manga={manga_id}",
     }
     for username in storage.all_usernames():
-        if manga_id in storage.load_subscriptions(username):
+        if manga_id in storage.load_subscriptions(username) and (allow is None or allow(username)):
             send_to_user(username, payload)

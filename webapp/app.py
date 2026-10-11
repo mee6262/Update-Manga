@@ -661,6 +661,8 @@ def _existing_target(kind: str, title: str, url: str) -> dict | None:
     t, u = _norm_title(title), _norm_url(url)
     if kind == "manga":
         for m in storage.load_manga():
+            if hides_manga(current_username(), m):
+                continue
             urls = [s_.get("url") for s_ in m.get("sources") or []] + [m.get("url")]
             if (t and _norm_title(m["name"]) == t) or (u and any(_norm_url(x) == u for x in urls if x)):
                 return {"kind": "manga", "id": m["id"], "name": m["name"]}
@@ -1296,10 +1298,37 @@ def manga_list_payload(username: str | None) -> list[dict]:
     return items
 
 
+# ---------- หมวดพิเศษ: ผู้ใช้ที่ปิด "แสดงหมวดพิเศษ" ต้องไม่เห็นอะไรของเรื่องในหมวดนั้นเลย ----------
+# (หน้าเว็บกรองหน้าทั้งหมด/ค้นหา/หน้าหลักเอง — ฝั่งเซิร์ฟเวอร์กรองแจ้งเตือน, กระดิ่ง, การ์ดลิงก์แชร์, คำขอเรื่อง)
+def _special_category_ids() -> set[str]:
+    return {c["id"] for c in storage.load_categories() if c.get("special")}
+
+
+def is_special_manga(manga: dict | None) -> bool:
+    special = _special_category_ids()
+    return bool(manga and special and special & set(manga.get("categories") or []))
+
+
+def shows_special(username: str | None) -> bool:
+    """ผู้เยี่ยมชม/ยังไม่เคยเปิด = ไม่แสดง (ค่าเริ่มต้นเดียวกับหน้าเว็บ)"""
+    return bool(username and storage.load_prefs(username).get("show_special"))
+
+
+def hides_manga(username: str | None, manga: dict | None) -> bool:
+    return is_special_manga(manga) and not shows_special(username)
+
+
+def _target_manga_id(target: str | None) -> str | None:
+    """id เรื่องจาก target ของแจ้งเตือน: "manga:<id>" / "chapter:<id>:<ตอน>" """
+    parts = str(target or "").split(":")
+    return parts[1] if len(parts) >= 2 and parts[0] in ("manga", "chapter") else None
+
+
 def notify_subscribed_admins(manga_id: str, name: str, chapter: str, cover_url: str | None):
     """ส่ง Telegram แจ้งเตือนเฉพาะตอนที่ admin (ที่ตั้งค่า Telegram ไว้) ติดตามเรื่องนี้อยู่จริง"""
+    manga = storage.get_manga(manga_id)
     for admin_username in admin_usernames():
-        if manga_id in storage.load_subscriptions(admin_username):
+        if manga_id in storage.load_subscriptions(admin_username) and not hides_manga(admin_username, manga):
             send_telegram(name, chapter, cover_url)
             return  # ส่งครั้งเดียวพอ (Telegram ตั้งค่าเป็นแชทเดียวอยู่แล้ว)
 
@@ -1358,7 +1387,7 @@ def _share_image(url: str | None) -> str:
 @app.route("/m/<manga_id>")
 def share_manga(manga_id):
     manga = storage.get_manga(manga_id)
-    if not manga:
+    if not manga or hides_manga(current_username(), manga):
         return _index_response()
     latest = manga.get("latest_chapter")
     og = {"title": f"{manga['name']} | Mee+", "description": f"ตอนล่าสุด {latest} · {SHARE_TAGLINE}" if latest else SHARE_TAGLINE,
@@ -2211,7 +2240,10 @@ def _notify_comment(comment: dict, parent: dict | None, thread: list[dict], body
     snippet = comment["text"] if len(comment["text"]) <= 80 else comment["text"][:80] + "…"
     verbs = {"reply": "ตอบความคิดเห็นของคุณ", "mention": "พูดถึงคุณ", "thread": "แสดงความคิดเห็น"}
     url = _comment_link(body)
+    manga = storage.get_manga(_target_manga_id(comment["target"]) or "")
     for username, kind in recipients.items():
+        if hides_manga(username, manga):
+            continue
         text = f"{author} {verbs[kind]}ใน {comment['label']}: {snippet}"
         if _add_notification(username, {"type": kind, "target": comment["target"], "text": text, "url": url}):
             webpush.send_to_user(username, {"title": "Mee+", "body": text, "tag": f"comment-{comment['target']}", "url": url})
@@ -2223,6 +2255,9 @@ def list_notifications():
     if not username:
         return jsonify({"items": [], "unread": 0})
     items = storage.load_notifications(username)
+    if not shows_special(username) and _special_category_ids():
+        manga_by_id = {m["id"]: m for m in storage.load_manga()}
+        items = [n for n in items if not is_special_manga(manga_by_id.get(_target_manga_id(n.get("target")) or ""))]
     return jsonify({"items": items[:50], "unread": sum(1 for n in items if not n.get("read"))})
 
 
@@ -4080,9 +4115,10 @@ def _commit_refreshes(results: dict[str, dict], failed_ids: set[str] | None = No
         # แจ้งเตือนเฉพาะตอนที่เคยรู้ตอนล่าสุดมาก่อนแล้วเปลี่ยน (ไม่แจ้งตอนเพิ่งเพิ่มเรื่องใหม่)
         if prev_chapter:
             notify_subscribed_admins(manga["id"], manga["name"], manga["latest_chapter"], manga.get("cover_url"))
-            webpush.notify_new_chapter(manga["id"], manga["name"], manga["latest_chapter"])
+            webpush.notify_new_chapter(manga["id"], manga["name"], manga["latest_chapter"],
+                                       allow=lambda username, m=manga: not hides_manga(username, m))
             for username in storage.all_usernames():
-                if manga["id"] in storage.load_subscriptions(username):
+                if manga["id"] in storage.load_subscriptions(username) and not hides_manga(username, manga):
                     _add_notification(username, {
                         "type": "chapter", "target": f"manga:{manga['id']}",
                         "text": f"{manga['name']} {manga['latest_chapter']} มาแล้ว", "url": f"/?manga={manga['id']}",

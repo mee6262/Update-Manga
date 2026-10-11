@@ -5546,7 +5546,8 @@ async function openShared(shared) {
   }
   if (!state.catalog.length) await loadCatalog();
   const manga = mangaById(shared.id);
-  if (!manga) return toast("ไม่พบเรื่องนี้แล้ว", { error: true });
+  // เรื่องหมวดพิเศษที่คนนี้ปิดการแสดงไว้ = ทำเหมือนไม่มี (เซิร์ฟเวอร์ก็ไม่ทำการ์ดพรีวิวให้)
+  if (!manga || !withoutSpecial([manga]).length) return toast("ไม่พบเรื่องนี้", { error: true });
   openChapterList(manga);
   el("#chapterSharedBanner").hidden = !isGuest() && mangaSubscribed(shared.id); // ผู้เยี่ยมชมเห็นเสมอ (ยังติดตามไม่ได้)
 }
