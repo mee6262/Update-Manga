@@ -3947,12 +3947,14 @@ def add_manga():
         manga_items.append(new_item)
         storage.save_manga(manga_items)
 
-    # คนเพิ่มเรื่อง (admin) ให้ติดตามเรื่องนี้เองอัตโนมัติ (ถ้ามี session จริง — dev mode ไม่มี user เลยข้าม)
-    if current_username():
-        subs = storage.load_subscriptions(current_username(), fresh=True)
-        if mid not in subs:
-            subs.append(mid)
-            storage.save_subscriptions(current_username(), subs)
+    # ติดตามเฉพาะเมื่อติ๊ก "ติดตามเรื่องนี้ด้วย" ในฟอร์ม — เดิมติดตามให้ทุกครั้ง แอดมินต้องไล่เลิกติดตามเอง
+    # (และเรื่องหมวดพิเศษไปโผล่หน้าหลัก) dev mode ไม่มี user เลยข้าม
+    if body.get("follow") and current_username():
+        with storage.state_lock:
+            subs = storage.load_subscriptions(current_username(), fresh=True)
+            if mid not in subs:
+                subs.append(mid)
+                storage.save_subscriptions(current_username(), subs)
 
     return jsonify(public_manga(new_item)), 201
 

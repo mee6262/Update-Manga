@@ -4279,6 +4279,8 @@ function openMangaModal(manga = null) {
         `<label class="chip-check"><input type="checkbox" value="${escapeHtml(c.id)}"${selected.has(c.id) ? " checked" : ""} /><span>${escapeHtml(c.name)}</span></label>`
     )
     .join("");
+  el("#mangaFormFollowWrap").hidden = !!manga; // เฉพาะตอนเพิ่มเรื่องใหม่
+  el("#mangaFormFollow").checked = false;
   const msg = el("#mangaFormMsg");
   msg.className = "form-msg";
   msg.textContent = "";
@@ -4314,7 +4316,7 @@ function initMangaForm() {
         const res = await fetch(url, {
           method: editingMangaId ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, sources }),
+          body: JSON.stringify({ name, sources, follow: !editingMangaId && el("#mangaFormFollow").checked }),
         });
         const data = await res.json();
         if (!res.ok) {
