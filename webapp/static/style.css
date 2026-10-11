@@ -1552,3 +1552,7 @@ button.vc-grow { background: none; border: 0; padding: 0; text-align: left; font
 .donate-save { width: 100%; margin-top: 10px; justify-content: center; }
 .donate-card .grow { flex: 1; min-width: 0; }
 .donate-copy.done, :root:not([data-theme="light"]) .donate-copy.done { background: none; color: var(--accent); }
+.donate-hint { font-size: 0.72rem; color: var(--text-dim); text-align: center; }
+.donate-qr-viewer { position: fixed; inset: 0; z-index: 90; background: rgba(0, 0, 0, 0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; }
+.donate-qr-viewer img { width: min(80vw, 360px); background: #fff; border-radius: 12px; padding: 10px; box-sizing: border-box; -webkit-touch-callout: default; }
+.donate-qr-viewer p { color: #fff; font-size: 0.9rem; margin: 0; text-align: center; }

@@ -3012,7 +3012,7 @@ function renderDonatePage() {
         ${d.account_name ? `<div class="donate-label">ชื่อบัญชี</div><div class="donate-name">${escapeHtml(d.account_name)}</div>` : ""}</div></div>`
     : "";
   const qr = d.qr_url
-    ? `<div class="donate-box donate-qr"><div class="donate-pp"><i>PromptPay</i> สแกนจ่ายด้วยแอปธนาคาร</div><img src="${escapeHtml(d.qr_url)}" alt="QR พร้อมเพย์" /><a class="btn" href="${escapeHtml(d.qr_url)}" download="meeplus-qr">⬇ บันทึกรูป QR</a></div>`
+    ? `<div class="donate-box donate-qr"><div class="donate-pp"><i>PromptPay</i> สแกนจ่ายด้วยแอปธนาคาร</div><img src="${escapeHtml(d.qr_url)}" alt="QR พร้อมเพย์" /><button class="btn" data-donate-save-qr>⬇ บันทึกรูป QR</button><small class="donate-hint">หรือกดค้างที่รูป QR แล้วเลือก "บันทึกลงในรูปภาพ"</small></div>`
     : "";
   el("#donateBody").innerHTML = `${d.enabled ? "" : '<div class="notice-card">ปิดอยู่ — ผู้ใช้ยังไม่เห็นหน้านี้ (แอดมินเห็นเพื่อดูตัวอย่าง)</div>'}
     <div class="donate-hero"><div class="donate-big" aria-hidden="true">💚</div><h2>สนับสนุนค่าใช้จ่าย Mee+</h2>${d.message ? `<p>${escapeHtml(d.message)}</p>` : ""}</div>
@@ -3059,11 +3059,46 @@ function renderDonateQrAdmin() {
   el("#donateQrDelete").hidden = !url;
 }
 
+// บันทึกรูป QR: ห้ามใช้ลิงก์ <a download> — แอปที่เปิดจากไอคอนบน iPhone (ไม่มีปุ่มย้อนกลับ) จะไปค้างที่หน้า
+// ดาวน์โหลดไฟล์ของ iOS ออกไม่ได้ มือถือจึงเปิดแผ่นแชร์ของเครื่อง (มี "บันทึกภาพ") คอมดาวน์โหลดเป็นไฟล์
+async function saveDonateQr() {
+  const url = (state.donate || {}).qr_url;
+  if (!url) return;
+  let blob;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error();
+    blob = await res.blob();
+  } catch (e) { return toast("โหลดรูป QR ไม่สำเร็จ", { error: true }); }
+  const ext = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" }[blob.type] || "png";
+  const file = new File([blob], `meeplus-qr.${ext}`, { type: blob.type || "image/png" });
+  const mobile = window.matchMedia("(pointer: coarse)").matches;
+  if (mobile && navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); } catch (e) { if (e.name !== "AbortError") showDonateQrViewer(url); }
+    return;
+  }
+  if (mobile) return showDonateQrViewer(url); // แชร์ไฟล์ไม่ได้ (เบราว์เซอร์เก่า): เปิดรูปเต็มจอให้กดค้างบันทึกเอง
+  const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: file.name });
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+}
+
+function showDonateQrViewer(url) {
+  const box = document.createElement("div");
+  box.className = "donate-qr-viewer";
+  box.innerHTML = `<img src="${escapeHtml(url)}" alt="QR พร้อมเพย์" /><p>กดค้างที่รูป แล้วเลือก "บันทึกลงในรูปภาพ"</p><button class="btn">ปิด</button>`;
+  box.addEventListener("click", (e) => { if (e.target === box || e.target.closest("button")) box.remove(); });
+  document.body.appendChild(box);
+}
+
 function initDonate() {
   el("#donateCard").addEventListener("click", () => showSettingsPane("donate"));
   el("#openDonateAdmin").addEventListener("click", async () => { await loadDonate(); showSettingsPane("donateAdmin"); });
   el("#donatePreview").addEventListener("click", () => showSettingsPane("donate"));
   el("#donateBody").addEventListener("click", async (event) => {
+    if (event.target.closest("[data-donate-save-qr]")) return saveDonateQr();
     const btn = event.target.closest("[data-donate-copy]");
     if (!btn) return;
     if (!(await copyText(btn.dataset.donateCopy))) return toast("คัดลอกไม่สำเร็จ กดค้างที่เลขบัญชีเพื่อคัดลอกเอง", { error: true });
