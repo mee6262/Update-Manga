@@ -18,6 +18,7 @@ VIDEOS_FILE = DATA_DIR / "videos.json"
 VIDEO_THUMBS_DIR = DATA_DIR / "video_thumbs"
 VIDEO_CATEGORIES_FILE = DATA_DIR / "video_categories.json"
 VIDEO_GENRES_FILE = DATA_DIR / "video_genres.json"
+REQUESTS_FILE = DATA_DIR / "requests.json"
 VIDEO_PLAYLISTS_FILE = DATA_DIR / "video_playlists.json"
 PLAYLIST_WATCH_FILE = DATA_DIR / "playlist_watch.json"
 COMMENTS_FILE = DATA_DIR / "comments.json"
@@ -206,6 +207,15 @@ def load_categories(fresh: bool = False) -> list[dict]:
 
 def save_categories(categories: list[dict]):
     _save_json(CATEGORIES_FILE, categories)
+
+
+def load_requests(fresh: bool = False) -> list[dict]:
+    """คำขอเรื่องจากผู้ใช้: [{"id", "kind", "title", "url", "note", "by": [username], "status", ...}] ใหม่ก่อน"""
+    return _load_json(REQUESTS_FILE, [], fresh)
+
+
+def save_requests(items: list[dict]):
+    _save_json(REQUESTS_FILE, items)
 
 
 def load_site_settings(fresh: bool = False) -> dict:

@@ -3,7 +3,16 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Mee+</title>
+  <title>{{ og.title if og else "Mee+" }}</title>
+  {% if og %}
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Mee+" />
+  <meta property="og:title" content="{{ og.title }}" />
+  <meta property="og:description" content="{{ og.description }}" />
+  <meta property="og:url" content="{{ og.url }}" />
+  {% if og.image %}<meta property="og:image" content="{{ og.image }}" />{% endif %}
+  <meta name="description" content="{{ og.description }}" />
+  {% endif %}
   <meta name="theme-color" content="#0f1115" />
   <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}" />
   <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="any" />
@@ -209,6 +218,7 @@
 
       <h3 class="set-group-title">บัญชีและแอป</h3>
       <div class="set-group">
+        <button id="openMyRequests" class="set-item set-row member-only"><span class="set-ic">📮</span><span class="set-label">ขอเรื่อง / คำขอของฉัน<small>อยากได้เรื่องไหนจากเว็บไหน บอกแอดมินได้</small></span><span id="myRequestsCount" class="set-value"></span><span class="chev">›</span></button>
       <details id="passwordCard" class="set-item set-details collapsible member-only">
         <summary class="set-row">
           <span class="set-ic">🔒</span><span class="set-label">เปลี่ยนรหัสผ่าน</span>
@@ -232,6 +242,20 @@
           <button id="openAdminHub" class="set-item set-row"><span class="set-ic">🛡</span><span class="set-label"><b>จัดการระบบ</b></span><span id="adminDot" class="status-dot warn" hidden></span><span class="chev" aria-hidden="true">›</span></button>
         </div>
       </div>
+      </div>
+
+      <div id="requestsPane" hidden>
+        <button class="btn set-back" data-admin-back="main">‹ ตั้งค่า</button>
+        <h2 class="section-title">คำขอเรื่องของฉัน</h2>
+        <button class="btn primary rq-new" data-request-new>+ ขอเรื่องใหม่</button>
+        <div id="myRequestList" class="rq-list"></div>
+      </div>
+
+      <div id="requestsAdminPane" hidden>
+        <button class="btn set-back" data-admin-back="hub">‹ จัดการระบบ</button>
+        <h2 id="requestsAdminTitle" class="section-title">คำขอเรื่อง</h2>
+        <p class="hint">มีคำขอใหม่ = แจ้งเข้า Telegram/แจ้งเตือนของแอดมิน · "เพิ่มเรื่องนี้" เปิดฟอร์มเพิ่มเรื่องพร้อมลิงก์ (มังงะ: เพิ่มเสร็จแล้วผูกคำขอให้เอง) · เพิ่มแล้วคนที่ขอได้ติดตามอัตโนมัติ + แจ้งเตือน</p>
+        <div id="adminRequestList" class="rq-list"></div>
       </div>
 
       <div id="donatePane" class="donate-page" hidden>
@@ -281,6 +305,7 @@
           <button class="set-item set-row" data-admin-open="mangaManage"><span class="set-ic">📚</span><span class="set-label">มังงะ</span><span class="set-value" data-admin-count="manga"></span><span class="chev">›</span></button>
           <button class="set-item set-row" data-admin-open="categoryManage"><span class="set-ic">🏷</span><span class="set-label">หมวดหมู่มังงะ</span><span class="set-value" data-admin-count="nocat"></span><span class="chev">›</span></button>
           <button class="set-item set-row" data-admin-open="videoManage"><span class="set-ic">🎬</span><span class="set-label">คลิป / Playlist / หมวดคลิป</span><span class="chev">›</span></button>
+          <button id="openAdminRequests" class="set-item set-row"><span class="set-ic">📮</span><span class="set-label">คำขอเรื่องจากผู้ใช้</span><span id="adminRequestsCount" class="set-value"></span><span class="chev">›</span></button>
           <button class="set-item set-row" data-admin-open="videoManage" data-admin-vm="add"><span class="set-ic">📡</span><span class="set-label">ติดตามเพจ + วางลิงก์</span><span class="set-value" data-admin-count="watch"></span><span class="chev">›</span></button>
         </div>
         <h3 class="set-group-title">ผู้ใช้</h3>
@@ -528,7 +553,8 @@
   </div>
 
   <div id="playlistView" class="reader playlist-view" hidden>
-    <div class="reader-topbar"><button id="playlistClose" class="btn">✕ ปิด</button><div class="reader-title"><span id="playlistTitle"></span></div></div>
+    <div class="reader-topbar"><button id="playlistClose" class="btn">✕ ปิด</button><div class="reader-title"><span id="playlistTitle"></span></div><button id="playlistShareBtn" class="btn share-btn" aria-label="แชร์เรื่องนี้">⤴ แชร์</button></div>
+    <div id="playlistSharedBanner" class="shared-banner" hidden><span aria-hidden="true">👋</span><div><b>เพื่อนแชร์เรื่องนี้มา</b>ดูได้เลยไม่ต้องสมัคร · กดบันทึกเพื่อรับแจ้งเตือนตอนใหม่</div></div>
     <div id="playlistBody" class="playlist-body"></div>
   </div>
 
@@ -541,13 +567,42 @@
     <div id="episodeNav" class="episode-nav" hidden><button id="episodePrev" class="btn">‹ ตอนก่อน</button><span class="episode-mid"><span id="episodeLabel"></span><button id="autoNextBtn" class="video-quality-btn" aria-pressed="true"></button></span><button id="episodeNext" class="btn">ตอนถัดไป ›</button></div>
   </div>
 
+  <div id="requestSheet" class="sheet-wrap" hidden>
+    <div class="sheet-bg" data-request-close></div>
+    <form id="requestForm" class="sheet rq-form" role="dialog" aria-label="ขอเรื่อง">
+      <div class="sheet-grab" aria-hidden="true"></div>
+      <h3>ขอเรื่องที่อยากให้เพิ่ม</h3>
+      <p class="hint">เพิ่มแล้วจะติดตามให้อัตโนมัติ และแจ้งเตือนคุณ</p>
+      <div class="rq-kind" role="radiogroup"><button type="button" data-request-kind="manga" class="active">📖 มังงะ</button><button type="button" data-request-kind="video">🎬 อนิเมะ/คลิป</button></div>
+      <label>ชื่อเรื่อง<input id="requestTitle" maxlength="120" required autocomplete="off" /></label>
+      <label>ลิงก์เว็บที่อ่าน/ดูอยู่ (ถ้ามี — ช่วยให้เพิ่มได้เร็วขึ้น)<input id="requestUrl" type="url" maxlength="500" placeholder="https://..." autocomplete="off" /></label>
+      <div id="requestMatch" class="rq-match" hidden></div>
+      <label>ฝากถึงแอดมิน (ไม่บังคับ)<textarea id="requestNote" maxlength="300" rows="2" placeholder="เช่น อยากได้ฉบับพากย์ไทย"></textarea></label>
+      <div id="requestMsg" class="form-msg"></div>
+      <button type="submit" class="btn primary rq-send">ส่งคำขอ</button>
+    </form>
+  </div>
+
+  <div id="requestPickSheet" class="sheet-wrap" hidden>
+    <div class="sheet-bg" data-request-pick-close></div>
+    <div class="sheet rq-form" role="dialog" aria-label="เลือกเรื่องที่เพิ่มแล้ว">
+      <div class="sheet-grab" aria-hidden="true"></div>
+      <h3>เรื่องนี้คือเรื่องไหนในแอป</h3>
+      <p class="hint">เลือกแล้ว คนที่ขอทุกคนได้ติดตามเรื่องนั้น + แจ้งเตือน</p>
+      <input id="requestPickSearch" type="search" placeholder="ค้นหาชื่อเรื่อง" autocomplete="off" />
+      <div id="requestPickList" class="rq-pick-list"></div>
+    </div>
+  </div>
+
   <div id="chapterListView" class="reader" hidden>
     <div class="reader-topbar">
       <button id="chapterListClose" class="btn">✕ ปิด</button>
       <div class="reader-title">
         <span id="chapterListMangaName"></span>
       </div>
+      <button id="chapterShareBtn" class="btn share-btn" aria-label="แชร์เรื่องนี้">⤴ แชร์</button>
     </div>
+    <div id="chapterSharedBanner" class="shared-banner" hidden><span aria-hidden="true">👋</span><div><b>เพื่อนแชร์เรื่องนี้มา</b>อ่านได้เลยไม่ต้องสมัคร · ติดตามเพื่อรับแจ้งเตือนตอนใหม่</div><button class="btn primary" data-shared-follow>ติดตาม</button></div>
     <div class="chapter-search-bar">
       <input type="text" id="chapterSearch" inputmode="numeric" placeholder="ไปตอนที่..." />
     </div>

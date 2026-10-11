@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qs, quote, urlencode, urlparse, urlsplit, urlunsplit
 
 import requests
 from dotenv import load_dotenv
@@ -32,7 +32,7 @@ import storage
 import streams
 import webpush
 import youtube
-from telegram_notify import send_telegram
+from telegram_notify import send_telegram, send_text as send_telegram_text
 
 try:
     from PIL import Image, ImageOps
@@ -259,7 +259,7 @@ def is_guest() -> bool:
 GUEST_ENDPOINTS = {
     "index", "list_manga", "list_catalog", "list_categories", "list_chapters", "get_chapter", "reading_history",
     "proxy_image", "list_videos", "video_thumb", "video_speedtest", "get_video_sources", "get_video_playback",
-    "get_video_progress", "list_comments", "version", "logout", "get_donate", "donate_qr",
+    "get_video_progress", "list_comments", "version", "logout", "get_donate", "donate_qr", "share_manga", "share_playlist",
 }
 # ผู้เยี่ยมชม = ใครก็ได้ (รวม bot): จำกัดคำขอที่ทำให้เซิร์ฟเวอร์ยิงเว็บต้นทาง/ใช้เน็ตมาก ต่อ IP (สมาชิกไม่จำกัด)
 GUEST_RATE_LIMITS = {  # endpoint → (ครั้ง, วินาที)
@@ -624,6 +624,236 @@ def update_site_settings():
             settings["registration_open"] = bool(body["registration_open"])
         storage.save_site_settings(settings)
     return jsonify({"registration_open": registration_open()})
+
+
+# ---------- คำขอเรื่อง: ผู้ใช้ขอเรื่อง/เว็บที่อยากให้เพิ่ม → แอดมินเพิ่ม → คนที่ขอได้ติดตามอัตโนมัติ + แจ้งเตือน ----------
+REQUEST_KINDS = {"manga", "video"}
+REQUEST_STATUSES = {"pending", "added", "rejected"}
+MAX_PENDING_PER_USER = 10
+
+
+def _norm_title(text: str) -> str:
+    """เทียบชื่อเรื่องแบบหลวม ๆ: ตัวเล็ก ตัดช่องว่าง/เครื่องหมาย — "Solo Leveling" = "solo-leveling" """
+    return re.sub(r"[\W_]+", "", str(text or "").lower())
+
+
+def _norm_url(url: str) -> str:
+    try:
+        parts = urlsplit(str(url or "").strip())
+    except ValueError:
+        return ""
+    host = (parts.hostname or "").lower().removeprefix("www.")
+    return f"{host}{parts.path.rstrip('/')}" if host else ""
+
+
+def _find_pending(items: list[dict], kind: str, title: str, url: str) -> dict | None:
+    t, u = _norm_title(title), _norm_url(url)
+    for r in items:
+        if r["status"] != "pending" or r["kind"] != kind:
+            continue
+        if (t and _norm_title(r["title"]) == t) or (u and _norm_url(r.get("url")) == u):
+            return r
+    return None
+
+
+def _existing_target(kind: str, title: str, url: str) -> dict | None:
+    """เรื่องนี้มีในแอปแล้วหรือยัง (ชื่อตรงกัน หรือลิงก์ตรงกับแหล่งที่มา) — มี = บอกผู้ใช้เปิดอ่านได้เลย ไม่ต้องขอ"""
+    t, u = _norm_title(title), _norm_url(url)
+    if kind == "manga":
+        for m in storage.load_manga():
+            urls = [s_.get("url") for s_ in m.get("sources") or []] + [m.get("url")]
+            if (t and _norm_title(m["name"]) == t) or (u and any(_norm_url(x) == u for x in urls if x)):
+                return {"kind": "manga", "id": m["id"], "name": m["name"]}
+    else:
+        for p_ in storage.load_video_playlists():
+            if t and _norm_title(p_["name"]) == t:
+                return {"kind": "playlist", "id": p_["id"], "name": p_["name"]}
+    return None
+
+
+def _public_request(r: dict, username: str | None, admin: bool) -> dict:
+    data = {k: r.get(k) for k in ("id", "kind", "title", "url", "note", "status", "reason", "target", "created_at", "resolved_at")}
+    data["count"] = len(r.get("by") or [])
+    data["mine"] = bool(username and username in (r.get("by") or []))
+    if admin:
+        data["by"] = r.get("by") or []
+    return data
+
+
+def _request_title(body: dict) -> tuple[dict | None, str | None]:
+    kind = body.get("kind") if body.get("kind") in REQUEST_KINDS else "manga"
+    title = " ".join(str(body.get("title") or "").split())
+    url = str(body.get("url") or "").strip()
+    note = " ".join(str(body.get("note") or "").split())
+    if not title or len(title) > 120:
+        return None, "ชื่อเรื่องต้องมี 1-120 ตัวอักษร"
+    if url and (len(url) > 500 or not re.match(r"^https?://[^\s/]+\.[^\s]+$", url)):
+        return None, "ลิงก์ต้องขึ้นต้นด้วย http:// หรือ https://"
+    if len(note) > 300:
+        return None, "ข้อความถึงแอดมินยาวเกิน 300 ตัวอักษร"
+    return {"kind": kind, "title": title, "url": url, "note": note}, None
+
+
+def _notify_admins_request(r: dict, username: str):
+    """แจ้งแอดมิน (Telegram + Web Push) — เรียกนอก state_lock (ยิงเน็ต)"""
+    kind = "มังงะ" if r["kind"] == "manga" else "อนิเมะ/คลิป"
+    text = f"📮 คำขอเรื่องใหม่ ({kind})\n{r['title']}" + (f"\n{r['url']}" if r.get("url") else "") + (f"\n💬 {r['note']}" if r.get("note") else "") + f"\nโดย {username}"
+    threading.Thread(target=send_telegram_text, args=(text,), daemon=True).start()
+    users = storage.load_users()
+    for admin in [u for u, info in users.items() if info.get("is_admin")]:
+        webpush.send_to_user(admin, {"title": "📮 คำขอเรื่องใหม่", "body": r["title"], "tag": "requests", "url": "/?admin=requests"})
+
+
+@app.route("/api/requests", methods=["GET"])
+def list_requests():
+    username = current_username()
+    if not username and storage.load_users():
+        return jsonify({"error": "unauthorized"}), 401
+    admin = is_admin()
+    items = storage.load_requests()
+    visible = items if admin else [r for r in items if username in (r.get("by") or [])]
+    # รอดำเนินการก่อน แล้วใหม่ก่อน
+    visible = sorted(visible, key=lambda r: r.get("created_at", ""), reverse=True)
+    visible.sort(key=lambda r: r["status"] != "pending")
+    return jsonify({"items": [_public_request(r, username, admin) for r in visible],
+                    "pending": sum(1 for r in items if r["status"] == "pending")})
+
+
+@app.route("/api/requests/match", methods=["POST"])
+def match_request():
+    """ระหว่างพิมพ์ในแผ่นขอเรื่อง: มีในแอปแล้ว (exists) / มีคนขอเรื่องเดียวกันแล้ว (pending)"""
+    body = request.get_json(force=True, silent=True) or {}
+    kind = body.get("kind") if body.get("kind") in REQUEST_KINDS else "manga"
+    title, url = str(body.get("title") or ""), str(body.get("url") or "")
+    pending = _find_pending(storage.load_requests(), kind, title, url)
+    return jsonify({"exists": _existing_target(kind, title, url),
+                    "pending": _public_request(pending, current_username(), False) if pending else None})
+
+
+@app.route("/api/requests", methods=["POST"])
+def create_request():
+    username = current_username()
+    if not username:
+        return jsonify({"error": "เข้าสู่ระบบก่อนขอเรื่อง", "code": "LOGIN_REQUIRED"}), 401
+    body = request.get_json(force=True, silent=True) or {}
+    data, error = _request_title(body)
+    if error:
+        return jsonify({"error": error}), 400
+    exists = _existing_target(data["kind"], data["title"], data["url"])
+    if exists:
+        return jsonify({"error": "มีเรื่องนี้ในแอปแล้ว", "exists": exists}), 409
+    with storage.state_lock:
+        items = storage.load_requests(fresh=True)
+        same = _find_pending(items, data["kind"], data["title"], data["url"])
+        if same:  # มีคนขอแล้ว = นับรวมเป็นคำขอเดียว
+            if username not in same["by"]:
+                same["by"].append(username)
+                if data["url"] and not same.get("url"):
+                    same["url"] = data["url"]
+                storage.save_requests(items)
+            return jsonify({"merged": True, "request": _public_request(same, username, False)})
+        if sum(1 for r in items if r["status"] == "pending" and username in r["by"]) >= MAX_PENDING_PER_USER:
+            return jsonify({"error": f"มีคำขอที่รออยู่ครบ {MAX_PENDING_PER_USER} เรื่องแล้ว รอแอดมินดูก่อนนะ"}), 400
+        r = {"id": secrets.token_hex(5), **data, "by": [username], "status": "pending",
+             "created_at": datetime.now(timezone.utc).isoformat()}
+        items.insert(0, r)
+        storage.save_requests(items)
+    _notify_admins_request(r, username)
+    return jsonify({"merged": False, "request": _public_request(r, username, False)}), 201
+
+
+@app.route("/api/requests/<request_id>/join", methods=["POST"])
+def join_request(request_id):
+    username = current_username()
+    if not username:
+        return jsonify({"error": "เข้าสู่ระบบก่อน", "code": "LOGIN_REQUIRED"}), 401
+    with storage.state_lock:
+        items = storage.load_requests(fresh=True)
+        r = next((x for x in items if x["id"] == request_id and x["status"] == "pending"), None)
+        if not r:
+            return jsonify({"error": "คำขอนี้ปิดไปแล้ว ลองโหลดใหม่"}), 404
+        if username not in r["by"]:
+            r["by"].append(username)
+            storage.save_requests(items)
+    return jsonify(_public_request(r, username, False))
+
+
+@app.route("/api/requests/<request_id>", methods=["DELETE"])
+def cancel_request(request_id):
+    """ผู้ใช้ยกเลิกคำขอของตัวเอง (ถอนชื่อออก — ไม่มีใครขอแล้วลบทิ้ง) / แอดมินลบทั้งคำขอ"""
+    username = current_username()
+    if not username:
+        return jsonify({"error": "unauthorized"}), 401
+    with storage.state_lock:
+        items = storage.load_requests(fresh=True)
+        r = next((x for x in items if x["id"] == request_id), None)
+        if not r:
+            return jsonify({"error": "ไม่พบคำขอนี้"}), 404
+        if is_admin():
+            items.remove(r)
+        elif username in r["by"] and r["status"] == "pending":
+            r["by"].remove(username)
+            if not r["by"]:
+                items.remove(r)
+        else:
+            return jsonify({"error": "ยกเลิกคำขอนี้ไม่ได้"}), 403
+        storage.save_requests(items)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/requests/<request_id>", methods=["PATCH"])
+@require_admin
+def resolve_request(request_id):
+    """body: {"status": "added", "target": {"kind": "manga"|"playlist", "id"}} หรือ {"status": "rejected", "reason"}
+    หรือ {"status": "pending"} (เปิดใหม่) — เพิ่มแล้ว: คนที่ขอทุกคนได้ติดตาม/บันทึกเรื่องนั้นอัตโนมัติ + แจ้งเตือน"""
+    body = request.get_json(force=True, silent=True) or {}
+    status = body.get("status")
+    if status not in REQUEST_STATUSES:
+        return jsonify({"error": "สถานะไม่ถูกต้อง"}), 400
+    target = None
+    if status == "added":
+        raw = body.get("target") or {}
+        if raw.get("kind") == "manga" and storage.get_manga(str(raw.get("id") or "")):
+            target = {"kind": "manga", "id": raw["id"], "name": storage.get_manga(raw["id"])["name"]}
+        elif raw.get("kind") == "playlist":
+            p_ = next((x for x in storage.load_video_playlists() if x["id"] == raw.get("id")), None)
+            target = {"kind": "playlist", "id": p_["id"], "name": p_["name"]} if p_ else None
+        if not target:
+            return jsonify({"error": "เลือกเรื่องที่เพิ่มแล้วก่อน"}), 400
+    reason = " ".join(str(body.get("reason") or "").split())[:200]
+    with storage.state_lock:
+        items = storage.load_requests(fresh=True)
+        r = next((x for x in items if x["id"] == request_id), None)
+        if not r:
+            return jsonify({"error": "ไม่พบคำขอนี้"}), 404
+        r["status"] = status
+        r["target"] = target
+        r["reason"] = reason if status == "rejected" else ""
+        r["resolved_at"] = datetime.now(timezone.utc).isoformat() if status != "pending" else None
+        storage.save_requests(items)
+        requesters = list(r["by"])
+        if target:  # ติดตาม (มังงะ) / บันทึก (เรื่องคลิป) ให้คนที่ขอทุกคน
+            for username in requesters:
+                if target["kind"] == "manga":
+                    subs = storage.load_subscriptions(username, fresh=True)
+                    if target["id"] not in subs:
+                        subs.append(target["id"])
+                        storage.save_subscriptions(username, subs)
+                else:
+                    saved = storage.load_video_saved(username, fresh=True)
+                    saved.setdefault(f"playlist:{target['id']}", r["resolved_at"])
+                    storage.save_video_saved(username, saved)
+    if status == "added":
+        url = f"/?manga={target['id']}" if target["kind"] == "manga" else f"/?playlist={target['id']}"
+        payload = {"title": "📮 เรื่องที่ขอเพิ่มแล้ว", "body": f"{target['name']} — ติดตามให้แล้ว อ่านได้เลย", "tag": f"request-{request_id}", "url": url}
+    elif status == "rejected":
+        payload = {"title": "📮 ยังเพิ่มเรื่องที่ขอไม่ได้", "body": f"{r['title']}" + (f" — {reason}" if reason else ""), "tag": f"request-{request_id}", "url": "/?requests=mine"}
+    else:
+        payload = None
+    if payload:
+        for username in requesters:
+            webpush.send_to_user(username, payload)
+    return jsonify(_public_request(r, current_username(), True))
 
 
 # ---------- หน้าสนับสนุนค่าใช้จ่าย (โอนเข้าบัญชีธนาคาร) — แอดมินตั้งใน site_settings["donate"] ----------
@@ -1076,6 +1306,10 @@ def notify_subscribed_admins(manga_id: str, name: str, chapter: str, cover_url: 
 
 @app.route("/")
 def index():
+    return _index_response()
+
+
+def _index_response(shared: dict | None = None, og: dict | None = None):
     username = current_username()
     if username:
         # ต่ออายุ cookie 90 วันนับจากครั้งล่าสุดที่เปิดเว็บ (ปิด SESSION_REFRESH_EACH_REQUEST ไว้แล้ว)
@@ -1094,11 +1328,54 @@ def index():
         },
         "prefs": storage.load_prefs(username) if username else {},
         "manga": manga_list_payload(username),
+        "shared": shared,  # เปิดจากลิงก์แชร์ /m/<id> หรือ /v/<id>: หน้าเว็บเปิดเรื่องนั้นให้
     }
-    resp = app.make_response(render_template("index.html", boot=boot))
+    resp = app.make_response(render_template("index.html", boot=boot, og=og))
     resp.cache_control.private = True
     resp.cache_control.no_cache = True
     return resp
+
+
+# ---------- ลิงก์แชร์: /m/<id> (มังงะ) /v/<id> (เรื่องใน MeeMovie) — หน้าเดียวกับหน้าแรก + og:* ให้ LINE/Messenger
+# ทำการ์ดตัวอย่าง (ชื่อ + ปก + ตอนล่าสุด) แล้วหน้าเว็บเปิดเรื่องนั้นให้เลย ผู้เยี่ยมชมเปิดได้ไม่ต้องล็อกอิน ----------
+SHARE_TAGLINE = "ติดตามมังงะและอนิเมะตอนใหม่ได้ในที่เดียว"
+
+
+def _public_base() -> str:
+    # หลัง Caddy: เซิร์ฟเวอร์เห็นเป็น http — ลิงก์ในการ์ดต้องเป็น https ตามที่ผู้ใช้เปิดจริง
+    proto = (request.headers.get("X-Forwarded-Proto") or request.scheme).split(",")[0].strip()
+    return f"{proto}://{request.host}"
+
+
+def _share_image(url: str | None) -> str:
+    if not url:
+        return ""
+    if url.startswith("/"):
+        return _public_base() + url
+    return f"{_public_base()}/api/img?src={quote(url, safe='')}&w=400"
+
+
+@app.route("/m/<manga_id>")
+def share_manga(manga_id):
+    manga = storage.get_manga(manga_id)
+    if not manga:
+        return _index_response()
+    latest = manga.get("latest_chapter")
+    og = {"title": f"{manga['name']} | Mee+", "description": f"ตอนล่าสุด {latest} · {SHARE_TAGLINE}" if latest else SHARE_TAGLINE,
+          "image": _share_image(manga.get("cover_url")), "url": f"{_public_base()}/m/{manga_id}"}
+    return _index_response({"kind": "manga", "id": manga_id}, og)
+
+
+@app.route("/v/<playlist_id>")
+def share_playlist(playlist_id):
+    playlist = next((p for p in storage.load_video_playlists() if p["id"] == playlist_id), None)
+    if not playlist:
+        return _index_response()
+    episodes = [v for v in storage.load_videos() if v.get("playlist_id") == playlist_id]
+    cover = next((v.get("thumbnail_url") for v in sorted(episodes, key=lambda v: v.get("episode") or 0) if v.get("thumbnail_url")), None)
+    og = {"title": f"{playlist['name']} | Mee+", "description": f"{len(episodes)} ตอน · {SHARE_TAGLINE}",
+          "image": _share_image(cover) if cover and cover.startswith("/") else (cover or ""), "url": f"{_public_base()}/v/{playlist_id}"}
+    return _index_response({"kind": "playlist", "id": playlist_id}, og)
 
 
 @app.route("/api/manga", methods=["GET"])

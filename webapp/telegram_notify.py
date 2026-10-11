@@ -26,3 +26,17 @@ def send_telegram(manga_name: str, chapter: str, image_url: str | None = None):
             print(f"⚠️ Telegram ส่งไม่สำเร็จ: {resp.status_code} {resp.text}")
     except Exception as e:
         print(f"⚠️ Telegram Error: {e}")
+
+
+def send_text(text: str):
+    """ข้อความสั้นถึงแอดมิน (เช่น มีคำขอเรื่องใหม่) — ไม่ได้ตั้งค่า Telegram ไว้ = ข้าม"""
+    token = os.environ.get("TELEGRAM_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return
+    try:
+        resp = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=(5, 15))
+        if not resp.ok:
+            print(f"⚠️ Telegram ส่งไม่สำเร็จ: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"⚠️ Telegram Error: {e}")

@@ -252,6 +252,7 @@ const LOGIN_TITLES = {
   save: "บันทึกไว้ดูทีหลังต้องเข้าสู่ระบบ",
   notify: "การแจ้งเตือนต้องเข้าสู่ระบบ",
   comment: "แสดงความคิดเห็นต้องเข้าสู่ระบบ",
+  request: "ขอเรื่องต้องเข้าสู่ระบบ — จะได้แจ้งเตือนคุณเมื่อเพิ่มแล้ว",
 };
 
 // คืน true = ผู้เยี่ยมชม (เปิดแผ่นชวนแล้ว ผู้เรียกต้องหยุด) — pending: {type, id, label} ทำต่อให้หลังล็อกอิน
@@ -1256,6 +1257,7 @@ let playlistSeason = null; // ซีซั่นที่เปิดดูใ�
 
 function openPlaylist(playlistId) {
   openPlaylistId = playlistId;
+  el("#playlistSharedBanner").hidden = true;
   playlistDesc = episodeSortDesc();
   playlistSeason = null;
   // เปิดมาที่ช่วงตอนที่จะดูต่อ (เรียงล่าสุดก่อน = นับตำแหน่งจากท้าย)
@@ -2784,7 +2786,8 @@ function renderSearch() {
     el("#searchCount").textContent = items.length
       ? `พบ ${items.length} เรื่อง`
       : videos ? `ไม่พบมังงะที่ตรงกับ "${q}"` : `ไม่พบเรื่องหรือคลิปที่ตรงกับ "${q}"`;
-    el("#searchGrid").innerHTML = items.map(catalogCardHtml).join("");
+    el("#searchGrid").innerHTML = items.map(catalogCardHtml).join("")
+      + (items.length ? "" : `<div class="rq-card"><span aria-hidden="true">📮</span><div><b>ไม่เจอเรื่องที่ตามอยู่?</b><small>บอกชื่อเรื่องกับเว็บที่อ่านอยู่ เดี๋ยวแอดมินเพิ่มให้ และแจ้งเตือนเมื่อพร้อมอ่าน</small></div><button class="btn primary" data-request-new>ขอเรื่องนี้</button></div>`);
     return;
   }
   // เรื่องที่มีคนติดตามเยอะสุด (ยังไม่มีใครติดตามเลยก็ใช้เรื่องที่อัปเดตล่าสุดแทน จะได้ไม่เป็นแถวว่าง)
@@ -2926,8 +2929,9 @@ function initAdminSearch() {
 }
 
 // ---------- หน้าตั้งค่า: ตั้งค่าของฉัน → ศูนย์จัดการ (แอดมิน) → หน้าจัดการย่อย ----------
-const SETTINGS_PANES = { main: "#settingsMain", hub: "#adminHub", page: "#adminPage", donate: "#donatePane", donateAdmin: "#donateAdminPane" };
-const SETTINGS_PANE_BACK = { page: "hub", donateAdmin: "hub" }; // ที่เหลือ (hub, donate) กลับหน้าตั้งค่า
+const SETTINGS_PANES = { main: "#settingsMain", hub: "#adminHub", page: "#adminPage", donate: "#donatePane", donateAdmin: "#donateAdminPane",
+  requests: "#requestsPane", requestsAdmin: "#requestsAdminPane" };
+const SETTINGS_PANE_BACK = { page: "hub", donateAdmin: "hub", requestsAdmin: "hub" }; // ที่เหลือ กลับหน้าตั้งค่า
 
 function showSettingsPane(pane) {
   for (const [name, sel] of Object.entries(SETTINGS_PANES)) el(sel).hidden = pane !== name;
@@ -2935,6 +2939,7 @@ function showSettingsPane(pane) {
   if (pane === "hub") renderAdminHub();
   if (pane === "donate") renderDonatePage();
   if (pane === "donateAdmin") renderDonateAdmin();
+  if (pane === "requests" || pane === "requestsAdmin") loadRequests();
 }
 
 function settingsPane() {
@@ -2971,6 +2976,243 @@ async function renderAdminHub() {
     checked: state.catalog.length ? `ล่าสุด ${timeAgo(state.catalog.map((m) => m.last_checked_at || "").sort().pop(), "เมื่อสักครู่")}` : "" };
   els("[data-admin-count]").forEach((x) => { x.textContent = counts[x.dataset.adminCount] ?? ""; });
   el("#adminDot").hidden = !(problems.length || watchErr);
+}
+
+// ---------- คำขอเรื่อง: ผู้ใช้ขอเรื่อง/เว็บที่อยากให้เพิ่ม — แอดมินเพิ่มแล้วคนที่ขอได้ติดตามอัตโนมัติ + แจ้งเตือน ----------
+let requestKind = "manga";
+let requestItems = [];
+let pendingRequestLink = null; // แอดมินกด "เพิ่มเรื่องนี้" (มังงะ) — เพิ่มเรื่องสำเร็จแล้วผูกคำขอนี้ให้เอง
+let requestPickId = null;
+const REQUEST_STATUS = { pending: ["wait", "รอแอดมิน"], added: ["ok", "เพิ่มแล้ว"], rejected: ["no", "ยังไม่รองรับ"] };
+
+async function loadRequests() {
+  try {
+    const data = await getJSON("/api/requests");
+    requestItems = data.items || [];
+    renderRequestCounts(data.pending);
+  } catch (e) { requestItems = []; }
+  if (settingsPane() === "requests") renderMyRequests();
+  if (settingsPane() === "requestsAdmin") renderAdminRequests();
+}
+
+function renderRequestCounts(pending) {
+  const mine = requestItems.filter((r) => r.mine && r.status === "pending").length;
+  el("#myRequestsCount").textContent = mine ? `รอ ${mine}` : "";
+  el("#adminRequestsCount").textContent = state.currentUser.is_admin && pending ? `ใหม่ ${pending}` : "";
+}
+
+function requestHost(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch (e) { return ""; }
+}
+
+function requestRowHtml(r, admin) {
+  const [cls, label] = REQUEST_STATUS[r.status] || REQUEST_STATUS.pending;
+  const meta = [requestHost(r.url) || (admin ? "ไม่ได้ใส่ลิงก์" : ""), admin ? `${(r.by || []).join(", ")}` : r.count > 1 ? `ขอด้วยกัน ${r.count} คน` : "", timeAgo(r.created_at, "เมื่อสักครู่")].filter(Boolean).join(" · ");
+  const acts = admin
+    ? (r.status === "pending"
+      ? `<button class="btn primary" data-rq-add="${escapeHtml(r.id)}">เพิ่มเรื่องนี้</button><button class="btn" data-rq-pick="${escapeHtml(r.id)}">มีแล้ว…</button><button class="btn" data-rq-reject="${escapeHtml(r.id)}">ไม่รองรับ…</button>`
+      : `<button class="btn" data-rq-reopen="${escapeHtml(r.id)}">เปิดใหม่</button>`) + `<button class="btn danger" data-rq-delete="${escapeHtml(r.id)}">ลบ</button>`
+    : r.status === "added" && r.target ? `<button class="btn primary" data-rq-open="${escapeHtml(r.target.kind)}:${escapeHtml(r.target.id)}">${r.target.kind === "manga" ? "อ่านเลย" : "ดูเลย"}</button>`
+    : r.status === "pending" ? `<button class="btn" data-rq-cancel="${escapeHtml(r.id)}">ยกเลิก</button>` : "";
+  return `<div class="rq-row"><div class="rq-top"><b>${escapeHtml(r.title)}${admin && r.count > 1 ? ` <span class="rq-plus">👥 ${r.count}</span>` : ""}</b><span class="rq-st ${cls}">${label}</span></div>
+    <div class="rq-meta">${r.kind === "video" ? "🎬 " : "📖 "}${escapeHtml(meta)}</div>
+    ${admin && r.url ? `<div class="rq-meta"><a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.url)}</a></div>` : ""}
+    ${r.note ? `<div class="rq-note">💬 ${escapeHtml(r.note)}</div>` : ""}
+    ${r.status === "rejected" && r.reason ? `<div class="rq-note">แอดมิน: ${escapeHtml(r.reason)}</div>` : ""}
+    ${r.status === "added" && r.target && admin ? `<div class="rq-meta">→ ${escapeHtml(r.target.name)}</div>` : ""}
+    ${acts ? `<div class="rq-acts">${acts}</div>` : ""}</div>`;
+}
+
+function renderMyRequests() {
+  const mine = requestItems.filter((r) => r.mine);
+  el("#myRequestList").innerHTML = mine.length ? mine.map((r) => requestRowHtml(r, false)).join("")
+    : '<div class="empty-state">ยังไม่มีคำขอ — อยากได้เรื่องไหนจากเว็บไหน กด "+ ขอเรื่องใหม่" ได้เลย</div>';
+}
+
+function renderAdminRequests() {
+  const pending = requestItems.filter((r) => r.status === "pending").length;
+  el("#requestsAdminTitle").textContent = pending ? `คำขอเรื่อง · ใหม่ ${pending}` : "คำขอเรื่อง";
+  el("#adminRequestList").innerHTML = requestItems.length ? requestItems.map((r) => requestRowHtml(r, true)).join("")
+    : '<div class="empty-state">ยังไม่มีคำขอ</div>';
+}
+
+function openRequestSheet(title = "") {
+  if (requireLogin("request")) return;
+  el("#requestTitle").value = title;
+  el("#requestUrl").value = "";
+  el("#requestNote").value = "";
+  el("#requestMsg").textContent = "";
+  el("#requestMatch").hidden = true;
+  setRequestKind("manga");
+  el("#requestSheet").hidden = false;
+  if (title) checkRequestMatch();
+  else setTimeout(() => el("#requestTitle").focus(), 50);
+}
+
+function setRequestKind(kind) {
+  requestKind = kind;
+  els("[data-request-kind]").forEach((b) => b.classList.toggle("active", b.dataset.requestKind === kind));
+}
+
+// ระหว่างพิมพ์: มีในแอปแล้ว → ปุ่มเปิดเลย / มีคนขอแล้ว → "+ ฉันด้วย"
+async function checkRequestMatch() {
+  const title = el("#requestTitle").value.trim();
+  const url = el("#requestUrl").value.trim();
+  const box = el("#requestMatch");
+  if (title.length < 2 && !url) { box.hidden = true; return; }
+  let data;
+  try { data = await sendJSON("POST", "/api/requests/match", { kind: requestKind, title, url }); } catch (e) { return; }
+  if (data.exists) {
+    box.innerHTML = `✅ มี "${escapeHtml(data.exists.name)}" ในแอปแล้ว<button type="button" class="btn" data-rq-open="${escapeHtml(data.exists.kind)}:${escapeHtml(data.exists.id)}">เปิดเลย</button>`;
+  } else if (data.pending) {
+    box.innerHTML = data.pending.mine ? "👍 คุณขอเรื่องนี้ไว้แล้ว รอแอดมินอยู่"
+      : `👀 มีคนขอเรื่องนี้แล้ว ${data.pending.count} คน<button type="button" class="btn" data-rq-join="${escapeHtml(data.pending.id)}">+ ฉันด้วย</button>`;
+  } else { box.hidden = true; return; }
+  box.hidden = false;
+}
+
+function openRequestTarget(value) {
+  const [kind, id] = [value.slice(0, value.indexOf(":")), value.slice(value.indexOf(":") + 1)];
+  el("#requestSheet").hidden = true;
+  if (kind === "manga") {
+    showTab("catalog");
+    (state.catalog.length ? Promise.resolve() : loadCatalog()).then(() => mangaById(id) && openChapterList(mangaById(id)));
+  } else {
+    showTab("videos");
+    (playlistById(id) ? Promise.resolve() : loadVideos()).then(() => playlistById(id) && openPlaylist(id));
+  }
+}
+
+async function resolveRequest(id, body) {
+  try {
+    await sendJSON("PATCH", `/api/requests/${encodeURIComponent(id)}`, body);
+    await loadRequests();
+    toast(body.status === "added" ? "ผูกคำขอแล้ว คนที่ขอได้ติดตาม + แจ้งเตือน" : body.status === "rejected" ? "แจ้งผู้ขอแล้ว" : "เปิดคำขอใหม่แล้ว");
+  } catch (e) { toast(e.message, { error: true }); }
+}
+
+function renderRequestPick() {
+  const r = requestItems.find((x) => x.id === requestPickId);
+  if (!r) return;
+  const q = el("#requestPickSearch").value.trim().toLowerCase();
+  const pool = r.kind === "manga"
+    ? state.catalog.map((m) => ({ kind: "manga", id: m.id, name: m.name, cover: m.cover_url ? proxied(m.cover_url, COVER_WIDTH) : "" }))
+    : (state.videoPlaylists || []).map((p) => ({ kind: "playlist", id: p.id, name: p.name, cover: p.thumbnail_url || "" }));
+  const hits = pool.filter((x) => !q || x.name.toLowerCase().includes(q)).slice(0, 30);
+  el("#requestPickList").innerHTML = hits.map((x) => `<button data-rq-target="${x.kind}:${escapeHtml(x.id)}"><span class="rq-pick-thumb">${thumbHtml(x.cover)}</span><span>${escapeHtml(x.name)}</span></button>`).join("")
+    || '<div class="hint">ไม่พบเรื่องที่ตรงกัน</div>';
+}
+
+async function openRequestPick(id) {
+  requestPickId = id;
+  const r = requestItems.find((x) => x.id === id);
+  if (!r) return;
+  if (r.kind === "manga" && !state.catalog.length) await loadCatalog();
+  if (r.kind === "video" && !(state.videoPlaylists || []).length) await loadVideos();
+  el("#requestPickSearch").value = r.title;
+  renderRequestPick();
+  if (!el("#requestPickList button")) { el("#requestPickSearch").value = ""; renderRequestPick(); }
+  el("#requestPickSheet").hidden = false;
+}
+
+// แอดมินกด "เพิ่มเรื่องนี้": มังงะ = ฟอร์มเพิ่มเรื่องพร้อมชื่อ/ลิงก์ (เพิ่มสำเร็จแล้วผูกคำขอให้เอง), คลิป = หน้าเพิ่มคลิป
+function addFromRequest(id) {
+  const r = requestItems.find((x) => x.id === id);
+  if (!r) return;
+  if (r.kind === "manga") {
+    openMangaModal();
+    el("#mangaFormName").value = r.title;
+    const first = el("#mangaFormSources .source-url");
+    if (first) first.value = r.url || "";
+    pendingRequestLink = r.id;
+    return;
+  }
+  openAdminPage("videoManage", "add");
+  if (r.url && /youtu\.?be/.test(r.url) && el("#ytAddUrl")) el("#ytAddUrl").value = r.url;
+  else if (r.url) copyText(r.url);
+  toast(r.url ? "วางลิงก์ไว้ให้แล้ว เพิ่มเสร็จกด \"มีแล้ว…\" ที่คำขอเพื่อผูกเรื่อง" : "เพิ่มเสร็จแล้วกด \"มีแล้ว…\" ที่คำขอเพื่อผูกเรื่อง");
+}
+
+async function linkPendingRequest(mangaId) {
+  const id = pendingRequestLink;
+  pendingRequestLink = null;
+  if (id && mangaId) await resolveRequest(id, { status: "added", target: { kind: "manga", id: mangaId } });
+}
+
+function initRequests() {
+  document.addEventListener("click", (event) => {
+    const add = event.target.closest("[data-request-new]");
+    if (add) return openRequestSheet(state.tab === "search" ? el("#searchInput").value.trim() : "");
+    const open = event.target.closest("[data-rq-open]")?.dataset.rqOpen;
+    if (open) return openRequestTarget(open);
+  });
+  el("#openMyRequests").addEventListener("click", () => showSettingsPane("requests"));
+  el("#openAdminRequests").addEventListener("click", () => showSettingsPane("requestsAdmin"));
+  el("#requestSheet").addEventListener("click", async (event) => {
+    if (event.target.closest("[data-request-close]")) { el("#requestSheet").hidden = true; return; }
+    const kind = event.target.closest("[data-request-kind]")?.dataset.requestKind;
+    if (kind) { setRequestKind(kind); return checkRequestMatch(); }
+    const join = event.target.closest("[data-rq-join]")?.dataset.rqJoin;
+    if (join) {
+      try {
+        await sendJSON("POST", `/api/requests/${encodeURIComponent(join)}/join`);
+        el("#requestSheet").hidden = true;
+        toast("นับคุณรวมในคำขอแล้ว เพิ่มเมื่อไหร่จะแจ้งเตือน");
+        loadRequests();
+      } catch (e) { el("#requestMsg").textContent = e.message; }
+    }
+  });
+  const recheck = debounce(checkRequestMatch, 400);
+  el("#requestTitle").addEventListener("input", recheck);
+  el("#requestUrl").addEventListener("input", recheck);
+  el("#requestForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const msg = el("#requestMsg");
+    msg.className = "form-msg";
+    try {
+      const res = await fetch("/api/requests", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: requestKind, title: el("#requestTitle").value, url: el("#requestUrl").value, note: el("#requestNote").value }) });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409 && data.exists) return checkRequestMatch();
+      if (!res.ok) throw new Error(data.error || "ส่งไม่สำเร็จ");
+      el("#requestSheet").hidden = true;
+      toast(data.merged ? "มีคนขอเรื่องนี้แล้ว นับคุณรวมด้วย — เพิ่มเมื่อไหร่จะแจ้งเตือน" : "ส่งคำขอแล้ว เพิ่มเมื่อไหร่จะแจ้งเตือน");
+      loadRequests();
+    } catch (e) { msg.className = "form-msg error"; msg.textContent = e.message; }
+  });
+  el("#myRequestList").addEventListener("click", async (event) => {
+    const cancel = event.target.closest("[data-rq-cancel]")?.dataset.rqCancel;
+    if (!cancel || !(await askConfirm("ยกเลิกคำขอนี้?"))) return;
+    try { await sendJSON("DELETE", `/api/requests/${encodeURIComponent(cancel)}`); loadRequests(); }
+    catch (e) { toast(e.message, { error: true }); }
+  });
+  el("#adminRequestList").addEventListener("click", async (event) => {
+    const t = event.target.closest("[data-rq-add], [data-rq-pick], [data-rq-reject], [data-rq-reopen], [data-rq-delete]");
+    if (!t) return;
+    const d = t.dataset;
+    if (d.rqAdd) return addFromRequest(d.rqAdd);
+    if (d.rqPick) return openRequestPick(d.rqPick);
+    if (d.rqReopen) return resolveRequest(d.rqReopen, { status: "pending" });
+    if (d.rqReject) {
+      const reason = prompt("เหตุผล (ผู้ขอจะเห็น) เช่น เว็บนี้บล็อกเซิร์ฟเวอร์ ลองส่งเว็บอื่นที่มีเรื่องนี้", "");
+      if (reason === null) return;
+      return resolveRequest(d.rqReject, { status: "rejected", reason });
+    }
+    if (d.rqDelete && (await askConfirm("ลบคำขอนี้? (ผู้ขอจะไม่เห็นอีก)"))) {
+      try { await sendJSON("DELETE", `/api/requests/${encodeURIComponent(d.rqDelete)}`); loadRequests(); }
+      catch (e) { toast(e.message, { error: true }); }
+    }
+  });
+  el("#requestPickSheet").addEventListener("click", async (event) => {
+    if (event.target.closest("[data-request-pick-close]")) { el("#requestPickSheet").hidden = true; return; }
+    const target = event.target.closest("[data-rq-target]")?.dataset.rqTarget;
+    if (!target) return;
+    const [kind, id] = [target.slice(0, target.indexOf(":")), target.slice(target.indexOf(":") + 1)];
+    el("#requestPickSheet").hidden = true;
+    await resolveRequest(requestPickId, { status: "added", target: { kind, id } });
+  });
+  el("#requestPickSearch").addEventListener("input", debounce(renderRequestPick, 150));
+  if (!isGuest()) loadRequests();
 }
 
 // ---------- สนับสนุนค่าใช้จ่าย: โอนเข้าบัญชีธนาคาร (แอดมินตั้งในจัดการระบบ) ----------
@@ -4015,6 +4257,7 @@ function addSourceRow(value = "") {
 
 function openMangaModal(manga = null) {
   editingMangaId = manga ? manga.id : null;
+  pendingRequestLink = null; // เปิดฟอร์มปกติ ไม่ผูกคำขอ (addFromRequest ตั้งค่าหลังเรียกฟังก์ชันนี้)
   el("#mangaFormTitle").textContent = manga ? "แก้ไขเรื่อง" : "เพิ่มเรื่องใหม่";
   el("#mangaFormName").value = manga ? manga.name : "";
   el("#mangaFormSources").innerHTML = "";
@@ -4082,6 +4325,7 @@ function initMangaForm() {
         });
       }
       closeMangaModal();
+      if (pendingRequestLink && !editingMangaId) await linkPendingRequest(mangaId);
       await Promise.all([loadCatalog(), loadManga()]);
       renderSettings();
     } catch (err) {
@@ -4103,6 +4347,7 @@ const chapterListCache = new Map();
 
 function openChapterList(manga) {
   if (!manga) return;
+  el("#chapterSharedBanner").hidden = true; // แถบลิงก์แชร์ขึ้นเฉพาะเรื่องที่เปิดจากลิงก์ (openShared)
   readerFromHistory = false;
   currentManga = { id: manga.id, name: manga.name, latest_chapter_url: manga.latest_chapter_url };
   const view = el("#chapterListView");
@@ -5264,7 +5509,60 @@ async function openCommentsFromUrl(params) {
   el("#readerComments").click();
 }
 
+// ---------- แชร์เรื่อง: ลิงก์ /m/<id> (มังงะ) /v/<id> (เรื่องใน MeeMovie) — เซิร์ฟเวอร์ใส่ชื่อ/ปกให้ LINE ทำการ์ด ----------
+async function shareItem(kind, id, name) {
+  const url = `${location.origin}/${kind === "manga" ? "m" : "v"}/${encodeURIComponent(id)}`;
+  if (navigator.share) {
+    try { return await navigator.share({ title: name, text: `${name} — ติดตามตอนใหม่บน Mee+`, url }); }
+    catch (e) { if (e.name === "AbortError") return; } // แชร์ไม่ได้ (เช่นคอมบางเครื่อง) → คัดลอกลิงก์แทน
+  }
+  if (await copyText(url)) toast("คัดลอกลิงก์แล้ว ส่งให้เพื่อนได้เลย");
+  else toast(url);
+}
+
+// เปิดจากลิงก์แชร์ (BOOT.shared): เปิดเรื่องนั้น + แถบ "เพื่อนแชร์เรื่องนี้มา" (มังงะ: เฉพาะคนที่ยังไม่ได้ติดตาม)
+async function openShared(shared) {
+  history.replaceState(null, "", "/");
+  if (shared.kind === "playlist") {
+    showTab("videos"); // เริ่มโหลดคลิปเอง — loadVideos ที่ซ้อนกันจะคืนทันทีไม่รอ จึงรอจนโหลดเสร็จ (ไม่เกิน ~10 วิ)
+    for (let i = 0; i < 40 && !playlistById(shared.id); i++) {
+      if (videoLoading) await new Promise((r) => setTimeout(r, 250));
+      else if (i === 0 || !state.videos.length) await loadVideos();
+      else break;
+    }
+    if (!playlistById(shared.id)) return toast("ไม่พบเรื่องนี้แล้ว", { error: true });
+    openPlaylist(shared.id);
+    el("#playlistSharedBanner").hidden = false;
+    return;
+  }
+  if (!state.catalog.length) await loadCatalog();
+  const manga = mangaById(shared.id);
+  if (!manga) return toast("ไม่พบเรื่องนี้แล้ว", { error: true });
+  openChapterList(manga);
+  el("#chapterSharedBanner").hidden = !isGuest() && mangaSubscribed(shared.id); // ผู้เยี่ยมชมเห็นเสมอ (ยังติดตามไม่ได้)
+}
+
+function initShare() {
+  el("#chapterShareBtn").addEventListener("click", () => currentManga && shareItem("manga", currentManga.id, currentManga.name));
+  el("#playlistShareBtn").addEventListener("click", () => {
+    const p = playlistById(openPlaylistId);
+    if (p) shareItem("playlist", p.id, p.name);
+  });
+  el("#chapterSharedBanner").addEventListener("click", (e) => {
+    if (!e.target.closest("[data-shared-follow]")) return;
+    el("#chapterListBody [data-ch-follow]")?.click(); // ใช้ปุ่มติดตามเดิม (ผู้เยี่ยมชม = ชวนเข้าสู่ระบบ)
+    el("#chapterSharedBanner").hidden = true;
+  });
+  if (BOOT.shared) setTimeout(() => openShared(BOOT.shared), 0); // รอ init ตั้งแท็บเสร็จก่อน
+}
+
 function openFromUrl(url) {
+  if (url.searchParams.get("admin") === "requests" || url.searchParams.get("requests")) {
+    history.replaceState(null, "", "/");
+    const pane = url.searchParams.get("admin") === "requests" && state.currentUser.is_admin ? "requestsAdmin" : "requests";
+    setTimeout(() => { showTab("settings"); showSettingsPane(pane); }, 0);
+    return;
+  }
   if (url.searchParams.get("comments")) {
     history.replaceState(null, "", "/");
     openCommentsFromUrl(url.searchParams);
@@ -6584,6 +6882,8 @@ function init() {
   initInstallButton();
   initPush();
   openFromUrl(new URL(location.href));
+  initShare();
+  initRequests();
 
   initTabs();
   initSubTabs();
