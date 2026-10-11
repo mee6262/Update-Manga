@@ -376,6 +376,7 @@ function showTab(tab, fromBack = false) {
     loadVideos(); // ให้ค้นคลิปได้ด้วย (renderVideos อัปเดตผลค้นหาเอง)
   }
   if (tab === "videos") loadVideos();
+  if (tab === "settings") loadDonate();
   if (tab === "settings" && state.currentUser.is_admin) {
     renderSettings();
     renderCategoryAdmin();
@@ -2925,16 +2926,19 @@ function initAdminSearch() {
 }
 
 // ---------- หน้าตั้งค่า: ตั้งค่าของฉัน → ศูนย์จัดการ (แอดมิน) → หน้าจัดการย่อย ----------
+const SETTINGS_PANES = { main: "#settingsMain", hub: "#adminHub", page: "#adminPage", donate: "#donatePane", donateAdmin: "#donateAdminPane" };
+const SETTINGS_PANE_BACK = { page: "hub", donateAdmin: "hub" }; // ที่เหลือ (hub, donate) กลับหน้าตั้งค่า
+
 function showSettingsPane(pane) {
-  el("#settingsMain").hidden = pane !== "main";
-  el("#adminHub").hidden = pane !== "hub";
-  el("#adminPage").hidden = pane !== "page";
+  for (const [name, sel] of Object.entries(SETTINGS_PANES)) el(sel).hidden = pane !== name;
   window.scrollTo(0, 0);
   if (pane === "hub") renderAdminHub();
+  if (pane === "donate") renderDonatePage();
+  if (pane === "donateAdmin") renderDonateAdmin();
 }
 
 function settingsPane() {
-  return !el("#adminPage").hidden ? "page" : !el("#adminHub").hidden ? "hub" : "main";
+  return Object.keys(SETTINGS_PANES).find((name) => !el(SETTINGS_PANES[name]).hidden) || "main";
 }
 
 function openAdminPage(subtab, vm) {
@@ -2969,7 +2973,145 @@ async function renderAdminHub() {
   el("#adminDot").hidden = !(problems.length || watchErr);
 }
 
+// ---------- สนับสนุนค่าใช้จ่าย: โอนเข้าบัญชีธนาคาร (แอดมินตั้งในจัดการระบบ) ----------
+// สี/ตัวย่อธนาคารที่ใช้บ่อย — ธนาคารอื่นใช้สีกลาง + อักษรแรก
+const DONATE_BANKS = [
+  ["กสิกรไทย", "#138f2d", "K"], ["ไทยพาณิชย์", "#4e2a84", "SCB"], ["กรุงเทพ", "#1e4598", "BBL"], ["กรุงไทย", "#1ba5e1", "KTB"],
+  ["กรุงศรี", "#c9a000", "BAY"], ["ทหารไทยธนชาต (ttb)", "#0050f0", "ttb"], ["ออมสิน", "#eb198d", "GSB"], ["ธ.ก.ส.", "#4b9b2c", "BAAC"],
+  ["ยูโอบี", "#0b3b7a", "UOB"], ["เกียรตินาคินภัทร", "#5b4b9a", "KKP"], ["ซีไอเอ็มบี", "#7e2639", "CIMB"], ["แลนด์ แอนด์ เฮ้าส์", "#6d6e71", "LH"],
+];
+let donateLoading = null;
+
+function donateBankStyle(name) {
+  const key = String(name || "").replace(/^ธนาคาร/, "").trim().toLowerCase();
+  const hit = DONATE_BANKS.find(([n]) => key && (n.toLowerCase().includes(key) || key.includes(n.replace(/\s*\(.*\)/, "").toLowerCase())));
+  return hit ? { color: hit[1], short: hit[2] } : { color: "#55606e", short: (key[0] || "฿").toUpperCase() };
+}
+
+async function loadDonate() {
+  if (!donateLoading) {
+    donateLoading = getJSON("/api/donate").then((data) => { state.donate = data; }).catch(() => {}).finally(() => { donateLoading = null; });
+  }
+  await donateLoading;
+  renderDonateCard();
+}
+
+function renderDonateCard() {
+  const d = state.donate || {};
+  el("#donateCard").hidden = !d.enabled;
+  el("#donateCardSub").textContent = d.server_cost ? `ค่าเซิร์ฟเวอร์ ${d.server_cost}` : "ช่วยค่าเซิร์ฟเวอร์ได้ตามสะดวก";
+}
+
+function renderDonatePage() {
+  const d = state.donate || {};
+  const bank = donateBankStyle(d.bank);
+  const thanks = String(d.thanks || "").split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
+  const account = d.account_no || d.account_name
+    ? `<div class="donate-bank"><div class="donate-bank-top" style="background:${bank.color}"><span class="donate-bank-logo" style="color:${bank.color}">${escapeHtml(bank.short)}</span><b>${escapeHtml(d.bank ? (d.bank.startsWith("ธนาคาร") ? d.bank : `ธนาคาร${d.bank}`) : "บัญชีรับโอน")}</b></div>
+        <div class="donate-bank-body">${d.account_no ? `<div class="donate-label">เลขบัญชี</div><div class="donate-acc"><span class="donate-num">${escapeHtml(d.account_no)}</span><button class="donate-copy" data-donate-copy="${escapeHtml(d.account_no)}">คัดลอก</button></div>` : ""}
+        ${d.account_name ? `<div class="donate-label">ชื่อบัญชี</div><div class="donate-name">${escapeHtml(d.account_name)}</div>` : ""}</div></div>`
+    : "";
+  const qr = d.qr_url
+    ? `<div class="donate-box donate-qr"><div class="donate-pp"><i>PromptPay</i> สแกนจ่ายด้วยแอปธนาคาร</div><img src="${escapeHtml(d.qr_url)}" alt="QR พร้อมเพย์" /><a class="btn" href="${escapeHtml(d.qr_url)}" download="meeplus-qr">⬇ บันทึกรูป QR</a></div>`
+    : "";
+  el("#donateBody").innerHTML = `${d.enabled ? "" : '<div class="notice-card">ปิดอยู่ — ผู้ใช้ยังไม่เห็นหน้านี้ (แอดมินเห็นเพื่อดูตัวอย่าง)</div>'}
+    <div class="donate-hero"><div class="donate-big" aria-hidden="true">💚</div><h2>สนับสนุนค่าใช้จ่าย Mee+</h2>${d.message ? `<p>${escapeHtml(d.message)}</p>` : ""}</div>
+    ${d.server_cost ? `<div class="donate-box donate-cost"><span>ค่าเซิร์ฟเวอร์</span><b>${escapeHtml(d.server_cost)}</b></div>` : ""}
+    ${account}${qr}
+    ${account || qr ? `<div class="donate-box"><h3>วิธีโอน</h3><ol class="donate-steps">${d.account_no ? '<li>กด "คัดลอก" เลขบัญชี' + (qr ? " หรือบันทึกรูป QR" : "") + "</li>" : qr ? "<li>บันทึกรูป QR</li>" : ""}<li>เปิดแอปธนาคาร วางเลขบัญชี${qr ? " หรือสแกน QR จากรูปในเครื่อง" : ""}</li>${d.account_name ? "<li>ตรวจชื่อบัญชีให้ตรงกับด้านบนก่อนกดยืนยัน</li>" : ""}</ol></div>` : ""}
+    ${thanks.length ? `<div class="donate-box"><h3>ขอบคุณผู้สนับสนุน 💐</h3><div class="donate-thanks">${thanks.map((n) => `<span>${escapeHtml(n)}</span>`).join("")}</div></div>` : ""}
+    <p class="donate-note">เงินสนับสนุนใช้จ่ายค่าเซิร์ฟเวอร์ของ Mee+ เท่านั้น · ไม่มีสิทธิพิเศษแลกเปลี่ยน · ไม่โอนก็ใช้งานได้ครบเหมือนเดิม</p>`;
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) { // http / เบราว์เซอร์เก่า: ใช้ช่องข้อความชั่วคราว
+    const ta = Object.assign(document.createElement("textarea"), { value: text });
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  }
+}
+
+function renderDonateAdmin() {
+  const d = state.donate || {};
+  el("#donateEnabled").checked = !!d.enabled;
+  el("#donateMessage").value = d.message || "";
+  el("#donateServerCost").value = d.server_cost || "";
+  el("#donateBank").value = d.bank || "";
+  el("#donateAccountNo").value = d.account_no || "";
+  el("#donateAccountName").value = d.account_name || "";
+  el("#donateThanks").value = d.thanks || "";
+  el("#donateBankList").innerHTML = DONATE_BANKS.map(([n]) => `<option value="${escapeHtml(n)}"></option>`).join("");
+  renderDonateQrAdmin();
+  el("#donateMsg").textContent = "";
+}
+
+function renderDonateQrAdmin() {
+  const url = (state.donate || {}).qr_url;
+  el("#donateQrPreview").innerHTML = url ? `<img src="${escapeHtml(url)}" alt="" />` : '<span class="hint">ยังไม่มีรูป</span>';
+  el("#donateQrDelete").hidden = !url;
+}
+
+function initDonate() {
+  el("#donateCard").addEventListener("click", () => showSettingsPane("donate"));
+  el("#openDonateAdmin").addEventListener("click", async () => { await loadDonate(); showSettingsPane("donateAdmin"); });
+  el("#donatePreview").addEventListener("click", () => showSettingsPane("donate"));
+  el("#donateBody").addEventListener("click", async (event) => {
+    const btn = event.target.closest("[data-donate-copy]");
+    if (!btn) return;
+    if (!(await copyText(btn.dataset.donateCopy))) return toast("คัดลอกไม่สำเร็จ กดค้างที่เลขบัญชีเพื่อคัดลอกเอง", { error: true });
+    btn.textContent = "✓ คัดลอกแล้ว";
+    btn.classList.add("done");
+    toast("คัดลอกเลขบัญชีแล้ว");
+  });
+  el("#donateForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const msg = el("#donateMsg");
+    try {
+      state.donate = await sendJSON("PUT", "/api/donate", {
+        enabled: el("#donateEnabled").checked, message: el("#donateMessage").value, server_cost: el("#donateServerCost").value,
+        bank: el("#donateBank").value, account_no: el("#donateAccountNo").value, account_name: el("#donateAccountName").value,
+        thanks: el("#donateThanks").value,
+      });
+      renderDonateCard();
+      msg.className = "form-msg success";
+      msg.textContent = "บันทึกแล้ว";
+    } catch (e) { msg.className = "form-msg error"; msg.textContent = e.message; }
+  });
+  el("#donateQrFile").addEventListener("change", async (event) => {
+    const file = event.target.files[0];
+    event.target.value = "";
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) return toast("รูปใหญ่เกิน 2 MB", { error: true });
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const res = await fetch("/api/donate/qr", { method: "POST", body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "อัปโหลดไม่สำเร็จ");
+      state.donate = data;
+      renderDonateQrAdmin();
+      toast("อัปโหลดรูป QR แล้ว");
+    } catch (e) { toast(e.message, { error: true }); }
+  });
+  el("#donateQrDelete").addEventListener("click", async () => {
+    if (!(await askConfirm("ลบรูป QR?"))) return;
+    try {
+      state.donate = await sendJSON("DELETE", "/api/donate/qr");
+      renderDonateQrAdmin();
+    } catch (e) { toast(e.message, { error: true }); }
+  });
+}
+
 function initSettingsPanes() {
+  initDonate();
   el("#openAdminHub").addEventListener("click", () => showSettingsPane("hub"));
   els("[data-admin-back]").forEach((b) => b.addEventListener("click", () => showSettingsPane(b.dataset.adminBack)));
   el("#adminHub").addEventListener("click", (e) => {
@@ -6328,7 +6470,7 @@ function goBack() {
   if (!el("#playlistView").hidden) return closePlaylist(), true;
   if (!el("#chapterListView").hidden) return closeChapterList(), true;
   if (state.tab === "list" && state.homeMode === "history") return setHomeMode("grid"), true;
-  if (state.tab === "settings" && settingsPane() !== "main") return showSettingsPane(settingsPane() === "page" ? "hub" : "main"), true;
+  if (state.tab === "settings" && settingsPane() !== "main") return showSettingsPane(SETTINGS_PANE_BACK[settingsPane()] || "main"), true;
   const prev = tabHistory.pop();
   if (prev) return showTab(prev, true), true;
   return false;

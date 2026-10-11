@@ -14,6 +14,7 @@ webapp/data/logs/
 webapp/data/vapid_private.pem
 webapp/data/categories.json
 webapp/data/site_settings.json
+webapp/data/donate_qr.*
 webapp/data/videos.json
 webapp/data/video_thumbs/
 webapp/data/video_categories.json

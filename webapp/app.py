@@ -259,7 +259,7 @@ def is_guest() -> bool:
 GUEST_ENDPOINTS = {
     "index", "list_manga", "list_catalog", "list_categories", "list_chapters", "get_chapter", "reading_history",
     "proxy_image", "list_videos", "video_thumb", "video_speedtest", "get_video_sources", "get_video_playback",
-    "get_video_progress", "list_comments", "version", "logout",
+    "get_video_progress", "list_comments", "version", "logout", "get_donate", "donate_qr",
 }
 # ผู้เยี่ยมชม = ใครก็ได้ (รวม bot): จำกัดคำขอที่ทำให้เซิร์ฟเวอร์ยิงเว็บต้นทาง/ใช้เน็ตมาก ต่อ IP (สมาชิกไม่จำกัด)
 GUEST_RATE_LIMITS = {  # endpoint → (ครั้ง, วินาที)
@@ -624,6 +624,110 @@ def update_site_settings():
             settings["registration_open"] = bool(body["registration_open"])
         storage.save_site_settings(settings)
     return jsonify({"registration_open": registration_open()})
+
+
+# ---------- หน้าสนับสนุนค่าใช้จ่าย (โอนเข้าบัญชีธนาคาร) — แอดมินตั้งใน site_settings["donate"] ----------
+DONATE_FIELDS = {"message": 600, "bank": 40, "account_no": 30, "account_name": 80, "server_cost": 60, "thanks": 600}
+DONATE_QR_TYPES = {b"\x89PNG\r\n\x1a\n": "png", b"\xff\xd8\xff": "jpg", b"RIFF": "webp"}
+DONATE_QR_MAX = 2 * 1024 * 1024
+
+
+def _donate_public(donate: dict) -> dict:
+    data = {k: donate.get(k) or "" for k in DONATE_FIELDS}
+    data["enabled"] = bool(donate.get("enabled"))
+    # ?v= เปลี่ยนทุกครั้งที่อัปโหลดใหม่ — เบราว์เซอร์ไม่ค้างรูป QR เก่า
+    data["qr_url"] = f"/donate/qr?v={donate['qr_version']}" if donate.get("qr") else ""
+    return data
+
+
+@app.route("/api/donate", methods=["GET"])
+def get_donate():
+    donate = storage.load_site_settings().get("donate") or {}
+    if not donate.get("enabled") and not is_admin():
+        return jsonify({"enabled": False})
+    return jsonify(_donate_public(donate))
+
+
+@app.route("/api/donate", methods=["PUT"])
+@require_admin
+def update_donate():
+    body = request.get_json(force=True, silent=True) or {}
+    with storage.state_lock:
+        settings = storage.load_site_settings(fresh=True)
+        donate = dict(settings.get("donate") or {})
+        for key, limit in DONATE_FIELDS.items():
+            if key in body:
+                value = str(body.get(key) or "").strip()
+                if len(value) > limit:
+                    return jsonify({"error": f"ข้อความยาวเกิน {limit} ตัวอักษร"}), 400
+                donate[key] = value
+        if "enabled" in body:
+            donate["enabled"] = bool(body.get("enabled"))
+        settings["donate"] = donate
+        storage.save_site_settings(settings)
+    return jsonify(_donate_public(donate))
+
+
+def _donate_qr_path(ext: str):
+    return storage.DATA_DIR / f"donate_qr.{ext}"
+
+
+@app.route("/api/donate/qr", methods=["POST"])
+@require_admin
+def upload_donate_qr():
+    """รูป QR พร้อมเพย์จากแอปธนาคาร — รับเฉพาะ PNG/JPEG/WebP ไม่เกิน 2 MB (ตรวจจากหัวไฟล์จริง ไม่เชื่อนามสกุล)"""
+    upload = request.files.get("file")
+    data = upload.read(DONATE_QR_MAX + 1) if upload else b""
+    if not data:
+        return jsonify({"error": "ไม่พบไฟล์รูป"}), 400
+    if len(data) > DONATE_QR_MAX:
+        return jsonify({"error": "รูปใหญ่เกิน 2 MB"}), 400
+    ext = next((e for magic, e in DONATE_QR_TYPES.items() if data.startswith(magic)), None)
+    if ext == "webp" and data[8:12] != b"WEBP":
+        ext = None
+    if not ext:
+        return jsonify({"error": "รองรับเฉพาะรูป PNG, JPG หรือ WebP"}), 400
+    with storage.state_lock:
+        for other in DONATE_QR_TYPES.values():
+            if other != ext:
+                _donate_qr_path(other).unlink(missing_ok=True)
+        tmp = _donate_qr_path(ext).with_suffix(".tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, _donate_qr_path(ext))
+        settings = storage.load_site_settings(fresh=True)
+        donate = dict(settings.get("donate") or {})
+        donate["qr"] = ext
+        donate["qr_version"] = int(time.time())
+        settings["donate"] = donate
+        storage.save_site_settings(settings)
+    return jsonify(_donate_public(donate))
+
+
+@app.route("/api/donate/qr", methods=["DELETE"])
+@require_admin
+def delete_donate_qr():
+    with storage.state_lock:
+        settings = storage.load_site_settings(fresh=True)
+        donate = dict(settings.get("donate") or {})
+        if donate.get("qr"):
+            _donate_qr_path(donate["qr"]).unlink(missing_ok=True)
+        donate.pop("qr", None)
+        donate.pop("qr_version", None)
+        settings["donate"] = donate
+        storage.save_site_settings(settings)
+    return jsonify(_donate_public(donate))
+
+
+@app.route("/donate/qr")
+def donate_qr():
+    donate = storage.load_site_settings().get("donate") or {}
+    if not donate.get("qr") or (not donate.get("enabled") and not is_admin()):
+        return "not found", 404
+    path = _donate_qr_path(donate["qr"])
+    if not path.exists():
+        return "not found", 404
+    mime = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}[donate["qr"]]
+    return Response(path.read_bytes(), content_type=mime, headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.route("/api/users/<username>/reset_password", methods=["POST"])

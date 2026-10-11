@@ -175,6 +175,8 @@
         <a class="btn primary" href="/login">เข้าสู่ระบบ</a>
         <a id="guestRegisterBtn" class="btn" href="/register">สมัครสมาชิก</a>
       </div>
+      <button id="donateCard" class="donate-card" hidden><span class="donate-ic" aria-hidden="true">💚</span>
+        <span class="grow"><b>สนับสนุนค่าใช้จ่าย Mee+</b><small id="donateCardSub"></small></span><span class="chev">›</span></button>
 
       <div id="pwNotice" class="notice-card" hidden>
         รหัสผ่านของคุณถูกรีเซ็ตเป็นรหัสเริ่มต้น กรุณาตั้งรหัสผ่านใหม่ด้านล่าง
@@ -232,6 +234,43 @@
       </div>
       </div>
 
+      <div id="donatePane" class="donate-page" hidden>
+        <button class="btn set-back" data-admin-back="main">‹ ตั้งค่า</button>
+        <div id="donateBody"></div>
+      </div>
+
+      <div id="donateAdminPane" hidden>
+        <button class="btn set-back" data-admin-back="hub">‹ จัดการระบบ</button>
+        <h2 class="section-title">หน้าสนับสนุน</h2>
+        <form id="donateForm" class="donate-form">
+          <div class="donate-box">
+            <label class="donate-sw">แสดงหน้าสนับสนุนให้ผู้ใช้เห็น<input type="checkbox" id="donateEnabled" class="switch" role="switch" /></label>
+            <label>ข้อความถึงผู้ใช้<textarea id="donateMessage" maxlength="600" rows="3" placeholder="เช่น Mee+ เปิดให้ใช้ฟรี ไม่มีโฆษณา ใครอยากช่วยค่าเซิร์ฟเวอร์ โอนได้ตามสะดวก"></textarea></label>
+            <label>ค่าเซิร์ฟเวอร์<input id="donateServerCost" maxlength="60" placeholder="เช่น 1,500 บาท/เดือน" /></label>
+          </div>
+          <div class="donate-box">
+            <h3>บัญชีรับโอน</h3>
+            <label>ธนาคาร<input id="donateBank" maxlength="40" list="donateBankList" placeholder="เช่น กสิกรไทย" /></label>
+            <datalist id="donateBankList"></datalist>
+            <label>เลขบัญชี<input id="donateAccountNo" maxlength="30" inputmode="numeric" placeholder="xxx-x-xxxxx-x" /></label>
+            <label>ชื่อบัญชี<input id="donateAccountName" maxlength="80" /></label>
+            <div class="donate-qr-admin">
+              <span class="donate-label">QR พร้อมเพย์ (รูปจากแอปธนาคาร · PNG/JPG/WebP ไม่เกิน 2 MB)</span>
+              <div class="donate-up"><span id="donateQrPreview" class="donate-qr-thumb"></span>
+                <label class="btn">เลือกรูป<input type="file" id="donateQrFile" accept="image/png,image/jpeg,image/webp" hidden /></label>
+                <button type="button" id="donateQrDelete" class="btn danger" hidden>ลบ</button></div>
+            </div>
+          </div>
+          <div class="donate-box">
+            <h3>ขอบคุณผู้สนับสนุน</h3>
+            <label>ชื่อที่แสดง (คั่นด้วยจุลภาค · เว้นว่าง = ไม่แสดงส่วนนี้)<textarea id="donateThanks" maxlength="600" rows="2"></textarea></label>
+          </div>
+          <div id="donateMsg" class="form-msg"></div>
+          <button type="submit" class="btn primary donate-save">บันทึก</button>
+          <button type="button" id="donatePreview" class="btn donate-save">ดูหน้าที่ผู้ใช้เห็น</button>
+        </form>
+      </div>
+
       <div id="adminHub" hidden>
         <button class="btn set-back" data-admin-back="main">‹ ตั้งค่า</button>
         <h2 class="section-title">จัดการระบบ</h2>
@@ -252,6 +291,7 @@
         <h3 class="set-group-title">ระบบ</h3>
         <div class="set-group">
           <button class="set-item set-row" data-admin-open="systemManage"><span class="set-ic">🖥</span><span class="set-label">สถานะเซิร์ฟเวอร์ + ล็อก</span><span class="chev">›</span></button>
+          <button id="openDonateAdmin" class="set-item set-row"><span class="set-ic">💚</span><span class="set-label">หน้าสนับสนุน (บัญชีรับโอน)</span><span class="chev">›</span></button>
           <button id="adminRefreshAll" class="set-item set-row"><span class="set-ic">🔄</span><span class="set-label">รีเฟรชมังงะทั้งหมด</span><span class="set-value" data-admin-count="checked"></span></button>
         </div>
       </div>
