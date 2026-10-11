@@ -2475,9 +2475,9 @@ function setHomeMode(mode) {
   state.homeMode = mode;
   els(".home-tab").forEach((b) => b.classList.toggle("active", b.dataset.home === mode));
   el("#mangaGrid").hidden = mode !== "grid";
-  el("#emptyState").hidden = mode !== "grid" || state.manga.length > 0;
+  el("#emptyState").hidden = mode !== "grid" || homeManga().length > 0;
   el("#historyView").hidden = mode !== "history";
-  el("#followHead").hidden = mode !== "grid" || !state.manga.length;
+  el("#followHead").hidden = mode !== "grid" || !homeManga().length;
   renderMangaHome();
   if (mode === "history") {
     renderHistory();
@@ -2601,7 +2601,7 @@ function updateCategoryBar() {
 
 // ---------- หมวดพิเศษ ----------
 // หมวดที่ admin ตั้งเป็น "พิเศษ" ซ่อนไว้ (ทั้งตัวหมวดและเรื่องที่อยู่ในหมวดนั้น) จนกว่าผู้ใช้จะเปิดเองในหน้าตั้งค่า
-// เรื่องที่ผู้ใช้ติดตามอยู่แล้วยังขึ้นในหน้าหลักตามปกติ — ซ่อนเฉพาะตอนเลือกดู/ค้นหา
+// ซ่อนทุกหน้ารวมหน้าหลัก แม้เป็นเรื่องที่ติดตามอยู่ (แอดมินเพิ่มเรื่อง = ติดตามให้อัตโนมัติ — เดิมเลยโผล่หน้าหลัก)
 function showSpecial() {
   return Boolean(state.prefs.show_special);
 }
@@ -2620,6 +2620,11 @@ function withoutSpecial(items) {
 
 function catalogVisible() {
   return withoutSpecial(state.catalog);
+}
+
+// เรื่องที่ติดตามที่แสดงในหน้าหลัก
+function homeManga() {
+  return withoutSpecial(state.manga);
 }
 
 // ---------- ธีม ----------
@@ -2703,6 +2708,7 @@ function initPrefs() {
     renderCatalog(filterCatalog());
     renderSearch();
     renderHistory();
+    renderGrid();
     fetch("/api/prefs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -3521,21 +3527,22 @@ let lastGridSignature = null;
 function renderGrid() {
   const grid = el("#mangaGrid");
   const empty = el("#emptyState");
-  empty.hidden = state.manga.length > 0 || state.homeMode !== "grid";
+  const home = homeManga();
+  empty.hidden = home.length > 0 || state.homeMode !== "grid";
 
-  el("#followHead").hidden = state.homeMode !== "grid" || !state.manga.length;
-  el("#followTitle").textContent = `${isGuest() ? "อัปเดตล่าสุด" : "ติดตาม"} · ${state.manga.length}`;
+  el("#followHead").hidden = state.homeMode !== "grid" || !home.length;
+  el("#followTitle").textContent = `${isGuest() ? "อัปเดตล่าสุด" : "ติดตาม"} · ${home.length}`;
   renderMangaHome();
   const sort = el("#followSort").value;
   const signature = JSON.stringify([
     sort,
     Math.floor(Date.now() / 600000), // "x ชั่วโมงที่แล้ว" ต้องขยับเองแม้ข้อมูลไม่เปลี่ยน
-    ...state.manga.map((m) => [m.id, m.is_new, m.latest_chapter, m.cover_url, mangaDate(m)])]
+    ...home.map((m) => [m.id, m.is_new, m.latest_chapter, m.cover_url, mangaDate(m)])]
   );
   if (signature === lastGridSignature) return;
   lastGridSignature = signature;
 
-  const items = [...state.manga];
+  const items = [...home];
   if (sort === "name") items.sort((a, b) => a.name.localeCompare(b.name, "th"));
   else items.sort((a, b) => String(mangaDate(b) || "").localeCompare(String(mangaDate(a) || "")));
   grid.innerHTML = items
@@ -3589,7 +3596,7 @@ function renderMangaHome() {
   box.hidden = state.homeMode !== "grid";
   if (box.hidden) return;
   const byDate = (a, b) => String(mangaDate(b) || "").localeCompare(String(mangaDate(a) || ""));
-  const fresh = state.manga.filter((m) => m.is_new).sort(byDate);
+  const fresh = homeManga().filter((m) => m.is_new).sort(byDate);
   const history = withoutSpecial(state.history);
   const reading = history.filter((h) => h.chapter_url && h.fraction > 0 && h.fraction < 0.95).slice(0, 12);
   const parts = [];
