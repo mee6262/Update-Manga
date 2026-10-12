@@ -2468,7 +2468,7 @@ function initTabs() {
 
 // ---------- หน้าหลัก: "หน้าหลัก" (กริดเรื่องที่ติดตาม) / "รายการอ่านล่าสุด" ----------
 state.homeMode = "grid";
-state.history = [];
+state.history = BOOT.history || []; // ผู้เยี่ยมชมได้ [] (ประวัติอยู่ในเครื่อง โหลดตอน init)
 let readerFromHistory = false; // เปิดหน้าอ่านจากปุ่ม "อ่านต่อ" — ปิดแล้วกลับมารายการอ่านล่าสุด ไม่ใช่หน้าเลือกตอน
 
 function setHomeMode(mode) {
@@ -2515,13 +2515,16 @@ function initHomeTabs() {
   });
 }
 
-async function loadHistory() {
+let historyRetryTimer = null;
+async function loadHistory(attempt = 0) {
+  clearTimeout(historyRetryTimer);
   try {
     state.history = isGuest() ? guestHistory() : (await getJSON("/api/history")).items;
     renderHistory();
     renderMangaHome();
   } catch (e) {
-    // ใช้ของเดิมต่อ
+    // ใช้ของเดิมต่อ — แล้วลองใหม่อีก 2 ครั้ง (เน็ตมือถือเพิ่งตื่นตอนเปิดแอป/สลับกลับมา พลาดครั้งแรกบ่อย)
+    if (attempt < 2) historyRetryTimer = setTimeout(() => loadHistory(attempt + 1), attempt ? 10000 : 3000);
   }
 }
 
@@ -5168,6 +5171,7 @@ async function closeReader() {
     scrollToLastRead();
     await saved;
     renderChapterList({ keepScroll: true });
+    loadHistory(); // แถวอ่านค้างไว้ในหน้าหลัก (อยู่ใต้หน้าเลือกตอน) ให้ตรงกับที่เพิ่งอ่าน
   }
 }
 

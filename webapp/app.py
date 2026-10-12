@@ -1357,6 +1357,9 @@ def _index_response(shared: dict | None = None, og: dict | None = None):
         },
         "prefs": storage.load_prefs(username) if username else {},
         "manga": manga_list_payload(username),
+        # แถว "อ่านค้างไว้"/การ์ดอ่านต่อ — เดิมยิง /api/history แยกหลังหน้าโหลด เปิดแอปใหม่ (ปัดทิ้งแล้วเปิด)
+        # เน็ตมือถือยังไม่พร้อม คำขอนั้นพลาดครั้งเดียวแถวหายไปทั้งแถวจนกว่าจะสลับแท็บ
+        "history": history_payload(username),
         "shared": shared,  # เปิดจากลิงก์แชร์ /m/<id> หรือ /v/<id>: หน้าเว็บเปิดเรื่องนั้นให้
     }
     resp = app.make_response(render_template("index.html", boot=boot, og=og))
@@ -4397,11 +4400,15 @@ def get_chapter(manga_id):
 
 @app.route("/api/history", methods=["GET"])
 def reading_history():
+    return jsonify({"items": history_payload(current_username())})
+
+
+def history_payload(username: str | None) -> list[dict]:
     """รายการอ่านล่าสุด: ทุกเรื่องที่เคยเปิดอ่าน (ไม่จำกัดเฉพาะที่ติดตาม) เรียงจากอ่านล่าสุดก่อน พร้อมตอนที่อ่าน
-    ล่าสุดของแต่ละเรื่อง และตำแหน่งที่อ่านค้างไว้ (ถ้ายังอ่านตอนนั้นไม่จบ) ให้ปุ่ม "อ่านต่อ" เปิดไปจุดเดิม"""
-    username = current_username()
+    ล่าสุดของแต่ละเรื่อง และตำแหน่งที่อ่านค้างไว้ (ถ้ายังอ่านตอนนั้นไม่จบ) ให้ปุ่ม "อ่านต่อ" เปิดไปจุดเดิม
+    (ฝังมากับหน้าเว็บด้วย — ดู _index_response)"""
     if not username:
-        return jsonify({"items": []})
+        return []
     read_state = storage.load_read_state(username)
     items = []
     for manga_id, entry in read_state.items():
@@ -4438,7 +4445,7 @@ def reading_history():
             "next_chapter_url": nxt["url"] if nxt else None,
         })
     items.sort(key=lambda i: i["last_read_at"] or "", reverse=True)
-    return jsonify({"items": items})
+    return items
 
 
 @app.route("/api/manga/<manga_id>/chapters", methods=["GET"])
