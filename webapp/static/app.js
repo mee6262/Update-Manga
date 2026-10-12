@@ -544,7 +544,7 @@ let heroTimer = null;
 function pickHeroPlaylists(lists = state.videoPlaylists || []) {
   const picked = [];
   const add = (p) => { if (p && !picked.includes(p) && picked.length < HERO_COUNT) picked.push(p); };
-  lists.filter((p) => playlistBadge(p, playlistEpisodes(p.id))).forEach(add);
+  lists.filter((p) => playlistBadge(p, playlistEpisodes(p.id)) || heroFreshEpisodes(p).length).forEach(add);
   [...lists].sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || ""))).forEach(add);
   return picked;
 }
@@ -608,15 +608,25 @@ function initHeroCarousel() {
   }
 }
 
+// ตอนใหม่ของเรื่องสำหรับแบนเนอร์: ภาษาที่ดูอยู่ก่อน ไม่มีค่อยดูภาษาอื่น (ดูซับอยู่ พากย์ออกก็ควรรู้)
+// — ป้าย NEW EP บนการ์ดเรื่องยังนับเฉพาะภาษาที่ดูอยู่เหมือนเดิม
+function heroFreshEpisodes(p, eps = playlistEpisodes(p.id)) {
+  const own = newEpisodes(p, eps);
+  return own.length ? own : newEpisodes(p, allPlaylistEpisodes(p.id));
+}
+
 function heroHtml(p) {
   const eps = playlistEpisodes(p.id);
   const resume = playlistResume(eps);
   const started = eps.some((v) => episodeProgress(v).watched_at);
-  const fresh = newEpisodes(p, eps);
-  const meta = fresh.length ? `${episodeLabel(fresh[fresh.length - 1])} มาแล้ว · ${eps.length} ตอน` : `${eps.length} ตอน`;
-  const cover = (fresh.length ? fresh[fresh.length - 1] : resume).thumbnail_url || p.thumbnail_url;
+  const fresh = heroFreshEpisodes(p, eps);
+  const last = fresh[fresh.length - 1];
+  const lang = last && last.lang && seriesLangs(p).length > 1 ? ` ${LANG_LABEL[last.lang].replace("ไทย", "")}` : "";
+  const meta = last ? `${episodeLabel(last)}${lang} มาแล้ว · ${eps.length} ตอน` : `${eps.length} ตอน`;
+  const cover = (last || resume).thumbnail_url || p.thumbnail_url;
+  const badge = playlistBadge(p, eps) || (last ? '<span class="new-badge">NEW EP</span>' : "");
   return `<div class="mm-hero" data-playlist-id="${escapeHtml(p.id)}">${thumbHtml(cover)}
-    <div class="mm-hero-info">${playlistBadge(p, eps).replace("new-badge", "new-badge mm-hero-badge")}
+    <div class="mm-hero-info">${badge.replace("new-badge", "new-badge mm-hero-badge")}
       <div class="mm-hero-name">${escapeHtml(p.name)}</div><div class="mm-hero-meta">${meta}</div>
       <button class="btn primary" data-hero-play="${escapeHtml(resume.id)}">▶ ${started ? "ดูต่อ" : "เริ่มดู"} ${episodeLabel(resume)}</button>
     </div></div>`;
