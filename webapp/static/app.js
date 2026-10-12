@@ -2509,7 +2509,8 @@ function initHomeTabs() {
     const h = state.history.find((x) => x.id === id);
     const heroAct = e.target.closest("[data-hero-action]")?.dataset.heroAction;
     if (heroAct && heroAct !== "open" && h) return runHistoryAction(h, heroAct);
-    if (card.classList.contains("reading") && h) return resumeReading(h);
+    const act = card.classList.contains("reading") && historyAction(h);
+    if (act) return runHistoryAction(h, act.kind);
     openChapterList(mangaById(id) || h);
   });
 }
@@ -2551,7 +2552,7 @@ function renderHistory() {
     label = day;
     const action = historyAction(h);
     const reading = action && action.kind === "resume";
-    const meta = reading ? `${h.chapter_text || ""} · ค้าง ${Math.round(h.fraction * 100)}%`
+    const meta = reading ? `${h.chapter_text || ""} · ${h.fraction > 0 ? `ค้าง ${Math.round(h.fraction * 100)}%` : "เปิดค้างไว้"}`
       : action ? `จบ ${h.chapter_text || ""}` : `${h.chapter_text || ""}${h.chapter_url ? " · ล่าสุดแล้ว" : ""}`;
     const button = reading ? '<button class="btn hist-action" data-action="resume">อ่านต่อ</button>'
       : action ? `<button class="btn hist-action" data-action="next">${escapeHtml(shortChapter(h.next_chapter_text) || "ถัดไป")} ›</button>`
@@ -3578,9 +3579,11 @@ function followDotHtml(m) {
 }
 
 // ปุ่มหลักของเรื่องจากประวัติ: ค้างกลางตอน = อ่านต่อ, อ่านจบตอน = ตอนถัดไป, ทันตอนล่าสุด = ไม่มี
+// fraction 0 = เปิดตอนนั้นแล้วยังไม่ได้เลื่อน (เช่นสไลด์ไปตอนถัดไปแล้วปิดแอป) ต้องกลับไปตอนนั้น ไม่ใช่ข้ามไปอีกตอน
+// (null = อ่านจบตอนแล้ว / ไม่มีตำแหน่งของตอนนั้น)
 function historyAction(h) {
   if (!h || !h.chapter_url) return null;
-  if (h.fraction > 0 && h.fraction < 0.95) return { kind: "resume", label: `อ่านต่อ ${h.chapter_text || ""}`.trim() };
+  if (typeof h.fraction === "number" && h.fraction < 0.95) return { kind: "resume", label: `อ่านต่อ ${h.chapter_text || ""}`.trim() };
   if (h.next_chapter_url) return { kind: "next", label: `อ่าน ${h.next_chapter_text || "ตอนถัดไป"}` };
   return null;
 }
@@ -3598,7 +3601,9 @@ function renderMangaHome() {
   const byDate = (a, b) => String(mangaDate(b) || "").localeCompare(String(mangaDate(a) || ""));
   const fresh = homeManga().filter((m) => m.is_new).sort(byDate);
   const history = withoutSpecial(state.history);
-  const reading = history.filter((h) => h.chapter_url && h.fraction > 0 && h.fraction < 0.95).slice(0, 12);
+  // อ่านค้างไว้ = เรื่องที่ยังอ่านไม่ทัน: ค้างกลางตอน หรืออ่านจบตอนแล้วแต่ยังมีตอนถัดไป — เดิมนับแค่ค้างกลางตอน
+  // อ่านจบตอน/สไลด์ไปตอนถัดไปแล้วปิดแอป เรื่องเลยหลุดจากแถวทั้งที่ยังตามอ่านอยู่
+  const reading = history.filter((h) => historyAction(h)).slice(0, 12);
   const parts = [];
   // การ์ดอ่านต่อ: เรื่องที่กำลังตามอ่านและมีตอนใหม่ → เรื่องที่อ่านค้างกลางตอน → เรื่องที่มีตอนใหม่ → อ่านล่าสุด
   const pick = fresh.find((m) => history.some((h) => h.id === m.id)) || reading[0] || fresh[0] || history[0];
@@ -3623,9 +3628,10 @@ function renderMangaHome() {
     })).join(""), "", "mm-row covers"));
   }
   if (reading.length) {
-    parts.push(homeRowHtml("อ่านค้างไว้", reading.map((h) => coverRowTileHtml(h, {
-      bar: h.fraction, meta: `${shortChapter(h.chapter_text)} · ${Math.round(h.fraction * 100)}%`,
-    }).replace("mm-ctile", "mm-ctile reading")).join(""), "", "mm-row covers"));
+    parts.push(homeRowHtml("อ่านค้างไว้", reading.map((h) => coverRowTileHtml(h, historyAction(h).kind === "resume"
+      ? { bar: h.fraction, meta: `${shortChapter(h.chapter_text)}${h.fraction > 0 ? ` · ${Math.round(h.fraction * 100)}%` : ""}` }
+      : { meta: `ต่อ ${shortChapter(h.next_chapter_text) || "ตอนถัดไป"} ›` }
+    ).replace("mm-ctile", "mm-ctile reading")).join(""), "", "mm-row covers"));
   }
   box.innerHTML = parts.join("");
 }
@@ -5068,6 +5074,23 @@ function initReaderAutoHide() {
   const bottombar = el("#readerBottombar");
   let lastScrollTop = 0;
   let ticking = false;
+  // บันทึกตำแหน่งเฉพาะการเลื่อนที่มาจากผู้ใช้ (นิ้ว/ล้อ/คีย์/ลาก scrollbar + แรงเฉื่อยหลังปล่อยนิ้ว) —
+  // ความสูงหน้าเปลี่ยนเอง (รูปถูกล้าง/โหลดใหม่ตอนกลับเข้าแอป, หมุนจอ) ทำให้ scrollTop/max กระโดดไป 100%
+  // แล้วไปล้างตำแหน่งที่อ่านค้างทิ้ง เรื่องหลุดจากแถว "อ่านค้างไว้"
+  let inputDown = false;
+  let lastInputAt = 0;
+  const stamp = () => { lastInputAt = Date.now(); };
+  const press = () => { inputDown = true; stamp(); };
+  const lift = () => { inputDown = false; stamp(); };
+  body.addEventListener("touchstart", press, { passive: true });
+  body.addEventListener("mousedown", press, { passive: true });
+  window.addEventListener("touchend", lift, { passive: true });
+  window.addEventListener("touchcancel", lift, { passive: true });
+  window.addEventListener("mouseup", lift, { passive: true });
+  body.addEventListener("touchmove", stamp, { passive: true });
+  body.addEventListener("wheel", stamp, { passive: true });
+  document.addEventListener("keydown", stamp);
+  const userScrolling = () => inputDown || Date.now() - lastInputAt < 4000;
 
   body.addEventListener(
     "scroll",
@@ -5089,7 +5112,7 @@ function initReaderAutoHide() {
         }
         lastScrollTop = scrollTop;
         // ระหว่างกำลังเลื่อนกลับไปตำแหน่งเดิม (รูปยังโหลดไม่ครบ) ค่าที่อ่านได้ตอนนี้เพี้ยน ห้ามเอาไปทับ
-        if (restoreTarget === null && !pinnedToTop) {
+        if (restoreTarget === null && !pinnedToTop && userScrolling()) {
           const max = body.scrollHeight - body.clientHeight;
           currentScrollFraction = max > 0 ? Math.max(0, Math.min(1, scrollTop / max)) : 0;
           scheduleScrollSave();
