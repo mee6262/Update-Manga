@@ -1245,6 +1245,17 @@ def is_new(manga: dict, read_state: dict) -> bool:
     return not is_chapter_read(entry, _chapter_key(manga.get("latest_chapter")))
 
 
+def _log_scroll_loss(username: str, manga_id: str, reason: str, old: dict, new):
+    """ดักเหตุ "อ่านค้างไว้" หาย (เกิดไม่บ่อย ทำซ้ำไม่ได้) — ลง webapp.log ว่าตำแหน่งค้างกลางตอนถูกทับด้วยอะไร
+    จากเครื่องไหน ไว้ไล่ต้นเหตุตอนเกิดอีก"""
+    ua = (request.headers.get("User-Agent") or "")[:120]
+    print(f"[scroll-loss] {username} manga={manga_id} {reason} old={old} new={new} ua={ua}")
+
+
+def _in_progress(scroll) -> bool:
+    return isinstance(scroll, dict) and isinstance(scroll.get("fraction"), (int, float)) and 0 < scroll["fraction"] < 0.95
+
+
 def mark_chapter_read(read_state: dict, manga_id: str, key):
     if key is None:
         return
@@ -4389,8 +4400,11 @@ def get_chapter(manga_id):
         key = _chapter_key(known_text or data.get("chapter_text"), chapter_url)
         with storage.state_lock:
             read_state = storage.load_read_state(current_username(), fresh=True)
+            old = (read_state.get(manga_id) or {}).get("last_scroll")
             mark_chapter_read(read_state, manga_id, key)
             storage.save_read_state(current_username(), read_state)
+        if _in_progress(old) and old.get("key") != key:
+            _log_scroll_loss(current_username(), manga_id, "เปิดตอนอื่นทับตอนที่ค้าง", old, key)
         _record_activity(current_username(), "reads", manga_id)
 
     data["chapter_url"] = chapter_url
@@ -4519,10 +4533,14 @@ def save_scroll_position(manga_id):
     with storage.state_lock:
         read_state = storage.load_read_state(current_username(), fresh=True)
         entry = read_state.setdefault(manga_id, {"read_keys": [], "last_read_at": None})
+        old = entry.get("last_scroll")
         # ถ้าอ่านจบตอนแล้ว (>=95%) ไม่ต้องเก็บตำแหน่งไว้ เปิดใหม่ควรเริ่มจากบนสุดตามปกติ — เก็บเป็นคีย์
         # เอกลักษณ์ของตอน ไม่ใช่ URL ตรง ๆ ด้วยเหตุผลเดียวกับ read_keys (เรื่องหลายแหล่งที่มา URL เปลี่ยนได้)
         entry["last_scroll"] = None if fraction >= 0.95 else {"key": key, "fraction": fraction}
         storage.save_read_state(current_username(), read_state)
+    # ค้างไม่ถึงครึ่งตอน แล้วกระโดดไปจบตอนในครั้งเดียว = น่าสงสัย (ความสูงหน้าเปลี่ยน/รูปโหลดไม่ครบ)
+    if _in_progress(old) and old["fraction"] < 0.5 and fraction >= 0.95:
+        _log_scroll_loss(current_username(), manga_id, "กระโดดไปจบตอน", old, {"key": key, "fraction": fraction})
     return jsonify({"ok": True})
 
 
