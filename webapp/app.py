@@ -4297,14 +4297,17 @@ def _load_chapter_from_any(manga_id: str, candidates: list[str]) -> tuple[dict |
     network_order = healthy + down
     errors = []
 
-    # ทีละแหล่งตามลำดับ (แคช → เน็ต) — แหล่งแรกคือที่แอดมินเลือกไว้ (เช่นเลื่อนเว็บภาพคมขึ้นบนสุด) เดิมกวาด
-    # แคชทุกแหล่งก่อน ตอนที่เคยเปิดจากแหล่งเดิมจึงได้รูปแหล่งเดิมตลอด ทั้งที่แหล่งแรกตอนนี้ยังดีอยู่
+    # แคชก่อนเสมอ (ขึ้นทันที ไม่รอเว็บ) — แคชของแหล่งสำรองก็ใช้ได้ แล้ว get_chapter ไปดึงแหล่งแรกเก็บไว้เบื้องหลัง
+    # (เลื่อนเว็บภาพคมขึ้นบนสุดแล้ว เปิดรอบหน้าได้รูปเว็บนั้น) / ตอนที่เพิ่งลงก็เช็คเว็บเบื้องหลังเหมือนกัน
     for url in healthy:
         cached = storage.load_chapter_cache(manga_id, url)
         if cached and _has_real_images(cached) and _images_healthy(cached):
-            if _cache_needs_recheck(cached):
+            if _parser_outdated(cached, url):
                 return _recheck_cached_chapter(manga_id, url, cached), url, errors
+            if _cache_needs_recheck(cached):
+                _refresh_chapter_async(manga_id, url, cached)
             return cached, url, errors
+    for url in healthy:
         data, error = _fetch_chapter(manga_id, url, is_last=url == network_order[-1])
         if data and _images_healthy(data):
             return data, url, errors
@@ -4328,19 +4331,65 @@ def _load_chapter_from_any(manga_id: str, candidates: list[str]) -> tuple[dict |
 # → ตอนที่เก็บแคชไว้ไม่ถึง 3 วัน กลับไปเช็คเว็บใหม่ได้ทุก 30 นาที (แคชเก่าก่อนมีระบบนี้ = เช็คใหม่ 1 ครั้ง)
 CHAPTER_RECHECK_WINDOW = 3 * 86400
 CHAPTER_RECHECK_INTERVAL = 30 * 60
-# เพิ่มเลขนี้เมื่อ scraper.parse_chapter_page อ่านรูปได้มากขึ้น (เช่น 2 = รูปหั่นชิ้นของสดใสเมะ) — แคชที่อ่านด้วย
-# ตัวอ่านรุ่นเก่าจะถูกดึงใหม่ (เว้นระยะ 30 นาทีต่อตอน) ไม่ต้องรอให้ใครไปล้างแคชเอง
+# เพิ่มเลขนี้เมื่อ scraper.parse_chapter_page อ่านรูปได้มากขึ้น พร้อมโดเมนที่ได้ผล — แคชของโดเมนนั้นที่อ่านด้วย
+# ตัวอ่านรุ่นเก่าจะดึงใหม่ตอนเปิด (รอเว็บ 1 ครั้งต่อตอน เพราะต้องได้รูปครบตั้งแต่เปิดนั้น) เว็บอื่นไม่โดนอะไร
 CHAPTER_PARSER_VERSION = 2
+CHAPTER_PARSER_CHANGES = {2: ("xn--l3c0azab5a2gta.com",)}  # สดใสเมะ: รูปหั่นชิ้น
+
+
+def _parser_outdated(cached: dict, url: str) -> bool:
+    pv = cached.get("pv") or 1
+    host = urlparse(url).netloc
+    if not any(v > pv and any(host == h or host.endswith("." + h) for h in hosts)
+               for v, hosts in CHAPTER_PARSER_CHANGES.items()):
+        return False
+    if scraper.host_is_down(url) or scraper.host_is_stalled(url):
+        return False
+    return time.time() - (cached.get("checked_at") or 0) > CHAPTER_RECHECK_INTERVAL
 
 
 def _cache_needs_recheck(cached: dict) -> bool:
     if "checked_at" not in cached:
         return True
     now = time.time()
-    since = now - cached["checked_at"]
-    if cached.get("pv") != CHAPTER_PARSER_VERSION:
-        return since > CHAPTER_RECHECK_INTERVAL
-    return now - (cached.get("cached_at") or 0) < CHAPTER_RECHECK_WINDOW and since > CHAPTER_RECHECK_INTERVAL
+    return (now - (cached.get("cached_at") or 0) < CHAPTER_RECHECK_WINDOW
+            and now - cached["checked_at"] > CHAPTER_RECHECK_INTERVAL)
+
+
+# เช็ค/ดึงหน้าตอนเบื้องหลัง: ผู้ใช้ได้ของในแคชทันที (เดิมรอเว็บ — เว็บค้างทีรอ 8 วิ) ของใหม่ใช้ตอนเปิดรอบหน้า
+# กันซ้ำต่อ (เรื่อง, ลิงก์) และจำกัดพร้อมกัน 3 งาน (เต็ม = ข้าม เปิดรอบหน้าค่อยลองใหม่)
+_refreshing: set[tuple[str, str]] = set()
+_refreshing_lock = threading.Lock()
+_refresh_slots = threading.BoundedSemaphore(3)
+
+
+def _refresh_chapter_async(manga_id: str, url: str, cached: dict | None = None):
+    if scraper.host_is_down(url) or scraper.host_is_stalled(url):
+        return
+    key = (manga_id, url)
+    with _refreshing_lock:
+        if key in _refreshing:
+            return
+        _refreshing.add(key)
+
+    def run():
+        try:
+            if not _refresh_slots.acquire(blocking=False):
+                return
+            try:
+                if cached is None:
+                    _fetch_chapter(manga_id, url, is_last=False)
+                else:
+                    _recheck_cached_chapter(manga_id, url, cached)
+            finally:
+                _refresh_slots.release()
+        except Exception as e:
+            print(f"⚠️ เช็คหน้าตอนเบื้องหลังไม่สำเร็จ {url}: {e}")
+        finally:
+            with _refreshing_lock:
+                _refreshing.discard(key)
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 def _recheck_cached_chapter(manga_id: str, url: str, cached: dict) -> dict:
@@ -4421,6 +4470,8 @@ def get_chapter(manga_id):
     if served_from != chapter_url:
         # ได้มาจากแหล่งสำรอง เก็บแคชไว้ใต้ลิงก์ที่ขอด้วย รอบหน้าเปิดตอนนี้จะได้ขึ้นทันทีไม่ต้องลองเว็บที่ล่มซ้ำ
         storage.save_chapter_cache(manga_id, chapter_url, data)
+        # แล้วดึงแหล่งที่ขอ (แหล่งแรก) มาทับเบื้องหลังถ้ายังดีอยู่ — เช่นเพิ่งเลื่อนเว็บภาพคมขึ้นบนสุด
+        _refresh_chapter_async(manga_id, chapter_url)
 
     # เว็บกลุ่ม Madara ไม่มีลิงก์ตอนก่อนหน้า/ถัดไปในหน้าอ่าน หาเอาจากลำดับในรายชื่อตอนแทน
     # (ลิสต์เรียงใหม่->เก่า ตอนถัดไปจึงอยู่ก่อนหน้าในลิสต์) — ถ้าได้มาจากแหล่งสำรองก็ใช้ลำดับในลิสต์
