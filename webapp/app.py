@@ -4773,8 +4773,6 @@ def proxy_image():
                 stream=True,
             )
         resp.raise_for_status()
-        # ปกต้องมีไฟล์ครบก่อนถึงย่อได้ — อ่านทั้งก้อนแบบมีเพดานเวลา/ขนาด (เดิมโหลดไม่จำกัดเวลา)
-        body = scraper.read_limited(resp, IMAGE_STREAM_MAX_SECONDS, MAX_RESIZE_BYTES) if width else None
     except Exception as e:
         # จำไว้ว่าเซิร์ฟเวอร์รูปนี้ล่ม หน้าอ่านจะได้ขอรายการรูปใหม่จากแหล่งสำรองแทน (ดู get_chapter)
         if scraper.is_outage(e):
@@ -4787,6 +4785,18 @@ def proxy_image():
         # ภายใต้โดเมนเรา (แท็ก <img> ยังแสดงรูปได้ปกติ แม้ CDN บางเจ้าจะส่ง type มาไม่ตรง)
         content_type = "application/octet-stream"
 
+    # อ่านทั้งรูปให้ครบก่อนค่อยส่ง (เดิมส่งต่อทีละก้อน) — เว็บต้นทางค้างกลางรูป/ตัดการส่ง หน้าอ่านได้รูปครึ่งเดียว
+    # พร้อมสถานะ 200 (Safari วาดครึ่งบนแล้วขาว ไม่ลองใหม่) ตอนนี้ไม่ครบ = 502 หน้าเว็บโหลดรูปนั้นใหม่เอง
+    # (พลาดตอนกลางรูปไม่นับว่าเว็บล่ม — เว็บยังตอบอยู่ แค่รูปนี้รูปเดียว)
+    try:
+        body = scraper.read_limited(resp, IMAGE_STREAM_MAX_SECONDS, MAX_RESIZE_BYTES)
+    except Exception as e:
+        return f"fetch failed: {e}", 502
+    expected = resp.headers.get("Content-Length") or ""
+    if expected.isdigit() and not resp.headers.get("Content-Encoding") and len(body) < int(expected):
+        print(f"⚠️ รูปมาไม่ครบ {len(body)}/{expected} ไบต์: {src}")
+        return "incomplete image", 502
+
     if width:
         resized = _resize_cover(body, width)
         if resized:
@@ -4794,29 +4804,7 @@ def proxy_image():
             return Response(resized, content_type="image/webp", headers=IMAGE_HEADERS)
         return Response(body, content_type=content_type, headers=IMAGE_HEADERS)
 
-    headers = dict(IMAGE_HEADERS)
-    if resp.headers.get("Content-Length") and not resp.headers.get("Content-Encoding"):
-        headers["Content-Length"] = resp.headers["Content-Length"]
-
-    def stream():
-        # ส่งต่อทีละก้อน ไม่อ่านทั้งรูปเข้าหน่วยความจำก่อน — มีเพดานเวลารวมด้วย เพราะ timeout ของ
-        # requests นับแค่ช่วงรอระหว่างก้อน เว็บที่ส่งมาช้า ๆ ทีละนิดจะยึด thread ไว้ได้ไม่จำกัด
-        deadline = time.monotonic() + IMAGE_STREAM_MAX_SECONDS
-        try:
-            # read1: ส่งต่อเท่าที่มาถึง ไม่รอจนเต็มก้อน 64 KB (ไม่งั้นรูปที่หยดมาช้า ๆ ไม่เคยถึงจุดเช็คเวลา)
-            if hasattr(resp.raw, "read1"):
-                pieces = iter(lambda: resp.raw.read1(64 * 1024, decode_content=True), b"")
-            else:
-                pieces = resp.iter_content(chunk_size=8 * 1024)
-            for chunk in pieces:
-                yield chunk
-                if time.monotonic() > deadline:
-                    print(f"⚠️ ตัดการส่งรูปที่ช้าเกิน {IMAGE_STREAM_MAX_SECONDS} วิ: {src}")
-                    break
-        finally:
-            resp.close()
-
-    return Response(stream(), content_type=content_type, headers=headers, direct_passthrough=True)
+    return Response(body, content_type=content_type, headers=IMAGE_HEADERS)
 
 
 if __name__ == "__main__":

@@ -4650,11 +4650,24 @@ function appendChapterImages(images) {
     img.decoding = "async";
     // 2 รูปแรกคือสิ่งที่ผู้ใช้เห็นทันทีที่เปิดตอน ให้ browser จัดคิวโหลดก่อนรูปที่เหลือ
     if (i < 2) img.fetchPriority = "high";
-    img.addEventListener("error", retryChapterFromOtherSource, { once: true });
+    img.addEventListener("error", onChapterImageError);
     frag.appendChild(img);
   });
   // แทรกก่อนข้อความ "เลื่อนต่อเพื่อไปตอนถัดไป" (ถ้ามี) ให้อยู่ท้ายสุดเสมอ
   body.insertBefore(frag, el("#nextHint"));
+}
+
+// รูปโหลดไม่ขึ้น: ขอรูปนั้นซ้ำอีก 2 ครั้ง (เว็บต้นทางตัดการส่งกลางรูปเป็นบางรูป — เดิมรูปนั้นหายถาวร
+// จนกว่าจะเปิดตอนใหม่) พร้อมกับลองขอรายการรูปจากแหล่งอื่น 1 ครั้งต่อตอนเหมือนเดิม
+function onChapterImageError(e) {
+  const img = e.target;
+  retryChapterFromOtherSource();
+  const n = Number(img.dataset.retry || 0);
+  if (n >= 2) return;
+  img.dataset.retry = n + 1;
+  setTimeout(() => {
+    if (img.isConnected) img.src = `${proxied(img.dataset.src)}&retry=${n + 1}`;
+  }, 1500 * (n + 1));
 }
 
 // รูปของตอนนี้โหลดไม่ขึ้น = เซิร์ฟเวอร์รูปของแหล่งนี้อาจล่มอยู่ ขอรายการรูปใหม่ 1 ครั้ง ตอนนี้เซิร์ฟเวอร์เรา
