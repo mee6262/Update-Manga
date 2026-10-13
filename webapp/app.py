@@ -4278,6 +4278,7 @@ def _verify_chapter(manga_id: str | None, chapter: dict, min_interval: float) ->
             continue
         if _has_real_images(data):
             if manga_id:
+                data["pv"] = CHAPTER_PARSER_VERSION
                 storage.save_chapter_cache(manga_id, url, data)
                 storage.add_image_domains({urlparse(src).netloc for src in data["images"]})
             return "real", url
@@ -4327,14 +4328,19 @@ def _load_chapter_from_any(manga_id: str, candidates: list[str]) -> tuple[dict |
 # → ตอนที่เก็บแคชไว้ไม่ถึง 3 วัน กลับไปเช็คเว็บใหม่ได้ทุก 30 นาที (แคชเก่าก่อนมีระบบนี้ = เช็คใหม่ 1 ครั้ง)
 CHAPTER_RECHECK_WINDOW = 3 * 86400
 CHAPTER_RECHECK_INTERVAL = 30 * 60
+# เพิ่มเลขนี้เมื่อ scraper.parse_chapter_page อ่านรูปได้มากขึ้น (เช่น 2 = รูปหั่นชิ้นของสดใสเมะ) — แคชที่อ่านด้วย
+# ตัวอ่านรุ่นเก่าจะถูกดึงใหม่ (เว้นระยะ 30 นาทีต่อตอน) ไม่ต้องรอให้ใครไปล้างแคชเอง
+CHAPTER_PARSER_VERSION = 2
 
 
 def _cache_needs_recheck(cached: dict) -> bool:
     if "checked_at" not in cached:
         return True
     now = time.time()
-    return (now - (cached.get("cached_at") or 0) < CHAPTER_RECHECK_WINDOW
-            and now - cached["checked_at"] > CHAPTER_RECHECK_INTERVAL)
+    since = now - cached["checked_at"]
+    if cached.get("pv") != CHAPTER_PARSER_VERSION:
+        return since > CHAPTER_RECHECK_INTERVAL
+    return now - (cached.get("cached_at") or 0) < CHAPTER_RECHECK_WINDOW and since > CHAPTER_RECHECK_INTERVAL
 
 
 def _recheck_cached_chapter(manga_id: str, url: str, cached: dict) -> dict:
@@ -4347,6 +4353,8 @@ def _recheck_cached_chapter(manga_id: str, url: str, cached: dict) -> dict:
         result = data
     else:
         result = cached
+    if data:
+        result["pv"] = CHAPTER_PARSER_VERSION  # อ่านด้วยตัวอ่านรุ่นนี้แล้ว (ได้น้อยกว่าเดิมก็ไม่ต้องลองซ้ำเพราะรุ่น)
     result["cached_at"] = first_seen
     result["checked_at"] = time.time()
     storage.save_chapter_cache(manga_id, url, result)
@@ -4370,6 +4378,7 @@ def _fetch_chapter(manga_id: str, url: str, is_last: bool) -> tuple[dict | None,
         return None, (
             f"{urlparse(url).netloc}: ตอนนี้ยังไม่มีภาพมังงะ (เว็บต้นทางลงตอนไว้ก่อนแต่ยังไม่อัปโหลดรูปจริง)"
         )
+    data["pv"] = CHAPTER_PARSER_VERSION
     storage.save_chapter_cache(manga_id, url, data)
     storage.add_image_domains({urlparse(src).netloc for src in data["images"]})
     return data, None
@@ -4731,6 +4740,33 @@ IMAGE_HEADERS = {
 }
 
 
+_TILES_SPEC_RE = re.compile(r"(\d{1,5})x(\d{1,5});(\d{1,5})x(\d{1,5});((?:\d{1,5},\d{1,5},\d{1,5},\d{1,5}\|?){1,400})")
+
+
+def _unscramble_tiles(raw: bytes, spec: str) -> bytes | None:
+    """ต่อรูปที่เว็บหั่นสลับชิ้นกลับเป็นหน้าเดียว (เหมือนที่เบราว์เซอร์ทำด้วย background-position)
+    spec = "<กว้าง>x<สูง>;<ชิ้นกว้าง>x<ชิ้นสูง>;<ซ้าย>,<บน>,<srcX>,<srcY>|..." (ดู scraper._scrambled_image)"""
+    m = _TILES_SPEC_RE.fullmatch(spec)
+    if Image is None or not m:
+        return None
+    width, height, tile_w, tile_h = (int(m.group(i)) for i in range(1, 5))
+    if not (0 < width <= 5000 and 0 < height <= 30000 and 0 < tile_w <= width and 0 < tile_h <= height):
+        return None
+    try:
+        with Image.open(io.BytesIO(raw)) as scrambled:
+            scrambled = scrambled.convert("RGB")
+            page = Image.new("RGB", (width, height), "white")
+            for part in m.group(5).strip("|").split("|"):
+                left, top, sx, sy = (int(v) for v in part.split(","))
+                page.paste(scrambled.crop((sx, sy, sx + tile_w, sy + tile_h)), (left, top))
+            out = io.BytesIO()
+            page.save(out, format="JPEG", quality=90)
+            return out.getvalue()
+    except Exception as e:
+        print(f"⚠️ ต่อรูปหั่นชิ้นไม่สำเร็จ: {e}")
+        return None
+
+
 def _resize_cover(raw: bytes, width: int) -> bytes | None:
     """ย่อรูปปกให้พอดีกับขนาดที่หน้าเว็บใช้จริง แล้วแปลงเป็น WebP — ปกจากเว็บต้นทางมักเป็นไฟล์เต็ม
     ขนาด (ที่เจอคือ 1516x2020 หนัก 250 KB) ทั้งที่การ์ดบนหน้าเว็บกว้างแค่ ~160px คืน None ถ้าย่อ
@@ -4757,6 +4793,11 @@ def proxy_image():
     src = request.args.get("src")
     if not src:
         return "missing src", 400
+
+    # รูปหั่นชิ้น (scraper._scrambled_image): ดึงรูปต้นฉบับ แล้วต่อชิ้นกลับตามสเปกหลัง #mee-tiles=
+    tiles = None
+    if scraper.TILES_MARK in src:
+        src, tiles = src.split(scraper.TILES_MARK, 1)
 
     allowed = storage.get_allowed_domains()
     parsed_src = urlparse(src)
@@ -4829,6 +4870,12 @@ def proxy_image():
     if expected.isdigit() and not resp.headers.get("Content-Encoding") and len(body) < int(expected):
         print(f"⚠️ รูปมาไม่ครบ {len(body)}/{expected} ไบต์: {src}")
         return "incomplete image", 502
+
+    if tiles is not None:
+        body = _unscramble_tiles(body, tiles)
+        if body is None:
+            return "bad tiles", 502
+        content_type = "image/jpeg"
 
     if width:
         resized = _resize_cover(body, width)

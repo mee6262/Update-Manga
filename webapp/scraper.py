@@ -557,6 +557,55 @@ def _real_img_src(img) -> str | None:
     return None
 
 
+# ---------- รูปหั่นสลับชิ้น (สดใสเมะ) ----------
+# บางหน้าไม่ได้เป็น <img> แต่เป็น <div class="displayImage" ori-width ori-height> + สคริปต์ packer (eval(function(p,a,c,k,e,d)))
+# ที่ใส่รูปซึ่งหั่นเป็นชิ้นสลับตำแหน่งไว้ แล้วต่อกลับด้วย background-position ในเบราว์เซอร์ — เดิมเราข้ามไปทั้งหน้า
+# (ตอน 160: เห็น 46 จาก 60 หน้า) ตอนนี้ถอดสคริปต์เอาลิงก์รูป + ตำแหน่งชิ้น แล้วให้พร็อกซีรูปต่อชิ้นกลับ
+# รูปแบบลิงก์: <url รูปต้นฉบับ>#mee-tiles=<กว้าง>x<สูง>;<ชิ้นกว้าง>x<ชิ้นสูง>;<ซ้าย>,<บน>,<srcX>,<srcY>|...
+TILES_MARK = "#mee-tiles="
+_PACKER_RE = re.compile(r"\}\('(.*)',(\d+),(\d+),'(.*?)'\.split\('\|'\)", re.S)
+
+
+def _unpack_packer(script: str) -> str | None:
+    """ถอด Dean Edwards packer (eval(function(p,a,c,k,e,d){...}('...',a,c,'w1|w2'.split('|'))) แบบไม่รัน JS"""
+    m = _PACKER_RE.search(script)
+    if not m:
+        return None
+    payload, radix, count, words = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4).split("|")
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+    def encode(n: int) -> str:
+        out = ""
+        while True:
+            r = n % radix
+            out = (chr(r + 29) if r > 35 else digits[r]) + out
+            n //= radix
+            if n == 0:
+                return out
+
+    table = {encode(i): (words[i] if i < len(words) and words[i] else encode(i)) for i in range(count)}
+    return re.sub(r"\b\w+\b", lambda w: table.get(w.group(0), w.group(0)), payload)
+
+
+def _scrambled_image(div) -> str | None:
+    script = div.find_next("script")
+    code = _unpack_packer(script.string or script.get_text()) if script else None
+    if not code:
+        return None
+    src = re.search(r"url\((https?://[^)\s'\"]+)\)", code) or re.search(r"src=\\?'(https?://[^'\\]+)", code)
+    size = re.search(r"width:(\d+)px;\s*height:(\d+)px", code)
+    tiles = re.findall(r'\["(\d+)(?:\.\d+)?","(\d+)(?:\.\d+)?","(\d+)(?:\.\d+)?","(\d+)(?:\.\d+)?"\]', code)
+    try:
+        width, height = int(div.get("ori-width")), int(div.get("ori-height"))
+    except (TypeError, ValueError):
+        return None
+    if not (src and size and tiles):
+        return None
+    # ใน sovleImage: [ซ้าย, บน, srcX, srcY] (สคริปต์ใช้ top = ตัวที่ 2, left = ตัวที่ 1)
+    parts = "|".join(",".join(t) for t in tiles)
+    return f"{src.group(1)}{TILES_MARK}{width}x{height};{size.group(1)}x{size.group(2)};{parts}"
+
+
 _IMAGE_MAP_RE = re.compile(r"\bIMAGE_MAP\s*=\s*\[(.*?)\]", re.S)
 
 
@@ -588,8 +637,9 @@ def parse_chapter_page(html: str, url: str | None = None) -> dict:
             or soup.select_one(".reader-area-main")  # oremanga.net (แบนเนอร์โฆษณาอยู่นอกกล่องนี้)
         )
         if reading:
-            for img in reading.select("img.wp-manga-chapter-img, img"):
-                src = _real_img_src(img)
+            # รูป <img> กับรูปหั่นชิ้น (div.displayImage) ปนกันตามลำดับหน้า — ไล่ตามลำดับในเอกสาร
+            for node in reading.select("img.wp-manga-chapter-img, img, div.displayImage"):
+                src = _scrambled_image(node) if node.name == "div" else _real_img_src(node)
                 if src:
                     result["images"].append(src)
 
