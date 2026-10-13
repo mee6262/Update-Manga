@@ -461,7 +461,8 @@ main { padding: 20px; max-width: 1200px; margin: 0 auto; }
 
 .source-row { display: flex; gap: 8px; align-items: center; }
 .source-row input { flex: 1; min-width: 0; }
-.source-row .remove-source-btn { flex: none; }
+.source-row .remove-source-btn, .source-row .move-source-btn { flex: none; }
+.source-row:first-child .move-source-btn { visibility: hidden; } /* บนสุดอยู่แล้ว */
 
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
 

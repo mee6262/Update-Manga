@@ -4271,9 +4271,13 @@ function addSourceRow(value = "") {
   row.className = "source-row";
   row.innerHTML = `
     <input type="url" class="source-url" placeholder="URL หน้าเรื่อง เช่น https://www.go-manga.com/overgeared/" required />
+    <button type="button" class="icon-btn move-source-btn" title="เลื่อนขึ้น (แหล่งบนสุดใช้เปิดอ่านก่อน)" aria-label="เลื่อนขึ้น">↑</button>
     <button type="button" class="icon-btn remove-source-btn" title="ลบแหล่งนี้">✕</button>
   `;
   row.querySelector(".source-url").value = value;
+  row.querySelector(".move-source-btn").addEventListener("click", () => {
+    if (row.previousElementSibling) list.insertBefore(row, row.previousElementSibling);
+  });
   row.querySelector(".remove-source-btn").addEventListener("click", () => {
     // เหลือช่องเดียวห้ามลบ ต้องมีแหล่งที่มาอย่างน้อย 1 เว็บเสมอ
     if (list.children.length > 1) row.remove();

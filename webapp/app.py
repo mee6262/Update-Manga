@@ -4296,11 +4296,12 @@ def _load_chapter_from_any(manga_id: str, candidates: list[str]) -> tuple[dict |
     network_order = healthy + down
     errors = []
 
+    # ทีละแหล่งตามลำดับ (แคช → เน็ต) — แหล่งแรกคือที่แอดมินเลือกไว้ (เช่นเลื่อนเว็บภาพคมขึ้นบนสุด) เดิมกวาด
+    # แคชทุกแหล่งก่อน ตอนที่เคยเปิดจากแหล่งเดิมจึงได้รูปแหล่งเดิมตลอด ทั้งที่แหล่งแรกตอนนี้ยังดีอยู่
     for url in healthy:
         cached = storage.load_chapter_cache(manga_id, url)
         if cached and _has_real_images(cached) and _images_healthy(cached):
             return cached, url, errors
-    for url in healthy:
         data, error = _fetch_chapter(manga_id, url, is_last=url == network_order[-1])
         if data and _images_healthy(data):
             return data, url, errors
