@@ -4301,6 +4301,8 @@ def _load_chapter_from_any(manga_id: str, candidates: list[str]) -> tuple[dict |
     for url in healthy:
         cached = storage.load_chapter_cache(manga_id, url)
         if cached and _has_real_images(cached) and _images_healthy(cached):
+            if _cache_needs_recheck(cached):
+                return _recheck_cached_chapter(manga_id, url, cached), url, errors
             return cached, url, errors
         data, error = _fetch_chapter(manga_id, url, is_last=url == network_order[-1])
         if data and _images_healthy(data):
@@ -4318,6 +4320,37 @@ def _load_chapter_from_any(manga_id: str, candidates: list[str]) -> tuple[dict |
             return data, url, errors
         errors.append(error)
     return None, None, errors
+
+
+# ตอนที่เพิ่งลง เว็บต้นทางบางเว็บ (เช่น สดใสเมะ) อัปโหลดรูปทยอยตามมา — ตอนเราเจอตอนใหม่ (ตรวจตอนหลอก) หรือมีคนเปิด
+# อ่านเร็ว ได้รูปไม่ครบมาเก็บแคชไว้ แล้วเดิมแคชไม่เคยหมดอายุ ตอนนั้นจึงขาดรูปถาวร ทั้งที่บนเว็บครบแล้ว
+# → ตอนที่เก็บแคชไว้ไม่ถึง 3 วัน กลับไปเช็คเว็บใหม่ได้ทุก 30 นาที (แคชเก่าก่อนมีระบบนี้ = เช็คใหม่ 1 ครั้ง)
+CHAPTER_RECHECK_WINDOW = 3 * 86400
+CHAPTER_RECHECK_INTERVAL = 30 * 60
+
+
+def _cache_needs_recheck(cached: dict) -> bool:
+    if "checked_at" not in cached:
+        return True
+    now = time.time()
+    return (now - (cached.get("cached_at") or 0) < CHAPTER_RECHECK_WINDOW
+            and now - cached["checked_at"] > CHAPTER_RECHECK_INTERVAL)
+
+
+def _recheck_cached_chapter(manga_id: str, url: str, cached: dict) -> dict:
+    """ดึงหน้าตอนใหม่ ได้รูปไม่น้อยกว่าเดิม = ใช้ของใหม่, ดึงไม่ได้/ได้น้อยกว่า = ใช้แคชเดิม (แค่จดว่าเช็คแล้ว)"""
+    first_seen = cached.get("cached_at") or 0  # แคชเก่าไม่มีค่านี้ = นับว่าเก่าแล้ว เช็คครั้งเดียวพอ
+    data, _ = _fetch_chapter(manga_id, url, is_last=False)
+    if data and _images_healthy(data) and len(data["images"]) >= len(cached.get("images") or []):
+        if len(data["images"]) != len(cached.get("images") or []):
+            print(f"🔄 รูปของตอนเปลี่ยน {len(cached.get('images') or [])} → {len(data['images'])}: {url}")
+        result = data
+    else:
+        result = cached
+    result["cached_at"] = first_seen
+    result["checked_at"] = time.time()
+    storage.save_chapter_cache(manga_id, url, result)
+    return result
 
 
 def _images_healthy(data: dict) -> bool:

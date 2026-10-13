@@ -411,6 +411,11 @@ def load_chapter_cache(manga_id: str, chapter_url: str) -> dict | None:
 
 
 def save_chapter_cache(manga_id: str, chapter_url: str, data: dict):
+    # cached_at = ครั้งแรกที่เก็บตอนนี้ (คงค่าเดิมถ้ามีมาแล้ว), checked_at = ดึงจากเว็บล่าสุด — ใช้ตัดสินว่า
+    # ตอนที่เพิ่งลงยังควรกลับไปเช็คว่าเว็บอัปโหลดรูปเพิ่มไหม (ดู app._cache_needs_recheck)
+    now = time.time()
+    data.setdefault("cached_at", now)
+    data.setdefault("checked_at", now)
     _save_json(chapter_cache_path(manga_id, chapter_url), data, compact=True)
 
 
