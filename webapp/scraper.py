@@ -26,6 +26,7 @@ HEADERS = {
 }
 
 COVER_FALLBACK_SELECTORS = [
+    ".series-thumb img",  # oremanga.net (ไม่มี og:image)
     ".summary_image img",
     ".tab-summary img",
     ".thumb img",
@@ -297,9 +298,14 @@ def parse_release_date(text: str | None) -> str | None:
     if not text:
         return None
     match = re.match(r"([ก-๙A-Za-z.]+)\s+(\d{1,2}),?\s+(\d{4})", text.strip())
-    if not match:
-        return None
-    month_name, day, year = match.groups()
+    if match:
+        month_name, day, year = match.groups()
+    else:
+        # วันขึ้นก่อน แบบไทยทั่วไป "11 ตุลาคม 2026" (oremanga.net)
+        match = re.match(r"(\d{1,2})\s+([ก-๙A-Za-z.]+)\s+(\d{4})", text.strip())
+        if not match:
+            return None
+        day, month_name, year = match.groups()
     # รองรับชื่อเดือนภาษาอังกฤษแบบย่อด้วย (เช่น niceoppai.net ใช้ "Sep 09, 2026")
     en = month_name.lower().rstrip(".")
     month = _TH_MONTHS.get(month_name) or _EN_MONTHS.get(en) or next(
@@ -454,6 +460,22 @@ def _parse_madara_latest(soup: BeautifulSoup) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _parse_series_chapterlist(soup: BeautifulSoup) -> list[dict]:
+    """รายชื่อตอนแบบ oremanga.net: ul.series-chapterlist li a > span "ตอนที่ 1195" + span.date ซ้อนอยู่ข้างใน"""
+    chapters = []
+    for a in soup.select("ul.series-chapterlist li a[href]"):
+        date_el = a.select_one(".date")
+        date = date_el.get_text(strip=True) if date_el else None
+        if date_el:
+            date_el.extract()
+        text = a.get_text(strip=True) or a.get("title") or ""
+        chapters.append({"text": text, "url": a["href"], "date": date})
+    nums = [n for n in (chapter_number(c["text"]) for c in chapters) if n is not None]
+    if len(nums) >= 2 and nums[0] < nums[-1]:
+        chapters.reverse()
+    return chapters
+
+
 def parse_index_page(html: str, url: str | None = None, min_interval: float = 0.0) -> dict:
     """ดึงตอนล่าสุด + ลิงก์ + รูปปก + รายชื่อตอนทั้งหมด จากหน้ารายละเอียดเรื่อง
     (url ใช้เฉพาะตอนเจอเว็บกลุ่ม Madara ที่ต้องยิงขอรายชื่อตอนเพิ่มอีก request)"""
@@ -495,6 +517,10 @@ def parse_index_page(html: str, url: str | None = None, min_interval: float = 0.
     # bully-manga.com (a.sh-ep ลิงก์ relative ฝังครบทุกตอนในหน้าเรื่อง)
     if not result["chapters"]:
         result["chapters"] = _parse_sh_ep_rows(soup, url)
+
+    # oremanga.net (ul.series-chapterlist ครบทุกตอนในหน้าเรื่อง)
+    if not result["chapters"]:
+        result["chapters"] = _parse_series_chapterlist(soup)
 
     # ยังไม่เจออีก ลองแบบ Madara แทน (ต้องยิงขอรายชื่อตอนเพิ่มอีก request เพราะหน้าเรื่องไม่ได้ฝังลิสต์มาให้)
     if not result["chapters"] and url:
@@ -559,6 +585,7 @@ def parse_chapter_page(html: str, url: str | None = None) -> dict:
             soup.select_one(".reading-content")
             or soup.select_one("#readerarea")
             or soup.select_one("#image-container")
+            or soup.select_one(".reader-area-main")  # oremanga.net (แบนเนอร์โฆษณาอยู่นอกกล่องนี้)
         )
         if reading:
             for img in reading.select("img.wp-manga-chapter-img, img"):
