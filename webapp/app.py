@@ -1097,6 +1097,9 @@ def _num_or_neg(c: dict) -> float:
     return n if n is not None else -1
 
 
+_UPDATE_SUFFIX_RE = re.compile(r"\s*[-–]\s*อัพเดท\s*$")
+
+
 def refresh_from_sources(sources: list[dict], min_interval: float = 0.0, manga_id: str | None = None) -> dict:
     """ดึงข้อมูลจากทุกแหล่งที่มาของเรื่องเดียวกันแล้วรวมเป็นชุดเดียว กันเรื่องที่แหล่งใดแหล่งหนึ่ง
     เงียบหายไม่อัพเดต — ตอนล่าสุดเอาจากแหล่งที่มีเลขตอนสูงสุด ส่วนรายชื่อตอนรวมจากทุกแหล่งเข้า
@@ -1128,6 +1131,8 @@ def refresh_from_sources(sources: list[dict], min_interval: float = 0.0, manga_i
     by_num = {}
     for parsed in per_source:
         for c in parsed["chapters"]:
+            # manga-lc ต่อท้าย " - อัพเดท" ที่ตอนล่าสุด (หายเองทีหลัง) — ตัดออก ไม่ให้ไปโผล่ในแจ้งเตือน/หน้าเว็บ
+            c["text"] = _UPDATE_SUFFIX_RE.sub("", c["text"]) or c["text"]
             key = _chapter_key(c["text"])
             primary = by_num.get(key)
             if primary is None:
@@ -4235,7 +4240,17 @@ def _drop_placeholder_chapters(manga_id: str | None, chapters: list[dict], min_i
     dropped = []
     known = storage.get_manga(manga_id) if manga_id else None
     known_latest = _chapter_key(known.get("latest_chapter")) if known else None
+    known_urls = {}
+    for c in (known.get("chapters") or []) if known else []:
+        known_urls.setdefault(_chapter_key(c["text"]), []).extend([c["url"], *(c.get("alts") or [])])
     for chapter in list(chapters[:MAX_PLACEHOLDER_CHECKS]):
+        # รอบที่แหล่งที่มีตอนจริงดึงไม่ได้ (ล่ม) ตอนนี้จะเหลือแต่ลิงก์ของแหล่งที่เป็นหน้าหลอก → เดิมถูกตัดทิ้ง ตอนล่าสุด
+        # ถอยลง แล้วรอบถัดไปแหล่งนั้นกลับมา = "ตอนใหม่" แจ้งเตือนซ้ำ (Overgeared 341: manga-lc หลอก, dark-manga จริง)
+        # → เอาลิงก์เดิมของตอนเดียวกันที่เคยบันทึกไว้มาตรวจด้วย (แคชของแหล่งที่ล่มยังยืนยันได้ว่าเป็นตอนจริง)
+        extra = [u for u in known_urls.get(_chapter_key(chapter["text"]), [])
+                 if u != chapter["url"] and u not in (chapter.get("alts") or [])]
+        if extra:
+            chapter["alts"] = [*(chapter.get("alts") or []), *dict.fromkeys(extra)]
         verdict, real_url = _verify_chapter(manga_id, chapter, min_interval)
         is_unconfirmed_new = (
             verdict == "unknown"
@@ -4267,14 +4282,16 @@ def _verify_chapter(manga_id: str | None, chapter: dict, min_interval: float) ->
             if cached and _has_real_images(cached):
                 return "real", url
 
-    saw_placeholder = False
+    saw_placeholder = unverified = False
     for url in urls:
         if scraper.host_is_down(url):
+            unverified = True
             continue
         try:
             html = scraper.fetch(url, referer=_referer_for(url), min_interval=min_interval, timeout=FAST_FAIL_TIMEOUT)
             data = scraper.parse_chapter_page(html, url)
         except Exception:
+            unverified = True
             continue
         if _has_real_images(data):
             if manga_id:
@@ -4283,7 +4300,8 @@ def _verify_chapter(manga_id: str | None, chapter: dict, min_interval: float) ->
                 storage.add_image_domains({urlparse(src).netloc for src in data["images"]})
             return "real", url
         saw_placeholder = True
-    return ("placeholder" if saw_placeholder else "unknown"), None
+    # เจอหน้าหลอกแต่มีแหล่งที่ตรวจไม่ได้ (ล่ม) = ยังสรุปไม่ได้ — ตอนที่รู้จักอยู่แล้วคงไว้ ตอนใหม่รอยืนยัน
+    return ("placeholder" if saw_placeholder and not unverified else "unknown"), None
 
 
 def _load_chapter_from_any(manga_id: str, candidates: list[str]) -> tuple[dict | None, str | None, list[str]]:
