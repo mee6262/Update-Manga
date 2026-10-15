@@ -789,7 +789,9 @@ function playlistGridTileHtml(p) {
   const eps = playlistEpisodes(p.id);
   const started = eps.some((v) => episodeProgress(v).watched_at);
   const watched = eps.filter((v) => v.watched_at && !(Number(v.position_seconds) > 0)).length;
-  const langs = seriesLangs(p).map((l) => `<span>${LANG_LABEL[l].replace("ไทย", "")}</span>`).join("");
+  const seasons = [...new Set(allPlaylistEpisodes(p.id).map((v) => v.season || 1))].sort((a, b) => a - b);
+  const langs = (seasons.length > 1 ? `<span class="mm-seasons">ซีซั่น ${seasons[0]}–${seasons[seasons.length - 1]}</span>` : "")
+    + seriesLangs(p).map((l) => `<span>${LANG_LABEL[l].replace("ไทย", "")}</span>`).join("");
   const status = started ? `ดูต่อ ${episodeLabel(playlistResume(eps))}` : "ยังไม่เคยดู";
   return `<button class="mm-tile" data-playlist-id="${escapeHtml(p.id)}"><span class="mm-thumb">${thumbHtml(p.thumbnail_url)}${ytBadge(p)}${playlistBadge(p, eps)}<span class="mm-count">${eps.length} ตอน</span>${saveDotHtml(p.saved_at, `data-save-playlist="${escapeHtml(p.id)}"`)}</span>
     <span class="mm-name">${escapeHtml(p.name)}</span>${genreTagsHtml(p)}${langs ? `<span class="mm-langs">${langs}</span>` : ""}
