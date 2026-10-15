@@ -25,7 +25,7 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 TIMEOUT = (5, 15)
 MAX_PAGE_BYTES = 2 * 1024 * 1024
 _SERIES = r"\d{1,9}"
-_TOKEN = r"[A-Za-z0-9_-]{8,64}"
+_TOKEN = r"[A-Za-z0-9_-]{8,256}"
 
 
 def parse_url(url: str) -> tuple[str, str, str | None] | None:
