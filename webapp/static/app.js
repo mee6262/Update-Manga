@@ -480,6 +480,7 @@ async function loadVideos() {
     state.videoCategories = data.categories || [];
     state.videoGenres = data.genres || [];
     state.videoPlaylists = data.playlists || [];
+    renderPrefs(); // สวิตช์ "แสดงหมวดพิเศษ" ขึ้นเมื่อมีหมวดคลิปพิเศษด้วย
     renderVideos();
   } catch (e) {
     el("#videoHome").hidden = false;
@@ -685,7 +686,7 @@ function renderVideoHome() {
   // แถวละหมวด: เรื่องก่อน ตามด้วยคลิปเดี่ยวของหมวด (หมวดที่มีแต่คลิป เช่น ภาพยนตร์ ก็ได้แถวของตัวเอง)
   const clips = state.videos.filter((v) => !v.playlist_id);
   const clipTile = (v) => videoTileHtml(v, { name: v.title, meta: clipTileMeta(v), badge: !v.watched_at && isRecent(v.created_at) ? '<span class="new-badge">NEW</span>' : "" });
-  for (const cat of (state.videoCategories || []).filter((c) => !c.hidden)) {
+  for (const cat of (state.videoCategories || []).filter((c) => !c.hidden && (!c.special || showSpecial()))) {
     const inCat = playlists.filter((p) => p.category_id === cat.id);
     const catClips = clips.filter((v) => v.category_id === cat.id);
     const total = inCat.length + catClips.length;
@@ -2700,7 +2701,7 @@ function savePref(key, value) {
 }
 
 function renderPrefs() {
-  el("#prefCard").hidden = !state.categories.some((c) => c.special);
+  el("#prefCard").hidden = ![...state.categories, ...(state.videoCategories || [])].some((c) => c.special);
   el("#showSpecialToggle").checked = showSpecial();
   el("#setChapterSort").value = chapterSortDesc() ? "desc" : "asc";
   el("#setAutoNext").checked = autoNextOn();
@@ -2725,11 +2726,12 @@ function initPrefs() {
     renderSearch();
     renderHistory();
     renderGrid();
+    // คลิปในหมวดพิเศษกรองที่เซิร์ฟเวอร์ → บันทึกค่าก่อนแล้วค่อยโหลดคลังวิดีโอใหม่
     fetch("/api/prefs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ show_special: e.target.checked }),
-    });
+    }).then(() => { if (state.videoCategories) loadVideos(); });
   });
 }
 
@@ -5787,7 +5789,7 @@ const RECENT_CATS = 3;
 
 function videoCatOptions() {
   const clips = state.videos.filter((v) => !v.playlist_id).length;
-  const cats = (state.videoCategories || []).filter((c) => !c.hidden || state.currentUser.is_admin);
+  const cats = (state.videoCategories || []).filter((c) => (!c.hidden || state.currentUser.is_admin) && (!c.special || showSpecial()));
   return [{ id: "", name: "ทั้งหมด" }, ...cats, ...(clips ? [{ id: CLIPS_FILTER, name: "คลิปเดี่ยว" }] : [])];
 }
 
@@ -5839,7 +5841,7 @@ function renderVideoCatSheet() {
   els("#videoCatSheet [data-cat-view]").forEach((b) => b.classList.toggle("active", b.dataset.catView === view));
   el("#videoCatSheetBody").innerHTML = view === "grid"
     ? `<div class="vcat-grid">${videoCatOptions().map((c) => `<button class="${c.id === cur ? "active" : ""}" data-video-category="${escapeHtml(c.id)}"><span>${escapeHtml(c.name)}</span><b>${videoCatCount(c.id)}</b></button>`).join("")}</div>`
-    : `<div class="vcat-list">${videoCatOptions().map((c) => `<button class="${c.id === cur ? "active" : ""}" data-video-category="${escapeHtml(c.id)}"><span class="vcat-thumb">${thumbHtml(videoCatCover(c.id))}</span><span class="vcat-name">${escapeHtml(c.name)}${c.hidden ? '<small class="vc-badge">ซ่อน</small>' : ""}</span><b>${videoCatCount(c.id)}</b></button>`).join("")}</div>`;
+    : `<div class="vcat-list">${videoCatOptions().map((c) => `<button class="${c.id === cur ? "active" : ""}" data-video-category="${escapeHtml(c.id)}"><span class="vcat-thumb">${thumbHtml(videoCatCover(c.id))}</span><span class="vcat-name">${escapeHtml(c.name)}${c.hidden ? '<small class="vc-badge">ซ่อน</small>' : ""}${c.special ? '<small class="vc-badge">18+</small>' : ""}</span><b>${videoCatCount(c.id)}</b></button>`).join("")}</div>`;
 }
 
 function setVideoCatSheet(open) {
@@ -6038,7 +6040,7 @@ function renderVideoCatAdmin() {
   const cats = state.videoCategories || [];
   el("#videoCategoryList").innerHTML = cats.length ? cats.map((c) =>
     `<li class="vc-row" data-vc-id="${escapeHtml(c.id)}"><span class="vc-drag" aria-label="ลากเพื่อเรียง">≡</span><span class="vc-thumb">${thumbHtml(videoCatCover(c.id))}</span>
-      <div class="vc-grow"><div class="vc-name">${escapeHtml(c.name)}${c.hidden ? '<small class="vc-badge">ซ่อน</small>' : ""}</div><div class="vc-meta">${videoCatCount(c.id)}</div></div>
+      <div class="vc-grow"><div class="vc-name">${escapeHtml(c.name)}${c.hidden ? '<small class="vc-badge">ซ่อน</small>' : ""}${c.special ? '<small class="vc-badge">18+</small>' : ""}</div><div class="vc-meta">${videoCatCount(c.id)}</div></div>
       <button class="vc-more" data-vc-menu="${escapeHtml(c.id)}" aria-label="ตัวเลือก">⋯</button></li>`).join("")
     : '<li class="hint">ยังไม่มีหมวด</li>';
 
@@ -6181,7 +6183,7 @@ function initVideoCatAdmin() {
     const c = (state.videoCategories || []).find((x) => x.id === btn.dataset.vcMenu);
     if (!c) return;
     openVcMenu(btn, [["เปลี่ยนชื่อ", `cat-rename:${c.id}`], ["ดูคลิป/เรื่องในหมวดนี้", `cat-view:${c.id}`],
-      [c.hidden ? "แสดงให้ผู้ใช้เห็น" : "ซ่อนจากผู้ใช้", `cat-hide:${c.id}`], ["ย้ายทั้งหมดไปหมวดอื่น…", `cat-move:${c.id}`], ["ลบหมวด", `cat-del:${c.id}`, true]]);
+      [c.hidden ? "แสดงให้ผู้ใช้เห็น" : "ซ่อนจากผู้ใช้", `cat-hide:${c.id}`], [c.special ? "เลิกเป็นหมวดพิเศษ (18+)" : "ตั้งเป็นหมวดพิเศษ (18+)", `cat-special:${c.id}`], ["ย้ายทั้งหมดไปหมวดอื่น…", `cat-move:${c.id}`], ["ลบหมวด", `cat-del:${c.id}`, true]]);
   });
   el("#videoGenreList").addEventListener("click", async (event) => {
     const open = event.target.closest("[data-genre-open]")?.dataset.genreOpen;
@@ -6242,6 +6244,8 @@ function initVideoCatAdmin() {
         return pickVideoCategory(id);
       } else if (verb === "cat-hide") {
         await sendJSON("PATCH", `/api/video-categories/${encodeURIComponent(id)}`, { hidden: !cat?.hidden });
+      } else if (verb === "cat-special") {
+        await sendJSON("PATCH", `/api/video-categories/${encodeURIComponent(id)}`, { special: !cat?.special });
       } else if (verb === "cat-moveto") {
         const [from, to] = id.split(">");
         const src = (state.videoCategories || []).find((c) => c.id === from);

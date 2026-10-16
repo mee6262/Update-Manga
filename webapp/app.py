@@ -1334,6 +1334,16 @@ def hides_manga(username: str | None, manga: dict | None) -> bool:
     return is_special_manga(manga) and not shows_special(username)
 
 
+def _hidden_video_scope(username: str | None) -> tuple[set[str], set[str]]:
+    """(หมวดคลิปพิเศษ, เรื่องในหมวดนั้น) ที่ผู้ใช้คนนี้ต้องไม่เห็น — ใช้สวิตช์ "แสดงหมวดพิเศษ" ตัวเดียวกับมังงะ"""
+    if shows_special(username):
+        return set(), set()
+    cats = {c["id"] for c in storage.load_video_categories() if c.get("special")}
+    if not cats:
+        return set(), set()
+    return cats, {p["id"] for p in storage.load_video_playlists() if p.get("category_id") in cats}
+
+
 def _target_manga_id(target: str | None) -> str | None:
     """id เรื่องจาก target ของแจ้งเตือน: "manga:<id>" / "chapter:<id>:<ตอน>" """
     parts = str(target or "").split(":")
@@ -1820,6 +1830,10 @@ def list_videos():
     # เดิมแบ่งหน้าด้วย cursor ฝั่งเซิร์ฟเวอร์ แล้วปุ่ม "โหลดเพิ่ม" ที่ไม่มีหน้าถัดไปดึงหน้าแรกมาต่อซ้ำ
     videos = sorted(storage.load_videos(), key=lambda item: item.get("created_at", ""), reverse=True)
     username = current_username() or ("local" if not is_guest() else None)
+    hidden_cats, hidden_playlists = _hidden_video_scope(username)
+    if hidden_cats:
+        videos = [v for v in videos if v.get("playlist_id") not in hidden_playlists
+                  and (v.get("playlist_id") or v.get("category_id") not in hidden_cats)]
     progress = storage.load_video_progress(username) if username else {}  # ผู้เยี่ยมชม: หน้าเว็บใช้ของในเครื่อง
     saved = storage.load_video_saved(username) if username else {}
     if any(_needs_duration_backfill(v) for v in videos):
@@ -2277,6 +2291,9 @@ def list_notifications():
     if not shows_special(username) and _special_category_ids():
         manga_by_id = {m["id"]: m for m in storage.load_manga()}
         items = [n for n in items if not is_special_manga(manga_by_id.get(_target_manga_id(n.get("target")) or ""))]
+    _, hidden_playlists = _hidden_video_scope(username)
+    if hidden_playlists:
+        items = [n for n in items if n.get("target") not in {f"playlist:{p}" for p in hidden_playlists}]
     return jsonify({"items": items[:50], "unread": sum(1 for n in items if not n.get("read"))})
 
 
@@ -2301,14 +2318,15 @@ def read_notifications():
 @app.route("/api/video-categories", methods=["POST"])
 @require_admin
 def add_video_category():
-    name = " ".join(str((request.get_json(force=True, silent=True) or {}).get("name") or "").split())
+    body = request.get_json(force=True, silent=True) or {}
+    name = " ".join(str(body.get("name") or "").split())
     if not name or len(name) > 40:
         return jsonify({"error": "ชื่อหมวดต้องมี 1-40 ตัวอักษร"}), 400
     with storage.state_lock:
         categories = storage.load_video_categories(fresh=True)
         if any(c["name"] == name for c in categories):
             return jsonify({"error": "มีหมวดนี้อยู่แล้ว"}), 400
-        category = {"id": secrets.token_hex(4), "name": name}
+        category = {"id": secrets.token_hex(4), "name": name, "special": bool(body.get("special"))}
         categories.append(category)
         storage.save_video_categories(categories)
     return jsonify(category), 201
@@ -2402,7 +2420,7 @@ def update_video(video_id):
 @app.route("/api/video-categories/<category_id>", methods=["PATCH"])
 @require_admin
 def update_video_category(category_id):
-    """body: {"name"?, "hidden"?} — hidden = ไม่ขึ้นในตัวเลือกหมวด/แถวหน้าหลักของผู้ใช้ (คลิปยังค้นเจอ)"""
+    """body: {"name"?, "hidden"?, "special"?} — hidden = ไม่ขึ้นในตัวเลือกหมวด/แถวหน้าหลักของผู้ใช้ (คลิปยังค้นเจอ)"""
     body = request.get_json(force=True, silent=True) or {}
     name = " ".join(str(body.get("name") or "").split()) if "name" in body else None
     if name is not None and (not name or len(name) > 40):
@@ -2419,6 +2437,8 @@ def update_video_category(category_id):
             category["name"] = name
         if "hidden" in body:
             category["hidden"] = bool(body.get("hidden"))
+        if "special" in body:  # หมวดพิเศษ (18+): ผู้ใช้ที่ไม่ได้เปิด "แสดงหมวดพิเศษ" ไม่เห็นคลิป/เรื่อง/แจ้งเตือนของหมวดนี้
+            category["special"] = bool(body.get("special"))
         storage.save_video_categories(categories)
         if name is not None and name != old_name:
             _rename_watch_category(old_name, name)
