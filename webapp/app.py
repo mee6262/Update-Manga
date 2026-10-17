@@ -1213,6 +1213,14 @@ def _apply_refresh(manga: dict, parsed: dict) -> str | None:
                     c.setdefault("alts", []).append(url)
         if old_by_key:
             parsed["chapters"] = sorted(parsed["chapters"] + list(old_by_key.values()), key=_num_or_neg, reverse=True)
+        # แหล่งที่นำอยู่ล่มรอบนี้ ตอนล่าสุดที่ได้จะเป็นของแหล่งที่ตามหลัง (Restaurant: manga-lc 137 ล่ม → tanuki 112)
+        # → เดิมตอนล่าสุดถอยลง แล้วรอบหน้าแหล่งนั้นกลับมา 137 นับเป็นตอนใหม่ แจ้งเตือนซ้ำ — รอบที่ข้อมูลไม่ครบห้ามถอย
+        prev_key, new_key = _chapter_key(prev_chapter), _chapter_key(parsed.get("latest_chapter"))
+        if isinstance(prev_key, float) and (not isinstance(new_key, float) or new_key < prev_key) \
+                and prev_key not in dropped_keys:
+            parsed["latest_chapter"] = prev_chapter
+            parsed["latest_chapter_url"] = manga.get("latest_chapter_url")
+            parsed.pop("latest_chapter_date", None)
     manga.update(parsed)
     manga["last_checked_at"] = now_iso()
     if parsed.get("latest_chapter_url"):
