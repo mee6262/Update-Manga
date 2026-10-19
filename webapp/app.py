@@ -26,6 +26,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 import a037
 import anifume
+import fairyanime
 import playlist_parse
 import scraper
 import storage
@@ -1780,7 +1781,7 @@ def _fetch_video_thumb(video_id: str, image_url: str) -> bool:
     """ดาวน์โหลดรูปปกจาก Facebook มาย่อเก็บบนเซิร์ฟเวอร์ — ลิงก์รูปของ fbcdn มีวันหมดอายุ (พารามิเตอร์ oe=)
     ถ้าเก็บแค่ลิงก์ ปกจะหายเองภายในไม่กี่สัปดาห์ รับเฉพาะรูปจาก fbcdn.net (กันใช้เซิร์ฟเวอร์ยิงที่อยู่อื่น)"""
     host = (urlsplit(image_url).hostname or "").lower()
-    from_anifume = anifume.is_image_url(image_url)
+    from_anifume = any(site.is_image_url(image_url) for site in EP_SITES.values())
     if not from_anifume and (urlsplit(image_url).scheme != "https" or not host.endswith(".fbcdn.net")):
         return False
     try:
@@ -1839,8 +1840,8 @@ def _public_video(video: dict, progress: dict | None = None, saved: dict | None 
 def _source_url(video: dict) -> str | None:
     """ลิงก์หน้าต้นฉบับ — แหล่งใน streams ตรวจรูปแบบใหม่ทุกครั้ง (ข้อมูลที่ถูกแก้มือชี้โดเมนอื่น = ไม่มีลิงก์)"""
     provider = video.get("provider")
-    if provider == "anifume":
-        return anifume.canonical_episode_url(video.get("source_url") or "")
+    if provider in EP_SITES:
+        return EP_SITES[provider].canonical_episode_url(video.get("source_url") or "")
     if provider == "a037":
         return a037.validate_series_url(video.get("source_url") or "")
     return video.get("source_url") or video.get("facebook_url")
@@ -1883,12 +1884,12 @@ def add_video():
         return jsonify(payload), status
     if parsed:
         return jsonify({"error": "ลิงก์ playlist ให้แอดมินเพิ่มเป็นเรื่องที่หน้าจัดการคลิป (แท็บ เพิ่ม)"}), 400
-    af = anifume.parse_url(url)
+    _, _, af = _ep_site(url)
     if af and af[0] == "episode":
         payload, status = _create_anifume_clip(url, username or "local")
         return jsonify(payload), status
-    if af or "anifume.com" in url.lower():
-        return jsonify({"error": "ลิงก์ Anifume ต้องเป็นหน้าตอน (anifume.com/<เลข>/<รหัสตอน>) — ทั้งเรื่องเพิ่มที่หน้าจัดการคลิป"}), 400
+    if af or any(m.HOST in url.lower() for m in EP_SITES.values()):
+        return jsonify({"error": "ลิงก์ Anifume/FairyAnime ต้องเป็นหน้าตอน — ทั้งเรื่องเพิ่มที่หน้าจัดการคลิป"}), 400
     payload, status = _create_clip(
         url, username or "local",
         title=" ".join(str(body.get("title") or "").split()),
@@ -2761,9 +2762,9 @@ def _store_playlist_items(groups: list[tuple[str, list[dict]]], category_name: s
                         "thumbnail_url": None, "duration_seconds": None, "external": False,
                         "added_by": username, "created_at": now,
                     }
-                    if item.get("provider") == "anifume":
+                    if item.get("provider") in EP_SITES:
                         video["source_url"] = video.pop("facebook_url")
-                        video["provider"] = "anifume"
+                        video["provider"] = item["provider"]
                         video["external"] = bool(item.get("external"))
                     videos.append(video)
                     by_key[key] = video
@@ -3150,34 +3151,49 @@ def _create_youtube_clip(video_id: str, username: str, category_id: str | None =
     return _public_video(video), 201
 
 
-# ---------- Anifume: ฝังหน้าตอนต้นฉบับใน iframe (ดู anifume.py) — เก็บลิงก์ที่ source_url ไม่ใช้ facebook_url ----------
+# ---------- เว็บอนิเมะที่มีหน้าแยกรายตอน: Anifume (ฝังหน้าตอน) / FairyAnime (ฝังตัวเล่น) — ดู anifume.py, fairyanime.py
+# ใช้ระบบเพิ่ม/ติดตามตอนใหม่ชุดเดียวกัน (ฟังก์ชัน/route ยังชื่อ anifume) เลือกโมดูลจากโดเมนของลิงก์
+# เก็บลิงก์ตอนที่ source_url ไม่ใช้ facebook_url, provider = ชื่อเว็บ ----------
+EP_SITES = {"anifume": anifume, "fairyanime": fairyanime}
+
+
+def _ep_site(url: str):
+    """(ชื่อ, โมดูล, ผล parse_url) ของเว็บที่ลิงก์นี้เป็น — ไม่ใช่เว็บไหนเลย = (None, None, None)"""
+    for name, site in EP_SITES.items():
+        parsed = site.parse_url(url)
+        if parsed:
+            return name, site, parsed
+    return None, None, None
+
+
 def _anifume_key(url: str) -> str:
     return hashlib.sha256(url.encode("utf-8")).hexdigest()[:20]
 
 
-def _anifume_cover(series: str | None) -> str:
-    """ปกจากหน้ารวมตอน (หน้าตอนไม่มีรูป) — อ่านไม่ได้ก็ไม่มีปก"""
+def _anifume_cover(site, series: str | None) -> str:
+    """ปกจากหน้ารวมตอน (หน้าตอน Anifume ไม่มีรูป) — อ่านไม่ได้ก็ไม่มีปก"""
     if not series:
         return ""
     try:
-        return anifume.fetch_series(series)["image"]
+        return site.fetch_series(series)["image"]
     except ValueError:
         return ""
 
 
 def _create_anifume_clip(url: str, username: str, category_id: str | None = None) -> tuple[dict, int]:
-    canonical = anifume.canonical_episode_url(url)
+    site_name, site, _ = _ep_site(url)
+    canonical = site and site.canonical_episode_url(url)
     if not canonical:
-        return {"error": "ไม่ใช่ลิงก์ตอนของ Anifume"}, 400
+        return {"error": "ไม่ใช่ลิงก์ตอนของ Anifume/FairyAnime"}, 400
     key = _anifume_key(canonical)
     existing = next((v for v in storage.load_videos() if v.get("canonical_key") == key), None)
     if existing:  # มีแล้วไม่ต้องยิงเน็ต
         return {**_public_video(existing), "already_exists": True}, 200
     try:
-        meta = anifume.fetch_episode(canonical)  # ยิงเน็ตก่อนเข้า lock
+        meta = site.fetch_episode(canonical)  # ยิงเน็ตก่อนเข้า lock
     except ValueError as e:
         return {"error": str(e)}, 502
-    image = _anifume_cover(meta["series_url"])
+    image = meta.get("image") or _anifume_cover(site, meta["series_url"])
     if image and not storage.video_thumb_path(key).exists():
         _fetch_video_thumb(key, image)
     with storage.state_lock:
@@ -3186,8 +3202,8 @@ def _create_anifume_clip(url: str, username: str, category_id: str | None = None
         if existing:
             return {**_public_video(existing), "already_exists": True}, 200
         video = {
-            "id": key, "canonical_key": key, "provider": "anifume", "source_url": canonical,
-            "title": _clean_video_title(meta["title"])[:MAX_VIDEO_TITLE] or "ตอนจาก Anifume",
+            "id": key, "canonical_key": key, "provider": site_name, "source_url": canonical,
+            "title": _clean_video_title(meta["title"])[:MAX_VIDEO_TITLE] or f"ตอนจาก {site.LABEL}",
             "thumbnail_url": f"/api/videos/{key}/thumb" if storage.video_thumb_path(key).exists() else None,
             "duration_seconds": None,
             "external": not meta["embeddable"],  # หน้าเว็บห้ามฝัง → การ์ดเปิดหน้าต้นฉบับแทน
@@ -3201,18 +3217,24 @@ def _create_anifume_clip(url: str, username: str, category_id: str | None = None
     return _public_video(video), 201
 
 
-def _anifume_items(raw_items, name: str) -> tuple[list[dict], str | None]:
-    """ตรวจรายการตอนที่ส่งมา (ไม่ยิงเน็ต): ลิงก์ตอนของ anifume.com เท่านั้น ตัดซ้ำ เลขตอนไม่ใส่ = จากชื่อ หรือลำดับ"""
+def _anifume_items(raw_items, name: str) -> tuple[list[dict], str | None, str | None]:
+    """ตรวจรายการตอนที่ส่งมา (ไม่ยิงเน็ต): ลิงก์ตอนของเว็บเดียวกันทั้งชุด (Anifume หรือ FairyAnime) ตัดซ้ำ
+    เลขตอนไม่ใส่ = จากชื่อ หรือลำดับ — คืน (รายการ, error, ชื่อเว็บ)"""
     if not isinstance(raw_items, list) or not raw_items:
-        return [], "ใส่ลิงก์ตอนอย่างน้อย 1 ลิงก์"
+        return [], "ใส่ลิงก์ตอนอย่างน้อย 1 ลิงก์", None
     if len(raw_items) > 500:
-        return [], "เพิ่มได้ครั้งละไม่เกิน 500 ตอน"
-    items, seen = [], set()
+        return [], "เพิ่มได้ครั้งละไม่เกิน 500 ตอน", None
+    items, seen, site_name = [], set(), None
     for index, raw in enumerate(raw_items, 1):
         raw = raw if isinstance(raw, dict) else {"url": raw}
-        url = anifume.canonical_episode_url(str(raw.get("url") or ""))
+        raw_url = str(raw.get("url") or "")
+        name_here, site, _ = _ep_site(raw_url)
+        url = site and site.canonical_episode_url(raw_url)
         if not url:
-            return [], f"บรรทัด {index}: ไม่ใช่ลิงก์ตอนของ Anifume (anifume.com/<เลข>/<รหัสตอน>)"
+            return [], f"บรรทัด {index}: ไม่ใช่ลิงก์ตอนของ Anifume/FairyAnime", None
+        if site_name and name_here != site_name:
+            return [], f"บรรทัด {index}: ลิงก์ต่างเว็บกัน — เรื่องเดียวต้องมาจากเว็บเดียว", None
+        site_name = name_here
         if url in seen:
             continue
         seen.add(url)
@@ -3223,14 +3245,14 @@ def _anifume_items(raw_items, name: str) -> tuple[list[dict], str | None]:
         try:
             episode = float(episode) if episode is not None else float(index)
         except (TypeError, ValueError):
-            return [], f"บรรทัด {index}: เลขตอนต้องเป็นตัวเลข"
+            return [], f"บรรทัด {index}: เลขตอนต้องเป็นตัวเลข", None
         if not 0 <= episode <= 100000:
-            return [], f"บรรทัด {index}: เลขตอนไม่ถูกต้อง"
+            return [], f"บรรทัด {index}: เลขตอนไม่ถูกต้อง", None
         items.append({"url": url, "title": title or f"{name} ตอนที่ {episode:g}", "episode": episode})
-    return items, None
+    return items, None, site_name
 
 
-def _set_anifume_track(playlist_id: str, url: str, name: str, lang: str | None, follow: bool):
+def _set_anifume_track(playlist_id: str, site_name: str, url: str, name: str, lang: str | None, follow: bool):
     """หน้ารวมตอนเป็น "แหล่งตอนใหม่" ของเรื่อง (ใช้ tracks เดียวกับ playlist YouTube: สวิตช์ติดตามในแผ่นแก้ไขเรื่อง
     + รอบเช็คทุก 1 ชม. ของ run_youtube_watch) list_id = ลิงก์หน้ารวมตอน"""
     with storage.state_lock:
@@ -3241,7 +3263,7 @@ def _set_anifume_track(playlist_id: str, url: str, name: str, lang: str | None, 
         tracks = playlist.setdefault("tracks", [])
         track = next((t for t in tracks if t["list_id"] == url), None)
         if not track:
-            track = {"kind": "anifume", "list_id": url, "title": f"Anifume: {name}", "name": name}
+            track = {"kind": site_name, "list_id": url, "title": f"{EP_SITES[site_name].LABEL}: {name}", "name": name}
             tracks.append(track)
         track.update(lang=lang, follow=follow, checked_at=datetime.now(timezone.utc).isoformat())
         track.pop("error", None)
@@ -3250,11 +3272,11 @@ def _set_anifume_track(playlist_id: str, url: str, name: str, lang: str | None, 
 
 def _check_anifume_track(playlist: dict, track: dict) -> list[dict]:
     """ดึงหน้ารวมตอน (นอก lock) → ตอนที่ยังไม่มีในคลังเพิ่มเข้าเรื่อง; คืนตอนที่เพิ่ม [{"episode", "lang"}]"""
-    info = anifume.fetch_series(track["list_id"])
+    info = EP_SITES[track["kind"]].fetch_series(track["list_id"])
     known = {v.get("canonical_key") for v in storage.load_videos()}
     lang = track.get("lang")
     items = [{"url": item["url"], "title": item["title"][:MAX_VIDEO_TITLE], "episode": youtube.parse_episode(item["title"]),
-              "provider": "anifume", "image": info["image"], "lang": lang or youtube.detect_lang(item["title"])}
+              "provider": track["kind"], "image": info["image"], "lang": lang or youtube.detect_lang(item["title"])}
              for item in info["items"] if _anifume_key(item["url"]) not in known]
     # รวมเรื่องเป็นซีซั่นแล้ว (เช่น ภาค 2 → ซีซั่น 2 ของภาคแรก) track ย้ายตามมา ชื่อเดิมกลายเป็นชื่อแฝง — ใช้ชื่อแฝงนั้น
     # ตอนใหม่จึงเข้าซีซั่น/ภาษา/เลขตอนต่อที่ตั้งไว้ตอนรวม; เปลี่ยนชื่อเรื่องเฉย ๆ (ไม่ใช่ชื่อแฝง) ใช้ชื่อปัจจุบัน
@@ -3278,16 +3300,17 @@ def _check_anifume_track(playlist: dict, track: dict) -> list[dict]:
 def anifume_preview():
     """ดูก่อนเพิ่ม: ลิงก์ตอน → ชื่อตอน/ฝังได้ไหม/หน้ารวมตอน; ลิงก์หน้ารวมตอน → ชื่อเรื่อง + รายชื่อตอนทั้งหมด"""
     url = str((request.get_json(force=True, silent=True) or {}).get("url") or "")
-    parsed = anifume.parse_url(url)
+    site_name, site, parsed = _ep_site(url)
     if not parsed:
-        return jsonify({"error": "ไม่ใช่ลิงก์ Anifume (https://anifume.com/<เลข> หรือ /<เลข>/<รหัสตอน>)"}), 400
+        return jsonify({"error": "ไม่ใช่ลิงก์ Anifume (anifume.com/<เลข>[/<รหัสตอน>]) หรือ FairyAnime "
+                                 "(fairyanime.net/<ชื่อเรื่อง>/ หรือ /watch/<รหัสตอน>.html)"}), 400
     try:
         if parsed[0] == "episode":
-            meta = anifume.fetch_episode(url)
+            meta = site.fetch_episode(url)
             key = _anifume_key(meta["url"])
-            return jsonify({"kind": "episode", **meta,
+            return jsonify({"kind": "episode", "site": site.LABEL, **meta,
                             "already_added": any(v.get("canonical_key") == key for v in storage.load_videos())})
-        info = anifume.fetch_series(url)
+        info = site.fetch_series(url)
     except ValueError as e:
         return jsonify({"error": str(e)}), 502
     if not info["items"]:
@@ -3295,7 +3318,7 @@ def anifume_preview():
     known = {v.get("canonical_key") for v in storage.load_videos()}
     items = [{**item, "episode": youtube.parse_episode(item["title"]), "exists": _anifume_key(item["url"]) in known}
              for item in info["items"]]
-    return jsonify({"kind": "series", "url": info["url"], "name": info["name"], "title": info["title"],
+    return jsonify({"kind": "series", "site": site.LABEL, "url": info["url"], "name": info["name"], "title": info["title"],
                     "image": info["image"], "lang": youtube.detect_lang(info["title"]), "items": items})
 
 
@@ -3317,27 +3340,27 @@ def anifume_add():
     name = " ".join(str(body.get("name") or "").split())
     if not name or len(name) > MAX_PLAYLIST_NAME:
         return jsonify({"error": f"ชื่อเรื่องต้องมี 1-{MAX_PLAYLIST_NAME} ตัวอักษร"}), 400
-    items, error = _anifume_items(body.get("items"), name)
+    items, error, site_name = _anifume_items(body.get("items"), name)
     if error:
         return jsonify({"error": error}), 400
     known = {v.get("canonical_key"): v for v in storage.load_videos()}
     if body.get("dry_run"):
         return jsonify({"name": name, "items": [{**item, "exists": _anifume_key(item["url"]) in known} for item in items]})
     follow_url = None
+    site = EP_SITES[site_name]
     if body.get("follow_url"):
-        parsed = anifume.parse_url(str(body["follow_url"]))
-        if not parsed:
-            return jsonify({"error": "ลิงก์หน้ารวมตอนไม่ใช่ของ Anifume"}), 400
-        follow_url = anifume.series_url(parsed[1])
+        follow_url = site.canonical_series_url(str(body["follow_url"]))
+        if not follow_url:
+            return jsonify({"error": f"ลิงก์หน้ารวมตอนไม่ใช่ของ {site.LABEL} (ต้องเว็บเดียวกับลิงก์ตอน)"}), 400
     image = str(body.get("image") or "")
     lang = body.get("lang") if body.get("lang") in ("dub", "sub") else None
     for item in items:
-        item.update(provider="anifume", image=image if anifume.is_image_url(image) else "", lang=lang)
+        item.update(provider=site_name, image=image if site.is_image_url(image) else "", lang=lang)
     result = _store_playlist_items([(name, items)], category["name"] if category else "", username, move_existing=True,
                                    mark_fresh=True)  # เหมือนเพิ่มเรื่องจาก YouTube
     playlist = next((p for p in storage.load_video_playlists() if p["name"] == name), None)
     if playlist and follow_url:
-        _set_anifume_track(playlist["id"], follow_url, name, lang, bool(body.get("follow", True)))
+        _set_anifume_track(playlist["id"], site_name, follow_url, name, lang, bool(body.get("follow", True)))
     return jsonify({"ok": True, "playlist_id": playlist and playlist["id"], "name": name,
                     "added": result["added"], "moved": result["moved"]})
 
@@ -3509,7 +3532,7 @@ def run_youtube_watch() -> bool:
             for track in [t for t in playlist.get("tracks", []) if t.get("follow")]:
                 error = None
                 try:
-                    if track.get("kind") == "anifume":
+                    if track.get("kind") in EP_SITES:
                         result = {"added": _check_anifume_track(playlist, track)}
                     else:
                         info = youtube.fetch_playlist(track["list_id"])

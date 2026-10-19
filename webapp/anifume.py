@@ -19,6 +19,7 @@ from bs4 import BeautifulSoup
 import scraper
 import streams
 
+LABEL = "Anifume"
 HOST = "anifume.com"
 HOSTS = {"anifume.com", "www.anifume.com"}
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -57,6 +58,11 @@ def series_url(series_id: str) -> str:
 def canonical_episode_url(url: str) -> str | None:
     parsed = parse_url(url)
     return episode_url(parsed[1], parsed[2]) if parsed and parsed[0] == "episode" else None
+
+
+def canonical_series_url(url: str) -> str | None:
+    parsed = parse_url(url)
+    return series_url(parsed[1]) if parsed else None
 
 
 def is_image_url(url: str) -> bool:

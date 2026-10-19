@@ -436,13 +436,13 @@
               <div class="hint">playlist ที่ชื่อเรื่องตรงกับเรื่องเดิม (เช่น พากย์ไทย + ซับไทย) รวมเป็นเรื่องเดียว เลือกภาษาได้ในหน้าเรื่อง</div>
             </div>
             <div class="vm-card">
-              <h3>🎬 Anifume</h3>
+              <h3>🎬 Anifume / FairyAnime</h3>
               <div id="afMode" class="pl-controls">
                 <button type="button" class="video-chip active" data-af-mode="clip">คลิปเดี่ยว</button>
                 <button type="button" class="video-chip" data-af-mode="series">ซีรีส์ (หลายตอน)</button>
               </div>
               <form id="afForm" class="yt-add-row">
-                <input type="url" id="afUrl" placeholder="ลิงก์ตอน หรือหน้ารวมตอน anifume.com/…" />
+                <input type="url" id="afUrl" placeholder="ลิงก์ตอน หรือหน้ารวมตอน anifume.com / fairyanime.net" />
                 <button type="submit" class="btn">ดูข้อมูล</button>
               </form>
               <div id="afSeries" hidden>
@@ -452,7 +452,7 @@
               </div>
               <div id="afPreview"></div>
               <div id="afMsg" class="form-msg"></div>
-              <div class="hint">เล่นโดยฝังหน้าตอนของ Anifume ในแอป (จำจุดดูค้างไม่ได้) — มีปุ่มเปิดหน้าต้นฉบับใต้ตัวเล่นเสมอ · ใส่ลิงก์หน้ารวมตอนในโหมดซีรีส์ = ดึงรายชื่อตอนให้</div>
+              <div class="hint">Anifume ฝังหน้าตอน · FairyAnime ฝังตัวเล่นของเว็บ — จำจุดดูค้างไม่ได้ทั้งคู่ — มีปุ่มเปิดหน้าต้นฉบับใต้ตัวเล่นเสมอ · ใส่ลิงก์หน้ารวมตอนในโหมดซีรีส์ = ดึงรายชื่อตอนให้</div>
             </div>
             <div class="vm-card">
               <h3>🔗 วางลิงก์ Facebook</h3>
@@ -546,7 +546,7 @@
     <div class="modal-content">
       <h2>เพิ่มคลิปเข้า Mee+</h2>
       <form id="videoForm" class="video-form">
-        <input name="facebook_url" type="url" placeholder="ลิงก์ YouTube, Facebook (Video, Reel, fb.watch) หรือตอนของ Anifume" required />
+        <input name="facebook_url" type="url" placeholder="ลิงก์ YouTube, Facebook (Video, Reel, fb.watch) หรือตอนของ Anifume/FairyAnime" required />
         <div id="videoFormMsg" class="form-msg"></div>
         <div class="modal-actions"><button type="button" class="btn" data-close-video-form>ยกเลิก</button><button class="btn primary">เพิ่มคลิป</button></div>
       </form>

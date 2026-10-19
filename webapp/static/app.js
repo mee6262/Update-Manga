@@ -1215,11 +1215,11 @@ function playlistResume(episodes) {
 }
 
 function providerName(item) {
-  return { youtube: "YouTube", anifume: "Anifume", a037: "037-anime" }[item?.provider] || "Facebook";
+  return { youtube: "YouTube", anifume: "Anifume", fairyanime: "FairyAnime", a037: "037-anime" }[item?.provider] || "Facebook";
 }
 
 function ytBadge(item) {
-  if (item?.provider === "anifume") return '<span class="yt-badge af-badge">Anifume</span>';
+  if (item?.provider === "anifume" || item?.provider === "fairyanime") return `<span class="yt-badge af-badge">${providerName(item)}</span>`;
   return item && item.provider === "youtube" ? '<span class="yt-badge">YouTube</span>' : "";
 }
 
@@ -1349,7 +1349,7 @@ function renderPlaylistView() {
     <div class="pl-meta">${seasons.length > 1 ? `${seasons.length} ซีซั่น · ` : ""}${episodes.length} ตอน · อัปเดต ${timeAgo(playlist.updated_at, "เมื่อสักครู่")} · ดูไป ${watched}/${episodes.length}</div>
     <div class="lib-bar pl-bar"><span style="width:${((watched / episodes.length) * 100).toFixed(1)}%"></span></div>
     ${langSeg}
-    ${playlist.provider === "anifume" ? `<div class="hint pl-hint">⚠️ ${AF_LIMITS}</div>` : ""}
+    ${playlist.provider === "anifume" || playlist.provider === "fairyanime" ? `<div class="hint pl-hint">⚠️ ${frameLimits(playlist.provider)}</div>` : ""}
     <div class="pl-actions"><button class="btn primary" data-episode-id="${escapeHtml(resume.id)}">▶ ${started ? "ดูต่อ" : "เริ่มดู"} ${resumeWhere}</button>${playlistSaveButton(playlist)}</div>
     <div class="pl-controls">${chips}<button class="video-chip" data-ep-sort>${playlistDesc ? "ล่าสุดก่อน" : "ตอนแรกก่อน"} ⇅</button></div>
     <div class="ep-grid">${tiles}</div>
@@ -1425,7 +1425,7 @@ function renderAutoNext() {
   btn.disabled = unsupported;
   if (unsupported) {
     btn.textContent = "⏭ เล่นต่อ: ไม่รองรับ";
-    btn.title = "Anifume ไม่บอกว่าจบตอนเมื่อไร — กด \"ตอนถัดไป\" เอง";
+    btn.title = "ตัวเล่นของแหล่งนี้ไม่บอกว่าจบตอนเมื่อไร — กด \"ตอนถัดไป\" เอง";
     btn.classList.remove("active");
     btn.setAttribute("aria-pressed", "false");
     return;
@@ -1595,6 +1595,10 @@ async function mountYouTubeVideo(video, position, autoplay) {
 // ตัวเล่นใน iframe ข้ามโดเมน (JW Player ของ Anifume ไม่รับ/ส่ง postMessage) — อ่านเวลา/สั่งเล่นไม่ได้
 const AF_LIMITS = "ตัวเล่นของ Anifume: ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
 const FRAME_LIMITS = "ตัวเล่นของแหล่งนี้: ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
+const FA_LIMITS = "ตัวเล่นของ FairyAnime: ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
+function frameLimits(provider) {
+  return provider === "anifume" ? AF_LIMITS : provider === "fairyanime" ? FA_LIMITS : FRAME_LIMITS;
+}
 let activeFramePlayback = false; // ตอนที่เล่นอยู่เป็น iframe ของแหล่ง (ปุ่มเล่นต่อ/เล่น-หยุดใช้ไม่ได้)
 let resolveTries = 0;            // ขอลิงก์ใหม่ในการเปิดตอนนี้กี่ครั้งแล้ว (เซิร์ฟเวอร์จำกัดซ้ำอีกชั้น)
 // รอบการเปิดตัวเล่น — เพิ่มทุกครั้งที่ openVideo/closeVideo ผลของ request/event จากรอบเก่า (เช่น ปิดแล้วเปิดตอนเดิมซ้ำ
@@ -1677,7 +1681,7 @@ function mountFrameVideo(video, pb) {
   unmountYouTube();
   unmountNativeVideo();
   const body = el("#videoPlayerBody");
-  const limits = video.provider === "anifume" ? AF_LIMITS : FRAME_LIMITS;
+  const limits = frameLimits(video.provider);
   body.innerHTML = `<div class="af-wrap"><iframe title="${escapeHtml(video.title)}" allowfullscreen scrolling="no"
       allow="fullscreen; autoplay; encrypted-media; picture-in-picture"
       sandbox="allow-scripts allow-same-origin allow-presentation"></iframe></div>
@@ -6700,7 +6704,7 @@ function initYouTubeAdmin() {
   });
 }
 
-// ---------- เพิ่มจาก Anifume (แอดมิน): คลิปเดี่ยว หรือซีรีส์ (ลิงก์หลายตอน → เรื่องในระบบ playlist เดิม) ----------
+// ---------- เพิ่มจาก Anifume / FairyAnime (แอดมิน): คลิปเดี่ยว หรือซีรีส์ (ลิงก์หลายตอน → เรื่องในระบบ playlist เดิม) ----------
 const afState = { mode: "clip", preview: null, image: "", lang: null };
 
 function afMsg(text, error = false) {
@@ -6763,7 +6767,7 @@ function initAnifumeAdmin() {
     const btn = event.submitter || el("#afForm button");
     const url = el("#afUrl").value.trim();
     btn.disabled = true;
-    afMsg("กำลังอ่านข้อมูลจาก Anifume...");
+    afMsg("กำลังอ่านข้อมูลจากเว็บ...");
     try {
       const d = await sendJSON("POST", "/api/anifume/preview", { url });
       if (d.kind === "series") {
@@ -6775,8 +6779,8 @@ function initAnifumeAdmin() {
         afMsg("เพิ่มลงรายการแล้ว");
       } else {
         afState.preview = d;
-        el("#afPreview").innerHTML = `<div class="yt-preview">${vmThumb("")}<div><div class="name">${escapeHtml(d.title)}</div>
-            <div class="meta">${d.embeddable ? "เล่นในแอปได้ (ฝังหน้าตอน)" : "⚠️ เว็บไม่ให้ฝัง จะเปิดหน้า Anifume แทน"}${d.already_added ? " · มีในคลังแล้ว" : ""}</div></div></div>
+        el("#afPreview").innerHTML = `<div class="yt-preview">${vmThumb(d.image || "")}<div><div class="name">${escapeHtml(d.title)}</div>
+            <div class="meta">${escapeHtml(d.site || "")} · ${d.embeddable ? "เล่นในแอปได้" : `⚠️ เว็บไม่ให้ฝัง จะเปิดหน้า ${escapeHtml(d.site || "ต้นฉบับ")} แทน`}${d.already_added ? " · มีในคลังแล้ว" : ""}</div></div></div>
           ${afCategorySelect()}
           <div class="pl-controls"><button type="button" class="btn primary" data-af-add-clip>เพิ่มเป็นคลิปเดี่ยว</button>
           ${d.series_url ? `<button type="button" class="btn" data-af-series="${escapeHtml(d.series_url)}">ดึงทุกตอนของเรื่องนี้</button>` : ""}</div>`;
