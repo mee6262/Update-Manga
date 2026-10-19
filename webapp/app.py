@@ -573,6 +573,20 @@ PREFS_MAX_KEYS = 40
 PREFS_MAX_BYTES = 16000  # ภาษาที่เลือกต่อเรื่อง (video_lang) โตตามจำนวนเรื่องที่มีทั้งพากย์และซับ
 
 
+@app.route("/api/client-log", methods=["POST"])
+def client_log():
+    """หน้าเว็บรายงานอาการที่ทดสอบบนเครื่องจริงไม่ได้ (เช่น เมนูล่างลอยกลางจอบน iPhone) — เขียนลง webapp.log บรรทัดเดียว"""
+    raw = request.get_data(cache=False, as_text=True)[:600]
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return "", 204
+    if isinstance(data, dict) and data.get("kind") == "viewport":
+        ua = (request.headers.get("User-Agent") or "")[:120]
+        print(f"[client-viewport] {current_username() or '-'} {json.dumps(data, ensure_ascii=False)} ua={ua}", flush=True)
+    return "", 204
+
+
 @app.route("/api/prefs", methods=["POST"])
 def update_prefs():
     # ค่าตั้งค่าส่วนตัว (เช่น ลำดับการเรียงเรื่องทั้งหมด) เก็บแยกบัญชีใครบัญชีมัน — ตอนอ่านไม่มี

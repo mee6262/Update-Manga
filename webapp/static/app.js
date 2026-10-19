@@ -1918,8 +1918,16 @@ function nudgeViewport() {
   [100, 500, 1000].forEach((ms) => setTimeout(fixFixedLayout, ms));
 }
 
-// เลื่อน 1px (ถอยขึ้นถ้าอยู่ท้ายหน้า — เลื่อนลงเกินท้ายหน้าไม่มีผล) + ซ่อน/โชว์เมนูล่างให้ Safari จัดตำแหน่งใหม่
+// เลื่อน 1px (ถอยขึ้นถ้าอยู่ท้ายหน้า — เลื่อนลงเกินท้ายหน้าไม่มีผล) + ตั้ง meta viewport ซ้ำ + ซ่อน/โชว์เมนูล่าง
+// ให้ Safari คำนวณขนาดจอใหม่
 function fixFixedLayout() {
+  const meta = document.querySelector('meta[name="viewport"]');
+  if (meta) {
+    const content = meta.getAttribute("content");
+    meta.setAttribute("content", `${content}, maximum-scale=1.0`);
+    void document.documentElement.offsetHeight;
+    meta.setAttribute("content", content);
+  }
   const y = window.scrollY;
   window.scrollTo(0, y > 0 ? y - 1 : y + 1);
   window.scrollTo(0, y);
@@ -1929,16 +1937,57 @@ function fixFixedLayout() {
   nav.style.display = "";
 }
 
-// ตรวจว่าเมนูล่างไม่ชิดขอบจอ (ลอยกลางจอ) — เกิดได้หลังคีย์บอร์ดหุบ/ออกจากเต็มจอ ตอนที่หน้ายังล็อกเลื่อนอยู่
+// ความสูงจอที่ควรเป็น: เว็บแอปหน้าจอโฮมเต็มจอเสมอ = ด้านยาว/สั้นของ screen ตามแนวจอ (screen.* ของ iPhone ไม่หมุนตาม)
+// เดิมเทียบกับ innerHeight ซึ่งตอนเกิดอาการค่านี้เองก็ผิด (เตี้ยเท่าที่เมนูลอยอยู่) → ไม่เคยสั่งแก้
+function expectedViewportHeight() {
+  if (!isStandalone) return 0;
+  const long = Math.max(screen.width, screen.height);
+  const short = Math.min(screen.width, screen.height);
+  return window.innerWidth <= short + 1 ? long : short;
+}
+
+function viewportLooksStale() {
+  const nav = el(".bottom-nav");
+  const vv = window.visualViewport;
+  const screenBottom = Math.max(window.innerHeight, vv ? vv.height + vv.offsetTop : 0, expectedViewportHeight() - 60);
+  return screenBottom - nav.getBoundingClientRect().bottom > 4;
+}
+
+// ตรวจว่าเมนูล่างไม่ชิดขอบจอ (ลอยกลางจอ + การ์ดข้างใต้ว่างเพราะ content-visibility คิดว่าอยู่นอกจอ)
+// เกิดได้หลังคีย์บอร์ดหุบ/ออกจากเต็มจอ/กลับเข้าแอป — แก้แล้วเช็คซ้ำ ส่งผลไป log เซิร์ฟเวอร์ (ทดสอบบน iPhone จริงเองไม่ได้)
+let viewportFixing = false;
+let viewportLogs = 0; // แก้ไม่หาย = ทุกการเลื่อนจะเช็คซ้ำ — ส่ง log ไม่เกิน 5 ครั้งต่อการเปิดหน้า
 function checkBottomNav() {
-  if (document.hidden) return;
+  if (document.hidden || viewportFixing) return;
   const nav = el(".bottom-nav");
   if (!nav || getComputedStyle(nav).display === "none") return;
   const active = document.activeElement;
   if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return; // คีย์บอร์ดยังเปิด
+  if (!viewportLooksStale()) return;
+  const before = viewportSnapshot();
+  viewportFixing = true;
+  fixFixedLayout();
+  setTimeout(() => {
+    if (viewportLooksStale()) fixFixedLayout();
+    setTimeout(() => {
+      viewportFixing = false;
+      const fixed = !viewportLooksStale();
+      if (viewportLogs++ >= 5) return;
+      try {
+        navigator.sendBeacon?.("/api/client-log", JSON.stringify({ kind: "viewport", fixed, before, after: viewportSnapshot() }));
+      } catch (e) { /* log ไม่สำคัญ */ }
+    }, 400);
+  }, 300);
+}
+
+function viewportSnapshot() {
   const vv = window.visualViewport;
-  const screenBottom = Math.max(window.innerHeight, vv ? vv.height + vv.offsetTop : 0);
-  if (screenBottom - nav.getBoundingClientRect().bottom > 4) fixFixedLayout();
+  return {
+    inner: [window.innerWidth, window.innerHeight], screen: [screen.width, screen.height],
+    vv: vv ? [Math.round(vv.width), Math.round(vv.height), Math.round(vv.offsetTop)] : null,
+    nav: Math.round(el(".bottom-nav").getBoundingClientRect().bottom), y: Math.round(window.scrollY),
+    tab: document.querySelector(".nav-item.active")?.dataset.tab || "",
+  };
 }
 
 function initFixedLayoutGuard() {
