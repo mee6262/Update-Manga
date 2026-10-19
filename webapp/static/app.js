@@ -1916,6 +1916,8 @@ function reuseNativeVideo(position, sources) {
 // กระตุ้นให้คำนวณ viewport ใหม่ด้วยการเลื่อนหน้า 1px แล้วเลื่อนกลับ (ซ้ำหลังแอนิเมชันหมุนจอจบ)
 function nudgeViewport() {
   [100, 500, 1000].forEach((ms) => setTimeout(fixFixedLayout, ms));
+  // แอนิเมชันหมุนจอของ iPhone บางครั้งเสร็จหลัง 1 วิ — เช็คซ้ำ (แก้เฉพาะเมื่อยังเพี้ยน)
+  [1500, 3000].forEach((ms) => setTimeout(checkBottomNav, ms));
 }
 
 // เลื่อน 1px (ถอยขึ้นถ้าอยู่ท้ายหน้า — เลื่อนลงเกินท้ายหน้าไม่มีผล) + ตั้ง meta viewport ซ้ำ + ซ่อน/โชว์เมนูล่าง
@@ -1949,21 +1951,22 @@ function expectedViewportHeight() {
 function viewportLooksStale() {
   const nav = el(".bottom-nav");
   const vv = window.visualViewport;
-  const screenBottom = Math.max(window.innerHeight, vv ? vv.height + vv.offsetTop : 0, expectedViewportHeight() - 60);
+  const screenBottom = Math.max(window.innerHeight, vv ? vv.height + vv.offsetTop : 0, expectedViewportHeight() - 100);
   return screenBottom - nav.getBoundingClientRect().bottom > 4;
 }
 
 // ตรวจว่าเมนูล่างไม่ชิดขอบจอ (ลอยกลางจอ + การ์ดข้างใต้ว่างเพราะ content-visibility คิดว่าอยู่นอกจอ)
 // เกิดได้หลังคีย์บอร์ดหุบ/ออกจากเต็มจอ/กลับเข้าแอป — แก้แล้วเช็คซ้ำ ส่งผลไป log เซิร์ฟเวอร์ (ทดสอบบน iPhone จริงเองไม่ได้)
 let viewportFixing = false;
+let viewportFailures = 0; // แก้แล้วไม่หายติดกัน — ตัวจับเวลาหยุดลองที่ 3 (event จริงยังเช็คได้)
 let viewportLogs = 0; // แก้ไม่หาย = ทุกการเลื่อนจะเช็คซ้ำ — ส่ง log ไม่เกิน 5 ครั้งต่อการเปิดหน้า
-function checkBottomNav() {
-  if (document.hidden || viewportFixing) return;
+function checkBottomNav(fromTimer = false) {
+  if (document.hidden || viewportFixing || (fromTimer === true && viewportFailures >= 3)) return;
   const nav = el(".bottom-nav");
   if (!nav || getComputedStyle(nav).display === "none") return;
   const active = document.activeElement;
   if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return; // คีย์บอร์ดยังเปิด
-  if (!viewportLooksStale()) return;
+  if (!viewportLooksStale()) { viewportFailures = 0; return; }
   const before = viewportSnapshot();
   viewportFixing = true;
   fixFixedLayout();
@@ -1972,6 +1975,7 @@ function checkBottomNav() {
     setTimeout(() => {
       viewportFixing = false;
       const fixed = !viewportLooksStale();
+      viewportFailures = fixed ? 0 : viewportFailures + 1;
       if (viewportLogs++ >= 5) return;
       try {
         navigator.sendBeacon?.("/api/client-log", JSON.stringify({ kind: "viewport", fixed, before, after: viewportSnapshot() }));
@@ -1999,6 +2003,9 @@ function initFixedLayoutGuard() {
   document.addEventListener("focusout", later);
   document.addEventListener("visibilitychange", later);
   window.addEventListener("pageshow", later);
+  // ดูเต็มจอแนวนอนแล้วออก ระหว่างอยู่หน้าตัวเล่นเมนูล่างถูกซ่อน (ข้ามการเช็ค) — พอกดย้อนกลับ/ปิด/ย่อตัวเล่น
+  // เมนูโผล่มาโดยไม่มี event ใดให้เช็ค → เช็คเป็นระยะ (แค่วัดตำแหน่งเมนู ไม่หนัก)
+  setInterval(() => checkBottomNav(true), 2000);
 }
 
 // ---------- ความเร็ว / แตะสองครั้งข้าม 10 วิ / ตั้งเวลาปิด (เฉพาะตัวเล่นของเว็บเอง) ----------
