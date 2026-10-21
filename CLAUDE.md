@@ -5,6 +5,7 @@
 - คำสั่งที่เกี่ยวกันรวบเป็น call เดียว
 - production = **Windows VPS** → คำสั่งให้ผู้ใช้เป็น PowerShell เท่านั้น (ไม่มี systemctl/bash)
 - ผู้ใช้สั่ง push = push ตรงเข้า `main` (VPS `git pull` จาก main)
+- รันอยู่ที่ไหน: cwd `C:\Project\Update-Manga` = **บน VPS (production จริง)** → ทำตามหัวข้อ "บน VPS" ด้านล่าง; อื่น ๆ = mac
 
 ## อ่านไฟล์
 - app.py 1.3k / app.js 1.1k / scraper.py 470 บรรทัด → ห้ามอ่านทั้งไฟล์: `grep -n` แล้ว `sed -n 'a,bp'` หรือ token-savior `find_symbol` / `get_function_source`
@@ -31,15 +32,34 @@
 - ห้ามเปิด `SESSION_REFRESH_EACH_REQUEST` (แคชรูปในเบราว์เซอร์พัง)
 - static ได้ `?v=mtime` อัตโนมัติ; `build_id` นับแค่ app.js/style.css (หน้าเว็บ auto-reload เมื่อเปลี่ยน)
 
-## ทดสอบ (ไม่มี test suite)
-- รันใน sandbox เสมอ: copy webapp → scratchpad; user ทดสอบสร้างด้วย `werkzeug.security.generate_password_hash`
+## ทดสอบ
+- unittest: `python -m unittest discover -s webapp/tests` (รันจากสำเนาชั่วคราว ไม่แตะ data จริง)
+- รันใน sandbox เสมอ: copy webapp → scratchpad (VPS: `$env:TEMP\manga-sandbox`); user ทดสอบสร้างด้วย `werkzeug.security.generate_password_hash`
 - `import app` รัน migration แก้ data/manga.json จริง → เผลอแล้ว `git checkout -- webapp/data/manga.json`
 - เว็บจำลอง = mangareader (`#chapterlist` + `ts_reader.run(...)`) + flag file จำลอง 522/ค้าง/ตอนหลอก
-- ฆ่า process ใช้ `pkill -if` — venv python โชว์เป็น `Python` ตัวใหญ่ `pkill -f python` ไม่เจอ → เทสต์ไปโดนเซิร์ฟเวอร์ตัวเก่า
-- zsh: glob ที่ไม่เจอไฟล์ = คำสั่งทั้งบรรทัดล้ม → ระบุชื่อไฟล์ตรง
+- (mac) ฆ่า process ใช้ `pkill -if` — venv python โชว์เป็น `Python` ตัวใหญ่ `pkill -f python` ไม่เจอ → เทสต์ไปโดนเซิร์ฟเวอร์ตัวเก่า
+- (mac) zsh: glob ที่ไม่เจอไฟล์ = คำสั่งทั้งบรรทัดล้ม → ระบุชื่อไฟล์ตรง
 - UI: browser pane viewport 0x0 → resize ก่อน; pane ซ่อน = rAF ไม่ทำงาน → เรียกฟังก์ชันตรงแทนรอ scroll event
 - waitress ลองบน mac ได้ (`pip install waitress`)
+- เว็บจำลอง/เซิร์ฟเวอร์ทดสอบ: `SECRET_KEY` คงที่ ไม่งั้นรีสตาร์ทแล้ว session หลุด (POST ได้ 401 = ผู้เยี่ยมชม)
 - เว็บจริงไว้ regression: go-manga, up-manga (URL จาก data/manga.json), niceoppai, manga-lc
+
+## บน VPS (Windows Server, PowerShell)
+- นี่คือเว็บที่มี่ใช้จริง: ทดสอบใน `$env:TEMP\manga-sandbox` + พอร์ตอื่น (เช่น 5099) เท่านั้น — ห้าม `import app` ในโฟลเดอร์จริง
+  (รัน migration ใส่ data จริงขณะเซิร์ฟเวอร์ตัวจริงเขียนอยู่)
+- python = `.venv\Scripts\python.exe`; process ทดสอบเปิดด้วย `Start-Process -PassThru` แล้วฆ่าด้วย PID
+  ห้าม `Stop-Process -Name python` (โดนเซิร์ฟเวอร์จริง)
+- log: `webapp\data\logs\webapp.log` (เซิร์ฟเวอร์), `supervisor.log` (รีสตาร์ทเมื่อไร เพราะอะไร) — อ่านด้วย `Get-Content -Tail 200`
+  เว็บล่ม/จอขาว: ดู supervisor.log + `/healthz` ก่อนแก้; `[client-viewport]` = รายงานเมนูลอยจาก iPhone
+- รีสตาร์ท (`Stop-ScheduledTask`/`Start-ScheduledTask "Manga Webapp"`) = เว็บดับชั่วครู่ → ถามมี่ก่อนทุกครั้ง
+- git: `git pull` ก่อนเริ่มแก้; แก้เสร็จ commit + push เข้า main จากบน VPS เลย (mac ต้อง pull ก่อนทำงานต่อ)
+  data/manga.json ถูกแอปแก้ตลอด → ห้าม add/commit/checkout/stash ทิ้ง; ใช้ `git add <ไฟล์>` ระบุชื่อเท่านั้น
+- **ข้อมูลผู้ใช้** (`webapp\data\` ทั้งโฟลเดอร์ + `.env`: บัญชี/รหัสผ่าน hash, ประวัติอ่าน-ดู, คลังวิดีโอ, คอมเมนต์) กู้คืนไม่ได้ถ้าหาย
+  - ห้าม: `git clean` (ทุกแบบ), `git reset --hard`, `git stash -u/-a`, `git checkout -- .`, ลบ/ย้ายไฟล์ใน data ด้วยมือ
+  - ก่อนแก้โค้ดที่ migrate/เขียนโครงไฟล์ใน data ใหม่ หรือก่อนแก้ data ด้วยมือ → รัน `tools\backup_data.ps1` ก่อน
+  - ห้ามแสดง `.env`, password hash, ข้อมูลรายคนในแชตเกินที่จำเป็นต่อการแก้ปัญหา
+- ปรับแต่ง Windows: บอกค่าเดิมก่อนเปลี่ยน + ถามก่อนทุกอย่างที่ต้องรีบูต หรือแตะ firewall / RDP / SSH / บัญชีผู้ใช้ / เครือข่าย
+  (ตั้งผิดแล้วล็อกตัวเองออกจากเครื่อง) — เปลี่ยนทีละอย่างแล้วเช็คว่ายังเข้าเครื่องได้
 
 ## Deploy (VPS: `C:\Project\Update-Manga`, task "Manga Webapp")
 - แก้ .py/template → `git pull` + Stop/Start task; แก้แค่ app.js/style.css → `git pull` พอ

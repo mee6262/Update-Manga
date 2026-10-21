@@ -19,6 +19,8 @@ webapp/data/videos.json
 webapp/data/video_thumbs/
 webapp/data/video_categories.json
 webapp/data/video_genres.json
+webapp/data/video_playlists.json
+webapp/data/playlist_watch.json
 webapp/data/requests.json
 webapp/data/comments.json
 webapp/data/activity.json
