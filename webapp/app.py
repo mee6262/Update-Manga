@@ -1847,12 +1847,24 @@ def _source_url(video: dict) -> str | None:
     return video.get("source_url") or video.get("facebook_url")
 
 
-@app.route("/api/videos", methods=["GET"])
-def list_videos():
-    # ส่งทั้งคลังทีเดียว (คลิปเพิ่มด้วยมือ จำนวนไม่มาก) ให้หน้าเว็บแบ่งหน้า/แยกแท็บ หน้าหลัก-คลัง-ประวัติ เอง
-    # เดิมแบ่งหน้าด้วย cursor ฝั่งเซิร์ฟเวอร์ แล้วปุ่ม "โหลดเพิ่ม" ที่ไม่มีหน้าถัดไปดึงหน้าแรกมาต่อซ้ำ
+# ผล /api/videos ที่บีบอัดแล้ว ต่อผู้ใช้ — คลังมี 2.7 พันคลิป (ต.ค. 2026) สร้างใหม่ทุกครั้งใช้ ~140 ms + JSON 2 MB
+# แม้ข้อมูลไม่เปลี่ยน (304) ก็ต้องสร้างครบก่อนเทียบ ETag ตอนนี้สร้างใหม่เฉพาะเมื่อไฟล์ที่เกี่ยวข้องเปลี่ยน
+# (เทียบ mtime+ขนาดไฟล์ แบบเดียวกับแคชใน storage) หรือสิทธิ์/สวิตช์หมวดพิเศษของผู้ใช้เปลี่ยน
+# เก็บเฉพาะ gzip (~140 KB/คน) เครื่องมี RAM น้อย จำกัดไว้ VIDEOS_CACHE_MAX คนล่าสุด
+VIDEOS_CACHE_MAX = 32
+_videos_cache: dict[tuple, tuple[tuple, bytes, str]] = {}
+_videos_cache_lock = threading.Lock()
+
+
+def _videos_cache_key(username: str | None) -> tuple:
+    files = [storage.VIDEOS_FILE, storage.VIDEO_CATEGORIES_FILE, storage.VIDEO_PLAYLISTS_FILE, storage.VIDEO_GENRES_FILE]
+    if username:
+        files += [storage._user_file(username, "video_progress.json"), storage._user_file(username, "video_saved.json")]
+    return (is_admin(), auth_disabled(), shows_special(username), *(storage._stat_sig(f) for f in files))
+
+
+def _videos_payload(username: str | None) -> dict:
     videos = sorted(storage.load_videos(), key=lambda item: item.get("created_at", ""), reverse=True)
-    username = current_username() or ("local" if not is_guest() else None)
     hidden_cats, hidden_playlists = _hidden_video_scope(username)
     if hidden_cats:
         videos = [v for v in videos if v.get("playlist_id") not in hidden_playlists
@@ -1861,13 +1873,42 @@ def list_videos():
     saved = storage.load_video_saved(username) if username else {}
     if any(_needs_duration_backfill(v) for v in videos):
         threading.Thread(target=_backfill_video_durations, daemon=True).start()
-    return jsonify({
+    return {
         "items": [_public_video(video, progress, saved) for video in videos],
         "categories": storage.load_video_categories(),
         "genres": storage.load_video_genres(),
         "playlists": _public_playlists(videos, saved),
         "next_cursor": None,
-    })
+    }
+
+
+@app.route("/api/videos", methods=["GET"])
+def list_videos():
+    # ส่งทั้งคลังทีเดียว (คลิปเพิ่มด้วยมือ จำนวนไม่มาก) ให้หน้าเว็บแบ่งหน้า/แยกแท็บ หน้าหลัก-คลัง-ประวัติ เอง
+    # เดิมแบ่งหน้าด้วย cursor ฝั่งเซิร์ฟเวอร์ แล้วปุ่ม "โหลดเพิ่ม" ที่ไม่มีหน้าถัดไปดึงหน้าแรกมาต่อซ้ำ
+    username = current_username() or ("local" if not is_guest() else None)
+    key = _videos_cache_key(username)
+    hit = _videos_cache.get(username)
+    if hit and hit[0] == key:
+        _, packed, etag = hit
+    else:
+        # อ่าน key ก่อนสร้างข้อมูล: ไฟล์เปลี่ยนระหว่างสร้าง = key ที่เก็บไม่ตรงไฟล์ รอบหน้าจะสร้างใหม่เอง (ไม่ค้างของเก่า)
+        raw = app.json.response(_videos_payload(username)).get_data()  # รูปแบบเดียวกับ jsonify ทุกไบต์
+        packed = gzip.compress(raw, compresslevel=6)
+        etag = hashlib.sha1(packed).hexdigest()
+        with _videos_cache_lock:
+            _videos_cache.pop(username, None)
+            _videos_cache[username] = (key, packed, etag)
+            while len(_videos_cache) > VIDEOS_CACHE_MAX:
+                _videos_cache.pop(next(iter(_videos_cache)))
+    if "gzip" in request.headers.get("Accept-Encoding", "").lower():
+        resp = Response(packed, mimetype="application/json")
+        resp.headers["Content-Encoding"] = "gzip"
+        resp.vary.add("Accept-Encoding")
+    else:
+        resp = Response(gzip.decompress(packed), mimetype="application/json")
+    resp.set_etag(etag, weak=True)  # หลัง after_request ไม่คำนวณ ETag จากข้อมูลทั้งก้อนซ้ำ
+    return resp
 
 
 @app.route("/api/videos", methods=["POST"])
