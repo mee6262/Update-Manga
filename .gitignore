@@ -24,3 +24,4 @@ webapp/data/playlist_watch.json
 webapp/data/requests.json
 webapp/data/comments.json
 webapp/data/activity.json
+webapp/data/image_domains.json
