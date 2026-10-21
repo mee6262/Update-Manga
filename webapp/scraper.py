@@ -13,6 +13,7 @@ import time
 from urllib.parse import urljoin, urlparse
 
 import requests
+import urllib3
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 
@@ -148,33 +149,51 @@ def mark_host_down(url: str):
 # ทุกคำขอไปเว็บนั้นจะค้างรอพร้อมกันหมด เช่นหน้าแรกมีปก 10 เรื่องจากเว็บที่ล่ม = ยึด thread 10 ตัว
 # ถ้ามีคำขอก่อนหน้ารอมานานเกินกำหนดแล้วยังไม่ได้คำตอบ คำขอใหม่ไปเว็บเดียวกันให้ยอมแพ้ทันที
 STALL_SECONDS = 4
-_awaiting: dict[str, list[float]] = {}
+_awaiting: dict[str, list["awaiting_response"]] = {}
 _awaiting_lock = threading.Lock()
 
 
-def host_is_stalled(url: str) -> bool:
+def host_is_stalled(url: str, limit: float | None = None) -> bool:
+    """มีคำขอไปเว็บนี้ค้างเกินเพดานของตัวเอง (หรือเกิน limit ถ้าระบุ)"""
     now = time.monotonic()
     with _awaiting_lock:
-        return any(now - t > STALL_SECONDS for t in _awaiting.get(_host_key(url), ()))
+        return any(now - a.started > (a.limit if limit is None else limit) for a in _awaiting.get(_host_key(url), ()))
 
 
 class awaiting_response:
-    """ครอบช่วงที่รอ header จากเว็บ (with scraper.awaiting_response(url): resp = session().get(...))"""
+    """ครอบช่วงที่รอเว็บ (with scraper.awaiting_response(url): resp = session().get(...)) — ค้างเกิน limit วิ
+    = เว็บนั้นช้า คำขอใหม่ไปเว็บเดียวกันยอมแพ้ทันที ปกติครอบแค่ช่วงรอ header (4 วิ) ส่วนพร็อกซีรูปครอบทั้งคำขอ
+    รวมช่วงอ่านไฟล์ด้วยเพดานที่ยาวกว่า เพราะเว็บที่หยดข้อมูลทีละนิดตอบ header ทันทีแต่ยึด thread ตอนอ่านไฟล์"""
 
-    def __init__(self, url: str):
-        self.key, self.started = _host_key(url), time.monotonic()
+    def __init__(self, url: str, limit: float = STALL_SECONDS):
+        self.key, self.limit, self.started = _host_key(url), limit, time.monotonic()
 
     def __enter__(self):
         with _awaiting_lock:
-            _awaiting.setdefault(self.key, []).append(self.started)
+            _awaiting.setdefault(self.key, []).append(self)
 
     def __exit__(self, *exc):
         with _awaiting_lock:
             waiting = _awaiting.get(self.key, [])
-            if self.started in waiting:
-                waiting.remove(self.started)
+            if self in waiting:
+                waiting.remove(self)
             if not waiting:
                 _awaiting.pop(self.key, None)
+
+
+# จำนวนคำขอพร้อมกันต่อเว็บ — กันเว็บช้าเว็บเดียวยึด thread ของ waitress (16 ตัว) จนหมด
+_host_slots: dict[str, threading.BoundedSemaphore] = {}
+_host_slots_lock = threading.Lock()
+
+
+def host_slots(url: str, limit: int) -> threading.BoundedSemaphore:
+    with _host_slots_lock:
+        return _host_slots.setdefault(_host_key(url), threading.BoundedSemaphore(limit))
+
+
+def is_slow_read(exc: Exception) -> bool:
+    """อ่านเนื้อหาไม่ทันเวลา: เกินเพดานรวมของ read_limited หรือรอข้อมูลก้อนถัดไปเกิน timeout (urllib3 ไม่ห่อเป็น requests)"""
+    return isinstance(exc, (requests.Timeout, urllib3.exceptions.ReadTimeoutError))
 
 
 def is_outage(exc: Exception) -> bool:

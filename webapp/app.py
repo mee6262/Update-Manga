@@ -4862,7 +4862,16 @@ COVER_WIDTHS = {120, 400}
 # (เชื่อมต่อ, รอข้อมูล) วินาที — เชื่อมต่อไม่ได้ใน 5 วิแปลว่าเว็บล่ม ไม่ต้องรอนาน ส่วนรอข้อมูล 10 วิเผื่อ
 # CDN ที่ช้าจริง ๆ แต่ไม่รอครบ 20 วิแบบ Cloudflare 522 (ซึ่งจะถูกจำว่าล่มหลังครั้งแรกอยู่แล้ว)
 IMAGE_TIMEOUT = (5, 10)
-IMAGE_STREAM_MAX_SECONDS = 60
+# เพดานอ่านทั้งรูป: วัดจริง (ต.ค. 2026) รูปตอนละ 0.2–1 MB ใช้ 0.15–0.6 วิ — เดิม 60 วิ เว็บที่หยดข้อมูล
+# (21 ต.ค. img3.flash-manga.com) ยึด thread ไว้รูปละ 60 วิ ครบ 16 ตัวจนเว็บค้างทั้งเว็บ
+IMAGE_STREAM_MAX_SECONDS = 20
+# ทั้งคำขอ (header + อ่านไฟล์) เกินนี้ = เว็บรูปนั้นช้า คำขอใหม่ไปเว็บเดียวกันได้ 502 ทันที
+IMAGE_STALL_SECONDS = 10
+# พร็อกซีรูปพร้อมกันต่อเว็บ (จาก 16 thread) ที่เหลือรอคิวได้ไม่เกิน IMAGE_SLOT_WAIT วิ — วัดใน sandbox
+# (เปิด 80 รูปพร้อมกัน รูปละ 0.6 วิ): 6 ช่อง รูปสุดท้าย 8.4 วิ, 10 ช่อง 4.7 วิ, ไม่จำกัด 2.9 วิ
+# เว็บหยดข้อมูล 40 รูป: /healthz ช้าสุด 3.2 วิ ที่ 10 ช่อง (ไม่จำกัด = ไม่ตอบเลยเกิน 90 วิ)
+IMAGE_HOST_SLOTS = 10
+IMAGE_SLOT_WAIT = 15
 MAX_RESIZE_BYTES = 25 * 1024 * 1024  # รูปใหญ่เกินนี้ไม่ย่อ (กันโหลดทั้งก้อนเข้าหน่วยความจำ)
 
 IMAGE_HEADERS = {
@@ -4922,6 +4931,64 @@ def _resize_cover(raw: bytes, width: int) -> bytes | None:
         return None
 
 
+def _fetch_image(src: str, netloc: str) -> tuple[bytes, str, tuple[str, int] | None]:
+    """ดึงรูปจากเว็บต้นทาง คืน (body, content_type, None) หรือ (b"", "", (ข้อความ, สถานะ)) ถ้าพลาด"""
+    # คิวต่อเว็บ: เว็บช้าเว็บเดียวยึดได้ไม่เกิน IMAGE_HOST_SLOTS thread ส่วนคำขอที่รอคิวก็ยึด thread อยู่เหมือนกัน
+    # จึงยอมแพ้ทันทีที่คำขอที่กำลังวิ่งไปเว็บนั้นค้างเกิน STALL_SECONDS (รูปปกติไม่ถึง 1 วิ) ไม่ต้องรอถึง IMAGE_STALL_SECONDS
+    slots = scraper.host_slots(src, IMAGE_HOST_SLOTS)
+    give_up_at = time.monotonic() + IMAGE_SLOT_WAIT
+    while not slots.acquire(timeout=0.5):
+        if scraper.host_is_down(src) or scraper.host_is_stalled(src, scraper.STALL_SECONDS):
+            return b"", "", ("source host is down", 502)
+        if time.monotonic() > give_up_at:
+            return b"", "", ("source host busy", 503)
+    try:
+        if scraper.host_is_down(src) or scraper.host_is_stalled(src):
+            return b"", "", ("source host is down", 502)
+        with scraper.awaiting_response(src, IMAGE_STALL_SECONDS):
+            try:
+                with scraper.awaiting_response(src):
+                    resp = scraper.session().get(
+                        src,
+                        headers={
+                            "User-Agent": scraper.HEADERS["User-Agent"],
+                            "Referer": f"https://{netloc}/",
+                        },
+                        timeout=IMAGE_TIMEOUT,
+                        stream=True,
+                    )
+                resp.raise_for_status()
+            except Exception as e:
+                # จำไว้ว่าเซิร์ฟเวอร์รูปนี้ล่ม หน้าอ่านจะได้ขอรายการรูปใหม่จากแหล่งสำรองแทน (ดู get_chapter)
+                if scraper.is_outage(e):
+                    scraper.mark_host_down(src)
+                return b"", "", (f"fetch failed: {e}", 502)
+
+            # อ่านทั้งรูปให้ครบก่อนค่อยส่ง (เดิมส่งต่อทีละก้อน) — เว็บต้นทางค้างกลางรูป/ตัดการส่ง หน้าอ่านได้รูปครึ่งเดียว
+            # พร้อมสถานะ 200 (Safari วาดครึ่งบนแล้วขาว ไม่ลองใหม่) ตอนนี้ไม่ครบ = 502 หน้าเว็บโหลดรูปนั้นใหม่เอง
+            # ตัดกลางรูปไม่นับว่าเว็บล่ม (แค่รูปนี้รูปเดียว) แต่อ่านไม่ทันเวลา = เว็บหยดข้อมูล นับว่าล่ม หน้าอ่านจะสลับแหล่ง
+            try:
+                body = scraper.read_limited(resp, IMAGE_STREAM_MAX_SECONDS, MAX_RESIZE_BYTES)
+            except Exception as e:
+                if scraper.is_slow_read(e):
+                    scraper.mark_host_down(src)
+                return b"", "", (f"fetch failed: {e}", 502)
+    finally:
+        slots.release()
+
+    expected = resp.headers.get("Content-Length") or ""
+    if expected.isdigit() and not resp.headers.get("Content-Encoding") and len(body) < int(expected):
+        print(f"⚠️ รูปมาไม่ครบ {len(body)}/{expected} ไบต์: {src}")
+        return b"", "", ("incomplete image", 502)
+
+    content_type = resp.headers.get("Content-Type", "image/jpeg")
+    if not content_type.lower().startswith("image/"):
+        # โดเมนที่อนุญาตรวมถึงตัวเว็บมังงะเองด้วย กันไม่ให้ใช้ proxy นี้เสิร์ฟหน้า HTML/สคริปต์ของเว็บอื่น
+        # ภายใต้โดเมนเรา (แท็ก <img> ยังแสดงรูปได้ปกติ แม้ CDN บางเจ้าจะส่ง type มาไม่ตรง)
+        content_type = "application/octet-stream"
+    return body, content_type, None
+
+
 @app.route("/api/img")
 def proxy_image():
     src = request.args.get("src")
@@ -4969,41 +5036,9 @@ def proxy_image():
     if scraper.host_is_down(src) or scraper.host_is_stalled(src):
         return "source host is down", 502
 
-    try:
-        with scraper.awaiting_response(src):
-            resp = scraper.session().get(
-                src,
-                headers={
-                    "User-Agent": scraper.HEADERS["User-Agent"],
-                    "Referer": f"https://{netloc}/",
-                },
-                timeout=IMAGE_TIMEOUT,
-                stream=True,
-            )
-        resp.raise_for_status()
-    except Exception as e:
-        # จำไว้ว่าเซิร์ฟเวอร์รูปนี้ล่ม หน้าอ่านจะได้ขอรายการรูปใหม่จากแหล่งสำรองแทน (ดู get_chapter)
-        if scraper.is_outage(e):
-            scraper.mark_host_down(src)
-        return f"fetch failed: {e}", 502
-
-    content_type = resp.headers.get("Content-Type", "image/jpeg")
-    if not content_type.lower().startswith("image/"):
-        # โดเมนที่อนุญาตรวมถึงตัวเว็บมังงะเองด้วย กันไม่ให้ใช้ proxy นี้เสิร์ฟหน้า HTML/สคริปต์ของเว็บอื่น
-        # ภายใต้โดเมนเรา (แท็ก <img> ยังแสดงรูปได้ปกติ แม้ CDN บางเจ้าจะส่ง type มาไม่ตรง)
-        content_type = "application/octet-stream"
-
-    # อ่านทั้งรูปให้ครบก่อนค่อยส่ง (เดิมส่งต่อทีละก้อน) — เว็บต้นทางค้างกลางรูป/ตัดการส่ง หน้าอ่านได้รูปครึ่งเดียว
-    # พร้อมสถานะ 200 (Safari วาดครึ่งบนแล้วขาว ไม่ลองใหม่) ตอนนี้ไม่ครบ = 502 หน้าเว็บโหลดรูปนั้นใหม่เอง
-    # (พลาดตอนกลางรูปไม่นับว่าเว็บล่ม — เว็บยังตอบอยู่ แค่รูปนี้รูปเดียว)
-    try:
-        body = scraper.read_limited(resp, IMAGE_STREAM_MAX_SECONDS, MAX_RESIZE_BYTES)
-    except Exception as e:
-        return f"fetch failed: {e}", 502
-    expected = resp.headers.get("Content-Length") or ""
-    if expected.isdigit() and not resp.headers.get("Content-Encoding") and len(body) < int(expected):
-        print(f"⚠️ รูปมาไม่ครบ {len(body)}/{expected} ไบต์: {src}")
-        return "incomplete image", 502
+    body, content_type, error = _fetch_image(src, netloc)
+    if error:
+        return error
 
     if tiles is not None:
         body = _unscramble_tiles(body, tiles)
