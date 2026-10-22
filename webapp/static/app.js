@@ -1965,7 +1965,29 @@ function viewportLooksStale() {
 let viewportFixing = false;
 let viewportFailures = 0; // แก้แล้วไม่หายติดกัน — ตัวจับเวลาหยุดลองที่ 3 (event จริงยังเช็คได้)
 let viewportLogs = 0; // แก้ไม่หาย = ทุกการเลื่อนจะเช็คซ้ำ — ส่ง log ไม่เกิน 5 ครั้งต่อการเปิดหน้า
+// รูป loading="lazy" ไม่โหลดทั้งหน้า (22 ต.ค. 21:07): ล็อกจอระหว่างดูคลิป Facebook เต็มจอ → ปลดล็อก → กลับหน้าวิดีโอ
+// การ์ดทุกใบเป็นกรอบเทา ทั้งรูปจาก YouTube และจากเซิร์ฟเวอร์เรา (เซิร์ฟเวอร์ไม่มี error) — ตัวกะระยะ lazy ของ Safari
+// ค้างตามขนาดจอตอนเต็มจอ เต็มจอใน iframe ไม่ยิง event ให้หน้าเว็บรู้ → รูปที่อยู่ในจอแต่ยังไม่โหลด 2 รอบติด = สั่งโหลดเลย
+let lazyWaiting = new WeakSet();
+let lazyKickLogs = 0;
+function kickLazyImages() {
+  const h = window.innerHeight;
+  const seen = new WeakSet();
+  let kicked = 0;
+  for (const img of document.querySelectorAll('img[loading="lazy"]')) {
+    if (img.complete || !img.getAttribute("src")) continue;
+    const r = img.getBoundingClientRect();
+    if (!r.width || r.bottom < -h || r.top > h * 2) continue; // ซ่อนอยู่/ไกลจอ ปล่อย lazy ตามปกติ
+    if (lazyWaiting.has(img)) { img.loading = "eager"; kicked++; } else seen.add(img);
+  }
+  lazyWaiting = seen;
+  if (kicked && lazyKickLogs++ < 3) {
+    try { navigator.sendBeacon?.("/api/client-log", JSON.stringify({ kind: "viewport", lazyKicked: kicked, after: viewportSnapshot() })); } catch (e) { /* log ไม่สำคัญ */ }
+  }
+}
+
 function checkBottomNav(fromTimer = false) {
+  if (!document.hidden) kickLazyImages();
   if (document.hidden || viewportFixing || (fromTimer === true && viewportFailures >= 3)) return;
   const nav = el(".bottom-nav");
   if (!nav || getComputedStyle(nav).display === "none") return;
