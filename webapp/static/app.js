@@ -1987,7 +1987,7 @@ function kickLazyImages() {
 }
 
 function checkBottomNav(fromTimer = false) {
-  if (!document.hidden) kickLazyImages();
+  if (!document.hidden) { pinBottomNav(); kickLazyImages(); }
   if (document.hidden || viewportFixing || (fromTimer === true && viewportFailures >= 3)) return;
   const nav = el(".bottom-nav");
   if (!nav || getComputedStyle(nav).display === "none") return;
@@ -2031,12 +2031,31 @@ function pinBottomNav() {
     shift = Math.round(window.innerHeight - natural);
     if (Math.abs(shift) <= 2) shift = 0;
   }
+  // ค้างแบบนี้ Safari ก็คิดว่าจออยู่หัวเอกสาร → การ์ด content-visibility:auto ข้างล่างไม่ถูกวาด (กรอบขาวทั้งหน้า 23 ต.ค. 03:24)
+  document.documentElement.classList.toggle("vp-stuck", !!shift || !!(vv && vv.height <= 0));
   if (shift === navShift) return;
   navShift = shift;
   nav.style.transform = shift ? `translateY(${shift}px)` : "";
 }
 function schedulePinBottomNav() {
   if (!navShiftFrame) navShiftFrame = requestAnimationFrame(pinBottomNav);
+  if (navShift || document.documentElement.classList.contains("vp-stuck")) followScroll();
+}
+// ตอนค้าง เมนูถูกเลื่อนไปกับเนื้อหาโดย Safari แต่ event scroll ระหว่างเหวี่ยงนิ้วมาไม่ครบ
+// (log 03:24: shift 100 ค้างอยู่ขณะ scrollY 64 → เมนูจมใต้ขอบจอ 36 px) → วัดใหม่ทุกเฟรมจนหยุดนิ่ง 0.5 วิ
+let followFrame = 0;
+function followScroll() {
+  if (followFrame) return;
+  let lastY = -1;
+  let still = 0;
+  const step = () => {
+    pinBottomNav();
+    const y = window.scrollY;
+    still = y === lastY ? still + 1 : 0;
+    lastY = y;
+    followFrame = still < 30 ? requestAnimationFrame(step) : 0;
+  };
+  followFrame = requestAnimationFrame(step);
 }
 
 function viewportSnapshot() {
@@ -2059,6 +2078,9 @@ function initFixedLayoutGuard() {
     window.visualViewport.addEventListener("scroll", schedulePinBottomNav);
   }
   window.addEventListener("scroll", later, { passive: true });
+  // นิ้วแตะจอ = ตามทุกเฟรมเสมอ (ไม่ต้องรอให้ตรวจว่าค้างก่อน — เฟรมแรกของการเหวี่ยงก็ไม่หลุด)
+  window.addEventListener("touchmove", followScroll, { passive: true });
+  window.addEventListener("touchend", followScroll, { passive: true });
   document.addEventListener("focusout", later);
   document.addEventListener("visibilitychange", later);
   window.addEventListener("pageshow", later);

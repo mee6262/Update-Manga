@@ -1616,3 +1616,6 @@ button.vc-grow { background: none; border: 0; padding: 0; text-align: left; font
 .checkbox-label[hidden] { display: none; }
 #mangaFormFollowWrap { margin-top: 12px; }
 #mangaFormFollowWrap input { width: 18px; height: 18px; flex: none; accent-color: var(--accent); }
+
+/* Safari ค้าง viewport (vp-stuck จาก app.js): มันคิดว่าจออยู่หัวเอกสาร → การ์ดข้างล่างถูกข้ามการวาดเป็นกรอบขาว */
+html.vp-stuck .manga-card, html.vp-stuck .history-row { content-visibility: visible; }
