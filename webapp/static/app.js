@@ -1971,6 +1971,7 @@ function checkBottomNav(fromTimer = false) {
   if (!nav || getComputedStyle(nav).display === "none") return;
   const active = document.activeElement;
   if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return; // คีย์บอร์ดยังเปิด
+  pinBottomNav();
   if (!viewportLooksStale()) { viewportFailures = 0; return; }
   const before = viewportSnapshot();
   viewportFixing = true;
@@ -1989,11 +1990,39 @@ function checkBottomNav(fromTimer = false) {
   }, 300);
 }
 
+// ตัวชดเชย: log 22 ต.ค. — Safari ค้างสถานะที่ visualViewport.offsetTop = scrollY (vv.height ติดลบ -59)
+// เมนู position:fixed เลยเลื่อนตามเนื้อหา (ล่างเมนู = innerHeight - scrollY) และ fixFixedLayout แก้ไม่หาย
+// → วัดตำแหน่งจริงทุกครั้งที่เลื่อน แล้ว translateY ให้ขอบล่างกลับมาชิดจอ (ปกติ delta = 0 ไม่แตะ style)
+let navShift = 0;
+let navShiftFrame = 0;
+function pinBottomNav() {
+  navShiftFrame = 0;
+  const nav = el(".bottom-nav");
+  if (!nav) return;
+  const active = document.activeElement;
+  const typing = active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName); // คีย์บอร์ดเปิด: innerHeight ไม่หดตาม
+  const vv = window.visualViewport;
+  const zoomed = vv && Math.abs(vv.scale - 1) > 0.01;
+  let shift = 0;
+  if (!typing && !zoomed && getComputedStyle(nav).display !== "none") {
+    const natural = nav.getBoundingClientRect().bottom - navShift;
+    shift = Math.round(window.innerHeight - natural);
+    if (Math.abs(shift) <= 2) shift = 0;
+  }
+  if (shift === navShift) return;
+  navShift = shift;
+  nav.style.transform = shift ? `translateY(${shift}px)` : "";
+}
+function schedulePinBottomNav() {
+  if (!navShiftFrame) navShiftFrame = requestAnimationFrame(pinBottomNav);
+}
+
 function viewportSnapshot() {
   const vv = window.visualViewport;
   return {
     inner: [window.innerWidth, window.innerHeight], screen: [screen.width, screen.height],
-    vv: vv ? [Math.round(vv.width), Math.round(vv.height), Math.round(vv.offsetTop)] : null,
+    vv: vv ? [Math.round(vv.width), Math.round(vv.height), Math.round(vv.offsetTop), Math.round(vv.scale * 100) / 100] : null,
+    shift: navShift,
     nav: Math.round(el(".bottom-nav").getBoundingClientRect().bottom), y: Math.round(window.scrollY),
     tab: document.querySelector(".nav-item.active")?.dataset.tab || "",
   };
@@ -2001,9 +2030,12 @@ function viewportSnapshot() {
 
 function initFixedLayoutGuard() {
   let t = null;
-  const later = () => { clearTimeout(t); t = setTimeout(checkBottomNav, 150); };
+  const later = () => { schedulePinBottomNav(); clearTimeout(t); t = setTimeout(checkBottomNav, 150); };
   window.addEventListener("resize", later);
-  if (window.visualViewport) window.visualViewport.addEventListener("resize", later);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", later);
+    window.visualViewport.addEventListener("scroll", schedulePinBottomNav);
+  }
   window.addEventListener("scroll", later, { passive: true });
   document.addEventListener("focusout", later);
   document.addEventListener("visibilitychange", later);
