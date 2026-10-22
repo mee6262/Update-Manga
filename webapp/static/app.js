@@ -868,7 +868,7 @@ function renderLibrary() {
   const saved = videoTab === "saved";
   el("#historySearch").hidden = saved;
   el("#libraryEditBtn").hidden = !saved;
-  el("#libraryEditBtn").textContent = libraryEditing ? "เสร็จ" : "แก้ไข";
+  el("#libraryEditBtn").textContent = libraryEditing ? "เสร็จ" : "เอาออก";
   el("#libraryBody").innerHTML = saved ? savedLibraryHtml() : historyHtml();
 }
 
@@ -904,7 +904,8 @@ function savedLibraryHtml() {
       <span class="lib-info"><span class="mm-name">${escapeHtml(ep ? `${name} · ${ep}` : name)}</span>${pos > 0 && dur > 0 ? `<span class="lib-bar"><span style="width:${Math.min(100, (pos / dur) * 100).toFixed(1)}%"></span></span>` : ""}<span class="mm-meta">${meta}</span></span>
       ${libraryEditing ? "" : '<span class="lib-play" aria-hidden="true">▶</span>'}</button>`;
   }).join("");
-  const remove = libraryEditing ? `<button class="btn danger lib-remove" data-lib-remove${librarySelected.size ? "" : " disabled"}>เอาออกจากคลัง (${librarySelected.size})</button>` : "";
+  // ปุ่มลอยติดล่างจอ — เดิมอยู่ท้ายรายการ คลังยาวแล้วต้องเลื่อนลงสุดถึงเจอ (ผู้ใช้นึกว่าไม่มีปุ่มเลิกติดตาม)
+  const remove = libraryEditing ? `<button class="btn danger lib-remove" data-lib-remove${librarySelected.size ? "" : " disabled"}>${librarySelected.size ? `เอาออกจากคลัง (${librarySelected.size})` : "แตะเลือกเรื่อง/คลิปที่จะเอาออก"}</button>` : "";
   return `${lists.length ? `<h2 class="section-title">เรื่องที่บันทึก · ${lists.length}</h2><div class="lib-grid">${cards}</div>` : ""}
     ${clips.length ? `<h2 class="section-title">คลิปที่บันทึก · ${clips.length}</h2><div class="lib-list">${rows}</div>` : ""}${remove}`;
 }
