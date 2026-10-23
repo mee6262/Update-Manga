@@ -21,7 +21,11 @@ ATTEMPTS = 2  # camoufox สุ่มลายนิ้วมือใหม่�
 
 def solve(url: str) -> dict:
     host = urlparse(url).hostname or ""
-    with Camoufox(headless=True) as browser:
+    # VPS 2 CPU / RAM 4 GB: Firefox ปกติแตกหลาย process + โหลดรูปทั้งหน้า → เว็บเราตอบ healthz ช้าสุด 23.6 วิ ระหว่างแก้
+    # ไม่โหลดรูป + content process เดียว (หน้าตรวจไม่ต้องใช้รูป)
+    with Camoufox(headless=True, block_images=True, i_know_what_im_doing=True,
+                  firefox_user_prefs={"dom.ipc.processCount": 1, "fission.autostart": False,
+                                      "browser.cache.disk.enable": False}) as browser:
         page = browser.new_page()
         ua = page.evaluate("navigator.userAgent")  # อ่านก่อนเปิดเว็บ: ผ่านหน้าตรวจแล้วหน้าเปลี่ยน evaluate พัง
         page.goto(url, wait_until="domcontentloaded", timeout=45000)

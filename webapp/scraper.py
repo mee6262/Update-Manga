@@ -202,7 +202,9 @@ def _run_cf_solver(url: str):
         proc = subprocess.run(
             [sys.executable, str(Path(__file__).with_name("cf_solve.py")), url],
             capture_output=True, text=True, encoding="utf-8", timeout=CF_SOLVE_TIMEOUT,
-            stdin=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            stdin=subprocess.DEVNULL,
+            # priority ต่ำ (Firefox ลูกได้ตาม): VPS 2 CPU — ทดสอบ camoufox ติดกันแล้วเว็บไม่ตอบ healthz 1 ครั้ง (23 ต.ค. 22:32)
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0),
         )
         if proc.returncode != 0:
             lines = (proc.stderr or "").strip().splitlines()
