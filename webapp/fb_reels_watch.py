@@ -22,7 +22,14 @@ def stage(text: str):
     print(f"[{time.strftime('%H:%M:%S')}] {text}", file=sys.stderr, flush=True)
 
 
+def reels_tab_url(page_url: str) -> str:
+    # facebook.com/<เลขไอดี>/reels/ ตอนไม่ล็อกอินได้หน้าว่าง (0 ลิงก์) แต่ profile.php?id=...&sk=reels_tab ได้ครบ 10 คลิป
+    match = re.match(r"https?://(?:www\.|m\.)?facebook\.com/(\d{6,})/reels/?(?:[?#].*)?$", page_url.strip())
+    return f"https://www.facebook.com/profile.php?id={match.group(1)}&sk=reels_tab" if match else page_url
+
+
 def newest_reels(page_url: str) -> list[str]:
+    page_url = reels_tab_url(page_url)
     stage("เริ่ม playwright")
     with sync_playwright() as p:
         stage("เปิด Chromium")
