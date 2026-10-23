@@ -3232,6 +3232,7 @@ function renderAdminEntry(info) {
 async function renderAdminOverview(force = false) {
   const info = await computeAdminTasks(force);
   renderAdminEntry(info);
+  renderSettings(); // สถานะเว็บต้นทางมาแล้ว → ป้ายสีแหล่งที่มาในรายการมังงะ
   if (settingsPane() !== "page") return;
   el("#adminTaskCount").textContent = info.tasks.length ? ` · ${info.tasks.length}` : "";
   el("#adminTasks").innerHTML = info.tasks.map((t) => `<div class="admin-task ${t.tone}">
@@ -3996,56 +3997,60 @@ const ICON_DELETE =
   '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 6h18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><line x1="10" y1="11" x2="10" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="11" x2="14" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
 let lastSettingsSignature = null;
-let mangaAdminFilter = "all"; // all / problem (ดึงไม่สำเร็จทุกแหล่ง) / nocat (ไม่มีหมวด)
+let mangaAdminFilter = "all"; // all / problem (ดึงไม่สำเร็จทุกแหล่ง) / nocat (ไม่มีหมวด) / single (ไม่มีแหล่งสำรอง) / host:<เว็บ>
+const MANGA_FILTER_LABELS = { all: "ทั้งหมด", problem: "มีปัญหา", nocat: "ไม่มีหมวด", single: "ไม่มีแหล่งสำรอง" };
 
 function renderSettings() {
   const list = el("#settingsList");
-  const problems = state.catalog.filter((m) => m.refresh_error).length;
-  const nocat = state.catalog.filter((m) => !(m.categories || []).length).length;
+  const hosts = hostStatusMap();
+  const bad = (m) => m.refresh_error || mangaHasBadHost(m, hosts);
+  const counts = {
+    all: state.catalog.length, problem: state.catalog.filter(bad).length,
+    nocat: state.catalog.filter((m) => !(m.categories || []).length).length,
+    single: state.catalog.filter((m) => mangaHosts(m).length < 2).length,
+  };
   els("[data-manga-filter]").forEach((b) => {
     b.classList.toggle("active", b.dataset.mangaFilter === mangaAdminFilter);
-    const n = { all: state.catalog.length, problem: problems, nocat }[b.dataset.mangaFilter];
-    b.textContent = `${{ all: "ทั้งหมด", problem: "มีปัญหา", nocat: "ไม่มีหมวด" }[b.dataset.mangaFilter]} ${n}`;
+    if (MANGA_FILTER_LABELS[b.dataset.mangaFilter]) b.textContent = `${MANGA_FILTER_LABELS[b.dataset.mangaFilter]} ${counts[b.dataset.mangaFilter]}`;
   });
-  // host:<เว็บ> = มาจากการ์ด "เว็บนี้ดึงไม่ได้" ในภาพรวม — ชิปชั่วคราวบอกว่ากรองอยู่ แตะ "ทั้งหมด" เพื่อล้าง
+  // host:<เว็บ> = มาจากการ์ดเว็บล่มในภาพรวม / แตะชื่อเว็บ — ชิปชั่วคราวบอกว่ากรองอยู่ แตะเพื่อล้าง
   const hostFilter = mangaAdminFilter.startsWith("host:") ? mangaAdminFilter.slice(5) : "";
   let hostChip = el("#mangaAdminFilters [data-manga-filter^='host:']");
   if (hostFilter && !hostChip) el("#mangaAdminFilters").appendChild(hostChip = Object.assign(document.createElement("button"), { className: "video-chip active" }));
   if (hostChip) {
-    if (hostFilter) { hostChip.dataset.mangaFilter = mangaAdminFilter; hostChip.textContent = `🌐 ${hostFilter.replace(/^www\./, "")} ✕`; } else hostChip.remove();
+    if (hostFilter) { hostChip.dataset.mangaFilter = mangaAdminFilter; hostChip.classList.add("active"); hostChip.textContent = `🌐 ${hostFilter.replace(/^www\./, "")} ✕`; } else hostChip.remove();
   }
-  const items = state.catalog.filter((m) => mangaAdminFilter === "problem" ? m.refresh_error
+  const items = state.catalog.filter((m) => mangaAdminFilter === "problem" ? bad(m)
     : mangaAdminFilter === "nocat" ? !(m.categories || []).length
+    : mangaAdminFilter === "single" ? mangaHosts(m).length < 2
     : hostFilter ? mangaHosts(m).includes(hostFilter) : true);
-  const signature = JSON.stringify([mangaAdminFilter, Math.floor(Date.now() / 600000), items.map((m) => [m.id, m.name, m.source, m.latest_chapter, m.cover_url, (m.sources || []).length, m.refresh_error, m.last_checked_at])]);
+  // เรื่องที่มีปัญหาขึ้นก่อน (แยกหัวข้อ) ที่เหลือเรียงชื่อเหมือนเดิม
+  const problemItems = items.filter(bad);
+  const okItems = items.filter((m) => !bad(m));
+  const signature = JSON.stringify([mangaAdminFilter, Math.floor(Date.now() / 600000), Object.values(hosts).map((h) => [h.host, h.down, h.error]),
+    items.map((m) => [m.id, m.name, m.latest_chapter, m.cover_url, (m.sources || []).length, m.refresh_error, m.last_checked_at, m.followers, (m.categories || []).length])]);
   if (signature === lastSettingsSignature) return;
   lastSettingsSignature = signature;
 
-  list.innerHTML = items
-    .map((m) => {
-      const sourceCount = (m.sources || []).length;
-      const sourceLabel =
-        sourceCount > 1 ? `${escapeHtml(m.source)} +${sourceCount - 1} แหล่ง` : escapeHtml(m.source);
-      const status = m.refresh_error
-        ? `<span class="status-dot bad"></span><span class="status-bad">ดึงไม่สำเร็จทุกแหล่ง ตั้งแต่ ${timeAgo(m.refresh_error.since || m.refresh_error.at, "เมื่อสักครู่")}</span>`
-        : `<span class="status-dot ok"></span>${m.last_checked_at ? `เช็ค ${timeAgo(m.last_checked_at, "เมื่อสักครู่")}` : "ยังไม่เคยเช็ค"}`;
-      return `
-        <li class="settings-row" data-id="${escapeHtml(m.id)}">
+  const row = (m) => {
+    const status = m.refresh_error
+      ? `<span class="status-bad">ดึงไม่สำเร็จทุกแหล่ง ตั้งแต่ ${timeAgo(m.refresh_error.since || m.refresh_error.at, "เมื่อสักครู่")}</span>`
+      : m.last_checked_at ? `เช็ค ${timeAgo(m.last_checked_at, "เมื่อสักครู่")}` : "ยังไม่เคยเช็ค";
+    return `
+        <li class="settings-row tappable" data-id="${escapeHtml(m.id)}">
           <img src="${proxied(m.cover_url, THUMB_WIDTH)}" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0" />
           <div class="grow">
             <div class="name">${escapeHtml(m.name)}</div>
-            <div class="meta">${sourceLabel} — ${m.latest_chapter ? escapeHtml(m.latest_chapter) : "-"}</div>
-            <div class="meta row-status">${status}</div>
+            <div class="meta">${m.latest_chapter ? escapeHtml(m.latest_chapter) : "-"} · ${status}${m.followers ? ` · 👥 ${m.followers}` : ""}${(m.categories || []).length ? "" : ' · <span class="status-warn">ไม่มีหมวด</span>'}</div>
+            <div class="src-pills">${sourcePillsHtml(m, hosts)}</div>
           </div>
-          <button class="icon-btn" data-action="menu" title="ตัวเลือก" aria-label="ตัวเลือก">⋯</button>
-          <div class="row-menu" hidden>
-            <button class="btn" data-action="edit">${ICON_EDIT} แก้ไข</button>
-            <button class="btn" data-action="refresh">${ICON_REFRESH} รีเฟรช</button>
-            <button class="btn danger" data-action="delete">${ICON_DELETE} ลบเรื่อง</button>
-          </div>
+          <span class="chev" aria-hidden="true">›</span>
         </li>`;
-    })
-    .join("") || '<li class="hint">ไม่มีเรื่องตามตัวกรองนี้</li>';
+  };
+  const heading = (text) => `<li class="settings-group-head">${text}</li>`;
+  list.innerHTML = (problemItems.length && okItems.length
+    ? heading(`มีปัญหา · ${problemItems.length}`) + problemItems.map(row).join("") + heading(`ปกติ · ${okItems.length}`) + okItems.map(row).join("")
+    : items.map(row).join("")) || '<li class="hint">ไม่มีเรื่องตามตัวกรองนี้</li>';
 }
 
 function initSettingsClicks() {
@@ -4055,25 +4060,176 @@ function initSettingsClicks() {
     mangaAdminFilter = f.startsWith("host:") ? "all" : f; // ชิปเว็บ = ล้างตัวกรอง
     renderSettings();
   });
+  // แตะแถว = แผ่นรายละเอียด (เดิมเมนู ⋯ แก้ไข/รีเฟรช/ลบ — ย้ายเข้าแผ่นแล้ว)
   el("#settingsList").addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-action]");
-    if (!btn) return;
-    const row = e.target.closest(".settings-row");
-    const id = row.dataset.id;
-    const manga = state.catalog.find((m) => m.id === id);
-    if (!manga) return;
-    if (btn.dataset.action === "menu") {
-      const menu = row.querySelector(".row-menu");
-      const open = menu.hidden;
-      els("#settingsList .row-menu").forEach((m) => { m.hidden = true; });
-      menu.hidden = !open;
-      return;
-    }
-    row.querySelector(".row-menu").hidden = true;
-    if (btn.dataset.action === "refresh") row.querySelector(".row-status").textContent = "กำลังรีเฟรช...";
-    if (btn.dataset.action === "edit") openMangaModal(manga);
-    if (btn.dataset.action === "refresh") refreshOne(id, btn);
-    if (btn.dataset.action === "delete") deleteManga(id, manga.name);
+    const row = e.target.closest(".settings-row[data-id]");
+    if (row) openMangaSheet(row.dataset.id);
+  });
+}
+// ---------- แผ่นรายละเอียดเรื่อง (แอดมิน): ทุกอย่างของเรื่องเดียวในที่เดียว ----------
+// แหล่งที่มา + สถานะรายเว็บ (ล่ม/403/Cloudflare) · เพิ่มแหล่งสำรอง · หมวด (แตะสลับได้เลย) · รีเฟรช/แก้ไข/ลบ/เปิดแบบผู้ใช้
+let mangaSheetId = null;
+
+function hostStatusMap() {
+  return Object.fromEntries((adminTasksCache?.status?.hosts || []).map((h) => [h.host, h]));
+}
+
+function hostState(h) {
+  if (!h) return { tone: "", label: "" };
+  if (h.down) return { tone: "bad", label: "ล่ม" };
+  if (h.error) return { tone: "bad", label: `ดึงไม่ได้ (${h.error})` };
+  if (h.stalled) return { tone: "warn", label: "ตอบช้า" };
+  return { tone: "ok", label: "ปกติ" };
+}
+
+// ป้ายแหล่งที่มาในแถวรายการ: สีตามสถานะเว็บ
+function sourcePillsHtml(m, hosts) {
+  return mangaHosts(m).map((host) => {
+    const st = hostState(hosts[host]);
+    return `<span class="src-pill ${st.tone}">${escapeHtml(host.replace(/^www\./, ""))}${st.tone === "bad" ? ` · ${escapeHtml(st.label)}` : ""}</span>`;
+  }).join("");
+}
+
+function mangaHasBadHost(m, hosts) {
+  return mangaHosts(m).some((h) => hosts[h] && (hosts[h].down || hosts[h].error));
+}
+
+function closeMangaSheet() {
+  mangaSheetId = null;
+  el("#mangaSheet").hidden = true;
+}
+
+function openMangaSheet(id) {
+  const m = state.catalog.find((x) => x.id === id);
+  if (!m) return closeMangaSheet();
+  mangaSheetId = id;
+  const hosts = hostStatusMap();
+  const urls = (m.sources || []).map((s) => s.url).filter(Boolean);
+  const cats = new Set(m.categories || []);
+  const err = m.refresh_error;
+  const sourceRows = urls.map((u, i) => {
+    let host = "";
+    try { host = new URL(u).host.toLowerCase(); } catch (e) { /* ลิงก์เพี้ยน */ }
+    const h = hosts[host];
+    const st = hostState(h);
+    const cf = cfText(h?.cf);
+    const meta = [st.label, cf, h?.last_checked_at ? `เช็ค ${timeAgo(h.last_checked_at, "เมื่อสักครู่")}` : ""].filter(Boolean).join(" · ");
+    return `<div class="ms-row" data-ms-host="${escapeHtml(host)}">
+        <span class="status-dot ${st.tone || "ok"}"></span>
+        <span class="grow"><b>${escapeHtml(host.replace(/^www\./, "") || u)}</b>${i === 0 ? ' <span class="src-pill">หลัก</span>' : ""}<small>${escapeHtml(meta || "ยังไม่มีข้อมูลสถานะ")}</small></span>
+        <button class="icon-btn" data-ms-remove="${i}" title="เอาแหล่งนี้ออก" aria-label="เอาแหล่งนี้ออก"${urls.length < 2 ? " hidden" : ""}>✕</button>
+      </div>`;
+  }).join("");
+  el("#mangaSheetBody").innerHTML = `
+    <div class="ms-head">
+      <img src="${proxied(m.cover_url, THUMB_WIDTH)}" alt="" onerror="this.style.opacity=0" />
+      <div class="grow"><h3>${escapeHtml(m.name)}</h3>
+        <small>${escapeHtml(m.latest_chapter || "-")} · 👥 ${m.followers || 0} คนตาม${m.last_checked_at ? ` · เช็ค ${timeAgo(m.last_checked_at, "เมื่อสักครู่")}` : ""}</small></div>
+    </div>
+    ${err ? `<div class="ms-alert">ดึงไม่สำเร็จทุกแหล่ง ตั้งแต่ ${timeAgo(err.since || err.at, "เมื่อสักครู่")} — เพิ่มแหล่งสำรองจากเว็บอื่นช่วยได้</div>` : ""}
+    <div class="ms-title">แหล่งที่มา <button class="link-btn" data-ms-add-toggle>＋ เพิ่มแหล่งสำรอง</button></div>
+    <div class="ms-group">${sourceRows}</div>
+    <form class="ms-add" data-ms-add hidden>
+      <input type="url" placeholder="ลิงก์หน้าเรื่องจากเว็บอื่น" required />
+      <button type="submit" class="btn primary">เพิ่ม</button>
+    </form>
+    ${state.categories.length ? `<div class="ms-title">หมวดหมู่ <small>แตะเพื่อใส่/เอาออก</small></div>
+    <div class="ms-cats">${state.categories.map((c) => `<button class="video-chip${cats.has(c.id) ? " active" : ""}" data-ms-cat="${escapeHtml(c.id)}">${escapeHtml(c.name)}</button>`).join("")}</div>` : ""}
+    <div class="ms-title">จัดการ</div>
+    <div class="ms-group">
+      <button class="ms-row" data-ms-act="refresh"><span class="set-ic">🔄</span><span class="grow">รีเฟรชเรื่องนี้</span></button>
+      <button class="ms-row" data-ms-act="edit"><span class="set-ic">✏️</span><span class="grow">แก้ชื่อ / ลิงก์ทั้งหมด</span><span class="chev">›</span></button>
+      <button class="ms-row" data-ms-act="open"><span class="set-ic">👁</span><span class="grow">เปิดหน้าเรื่องแบบผู้ใช้</span><span class="chev">›</span></button>
+      <button class="ms-row danger" data-ms-act="delete"><span class="set-ic">🗑</span><span class="grow">ลบเรื่อง</span></button>
+    </div>
+    <div id="mangaSheetMsg" class="form-msg"></div>`;
+  el("#mangaSheet").hidden = false;
+}
+
+async function saveMangaSources(m, urls) {
+  const msg = el("#mangaSheetMsg");
+  msg.className = "form-msg";
+  msg.textContent = "กำลังบันทึกและดึงข้อมูลจากแหล่งใหม่…";
+  const res = await fetch(`/api/manga/${m.id}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: m.name, sources: urls }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    msg.classList.add("error");
+    msg.textContent = data.error || "บันทึกไม่สำเร็จ";
+    return false;
+  }
+  await Promise.all([loadCatalog(), loadManga(), computeAdminTasks(true).catch(() => null)]); // สถานะเว็บล่าสุด (แหล่งใหม่ดึงได้ไหม)
+  renderSettings();
+  if (mangaSheetId === m.id) openMangaSheet(m.id);
+  return true;
+}
+
+async function mangaSheetClick(e) {
+  if (e.target === el("#mangaSheet")) return closeMangaSheet(); // แตะพื้นหลัง
+  const m = state.catalog.find((x) => x.id === mangaSheetId);
+  if (!m) return;
+  const urls = (m.sources || []).map((s) => s.url).filter(Boolean);
+  if (e.target.closest("[data-ms-add-toggle]")) {
+    const form = el("#mangaSheet [data-ms-add]");
+    form.hidden = !form.hidden;
+    if (!form.hidden) form.querySelector("input").focus();
+    return;
+  }
+  const rm = e.target.closest("[data-ms-remove]");
+  if (rm) {
+    const url = urls[Number(rm.dataset.msRemove)];
+    if (!url || !(await askConfirm(`เอา ${requestHost(url)} ออกจากแหล่งที่มาของ "${m.name}"?`))) return;
+    return saveMangaSources(m, urls.filter((u) => u !== url));
+  }
+  const hostRow = e.target.closest("[data-ms-host]");
+  if (hostRow && hostRow.dataset.msHost) {
+    // แตะชื่อเว็บ → เรื่องทั้งหมดที่ใช้เว็บนี้
+    closeMangaSheet();
+    mangaAdminFilter = `host:${hostRow.dataset.msHost}`;
+    return openAdminPage("mangaManage"), renderSettings();
+  }
+  const cat = e.target.closest("[data-ms-cat]");
+  if (cat) {
+    cat.classList.toggle("active");
+    const ids = els("#mangaSheet [data-ms-cat].active").map((b) => b.dataset.msCat);
+    await fetch(`/api/manga/${m.id}/categories`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ category_ids: ids }) });
+    m.categories = ids;
+    adminTasksCache && (adminTasksCache.at = 0);
+    lastSettingsSignature = null;
+    return renderSettings();
+  }
+  const act = e.target.closest("[data-ms-act]")?.dataset.msAct;
+  if (act === "refresh") {
+    const btn = e.target.closest("[data-ms-act]");
+    btn.querySelector(".grow").textContent = "กำลังรีเฟรช…";
+    await refreshOne(m.id, btn);
+    if (mangaSheetId === m.id) openMangaSheet(m.id);
+  } else if (act === "edit") {
+    closeMangaSheet();
+    openMangaModal(m);
+  } else if (act === "open") {
+    closeMangaSheet();
+    openChapterList(m);
+  } else if (act === "delete") {
+    closeMangaSheet();
+    deleteManga(m.id, m.name);
+  }
+}
+
+function initMangaSheet() {
+  el("#mangaSheet").addEventListener("click", mangaSheetClick);
+  el("#mangaSheet").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const m = state.catalog.find((x) => x.id === mangaSheetId);
+    const input = e.target.querySelector("input");
+    const url = input.value.trim();
+    if (!m || !url) return;
+    const urls = (m.sources || []).map((s) => s.url).filter(Boolean);
+    if (urls.includes(url)) { input.value = ""; return; }
+    e.target.querySelector("button").disabled = true;
+    if (await saveMangaSources(m, [...urls, url])) toast(`เพิ่มแหล่งสำรอง ${requestHost(url)} แล้ว`);
+    else e.target.querySelector("button").disabled = false;
   });
 }
 
@@ -6167,10 +6323,10 @@ async function loadSystemStatus() {
       statTile("เรื่อง / คลิป", `${st.counts.manga} / ${st.counts.videos}`),
       statTile("สมาชิก / คอมเมนต์", `${st.counts.users} / ${st.counts.comments}`),
     ].join("");
-    el("#systemHosts").innerHTML = st.hosts.map((h) => `<li class="host-row">
+    el("#systemHosts").innerHTML = st.hosts.map((h) => `<li class="host-row tappable" data-admin-go="mangaManage" data-admin-filter="host:${escapeHtml(h.host)}">
       <span class="host-dot ${h.down || h.error ? "down" : h.stalled ? "stalled" : "ok"}"></span>
       <span class="grow"><b>${escapeHtml(h.host)}</b><br><small>${h.manga} เรื่อง · เช็คล่าสุด ${h.last_checked_at ? timeAgo(h.last_checked_at) : "-"}</small></span>
-      <small>${h.down ? "ล่ม (พัก 10 นาที)" : h.error ? `ดึงไม่ได้ (${escapeHtml(h.error)})` : h.stalled ? "ตอบช้า" : "ปกติ"}${cfLabel(h.cf)}</small></li>`).join("");
+      <small>${h.down ? "ล่ม (พัก 10 นาที)" : h.error ? `ดึงไม่ได้ (${escapeHtml(h.error)})` : h.stalled ? "ตอบช้า" : "ปกติ"}${cfLabel(h.cf)}</small><span class="chev" aria-hidden="true">›</span></li>`).join("");
     const top = (title, rows) => `<div class="top-list"><b>${title}</b><ol>${rows.length ? rows.map((r) => `<li>${escapeHtml(r.name)} <small>(${r.count})</small></li>`).join("") : "<li><small>ยังไม่มีข้อมูล</small></li>"}</ol></div>`;
     el("#systemTop").innerHTML = top("📚 มังงะ (ครั้งที่อ่าน)", stats.top_manga) + top("🎬 คลิป (ครั้งที่เปิด)", stats.top_videos);
     el("#systemErrors").textContent = st.has_logs ? (st.errors.join("\n") || "ไม่มีข้อผิดพลาด 🎉") : "ไม่มีไฟล์ log (ไม่ได้รันผ่าน run_windows.py)";
@@ -7139,6 +7295,7 @@ function goBack() {
   if (!el("#notifPanel").hidden) return toggleNotifPanel(false), true;
   if (!el("#commentSheet").hidden) return closeComments(), true;
   if (!el("#vmSheet").hidden) return closeVmSheet(), true;
+  if (!el("#mangaSheet").hidden) return closeMangaSheet(), true;
   if (!el("#installSheet").hidden) return closeInstallSheet(), true;
   if (!el("#videoFormModal").hidden) return showVideoForm(false), true;
   if (!el("#mangaFormModal").hidden) return closeMangaModal(), true;
@@ -7234,6 +7391,7 @@ function init() {
   initSubTabs();
   initGridClicks();
   initSettingsClicks();
+  initMangaSheet();
   initChapterListClicks();
   initMangaForm();
   initChapterSearch();

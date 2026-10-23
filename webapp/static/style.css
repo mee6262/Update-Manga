@@ -1662,3 +1662,38 @@ html.vp-stuck .manga-card, html.vp-stuck .history-row { content-visibility: visi
 button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%; cursor: pointer; }
 #adminPage.searching #overviewSubview { display: none; }
 #adminPage.searching #requestsManageSubview > .rq-list { display: flex; }
+
+/* เนื้อหา › มังงะ: ป้ายแหล่งที่มาสีตามสถานะเว็บ + หัวข้อมีปัญหา/ปกติ + แตะแถว = แผ่นรายละเอียด */
+.settings-row.tappable, .host-row.tappable { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.settings-row.tappable:active, .host-row.tappable:active { background: var(--bg-card); }
+.settings-row .chev, .host-row .chev { color: var(--text-dim); font-size: 1.2rem; flex: none; }
+.settings-group-head { list-style: none; font-size: 0.8rem; font-weight: 700; color: var(--text-dim); padding: 12px 4px 4px; }
+.status-warn { color: #d4a017; }
+.src-pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.src-pill { font-size: 0.7rem; padding: 1px 7px; border-radius: 6px; background: var(--border); color: var(--text-dim); white-space: nowrap; }
+.src-pill.ok { background: rgba(22, 160, 102, 0.14); color: var(--accent); }
+.src-pill.bad { background: rgba(229, 72, 77, 0.14); color: var(--danger); }
+.src-pill.warn { background: rgba(212, 160, 23, 0.16); color: #c08a0c; }
+/* แผ่นรายละเอียดเรื่อง */
+.manga-sheet { background: var(--bg); }
+.ms-head { display: flex; gap: 12px; align-items: center; }
+.ms-head img { width: 54px; height: 76px; object-fit: cover; border-radius: 8px; background: var(--img-bg); flex: none; }
+.ms-head h3 { margin: 0 0 3px; font-size: 1.1rem; }
+.ms-head small { color: var(--text-dim); font-size: 0.8rem; }
+.ms-alert { margin-top: 12px; background: rgba(229, 72, 77, 0.12); color: var(--danger); border-radius: 10px; padding: 9px 12px; font-size: 0.82rem; }
+.ms-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 0.8rem; font-weight: 700; color: var(--text-dim); margin: 16px 4px 6px; }
+.ms-title small { font-weight: 400; }
+.link-btn { background: none; border: 0; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; padding: 0; }
+.ms-group { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.ms-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 13px; border: 0; border-top: 1px solid var(--border); background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.ms-row:first-child { border-top: 0; }
+.ms-row .grow small { display: block; color: var(--text-dim); font-size: 0.76rem; margin-top: 1px; }
+.ms-row.danger { color: var(--danger); }
+.ms-row .icon-btn[hidden] { display: none; }
+.ms-add { display: flex; gap: 8px; margin-top: 8px; }
+.ms-add[hidden] { display: none; }
+.ms-add input { flex: 1; min-width: 0; background: var(--bg-elevated); border: 1px solid var(--accent); color: var(--text); padding: 9px 12px; border-radius: 10px; font: inherit; font-size: 0.9rem; }
+.ms-cats { display: flex; flex-wrap: wrap; gap: 6px; }
+.ms-row .grow { flex: 1; min-width: 0; }
+.ms-row .chev { color: var(--text-dim); }
+.ms-row .icon-btn { width: 30px; height: 30px; font-size: 0.85rem; border-color: transparent; color: var(--text-dim); flex: none; }

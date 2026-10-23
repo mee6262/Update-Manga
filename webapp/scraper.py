@@ -145,6 +145,8 @@ _index_result: dict[str, dict] = {}
 
 def record_index_result(url: str, error: Exception | None):
     code = re.search(r"\b([45]\d\d)\b", str(error)) if error else None
+    if code and code.group(1) in ("404", "410"):
+        return  # หน้านี้หน้าเดียวหาย (ลิงก์ผิด/เรื่องถูกลบ) ไม่ใช่เว็บมีปัญหา — ไม่งั้นทุกเรื่องในเว็บนี้ขึ้นแดง
     _index_result[_host_key(url)] = {
         "at": datetime.now(timezone.utc).isoformat(),
         "error": (code.group(1) if code else (str(error) or error.__class__.__name__)[:60]) if error else None,
