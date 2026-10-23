@@ -4133,6 +4133,8 @@ function openMangaSheet(id) {
       <input type="url" placeholder="ลิงก์หน้าเรื่องจากเว็บอื่น" required />
       <button type="submit" class="btn primary">เพิ่ม</button>
     </form>
+    <button class="link-btn ms-find" data-ms-find>🔎 หาเรื่องนี้ในเว็บอื่น (เสนอแหล่งสำรอง)</button>
+    <div id="msFindResult"></div>
     ${state.categories.length ? `<div class="ms-title">หมวดหมู่ <small>แตะเพื่อใส่/เอาออก</small></div>
     <div class="ms-cats">${state.categories.map((c) => `<button class="video-chip${cats.has(c.id) ? " active" : ""}" data-ms-cat="${escapeHtml(c.id)}">${escapeHtml(c.name)}</button>`).join("")}</div>` : ""}
     <div class="ms-title">จัดการ</div>
@@ -4174,6 +4176,13 @@ async function mangaSheetClick(e) {
     const form = el("#mangaSheet [data-ms-add]");
     form.hidden = !form.hidden;
     if (!form.hidden) form.querySelector("input").focus();
+    return;
+  }
+  if (e.target.closest("[data-ms-find]")) return findMangaSources(m);
+  const use = e.target.closest("[data-ms-use]");
+  if (use) {
+    use.disabled = true;
+    if (await saveMangaSources(m, [...urls, use.dataset.msUse])) toast(`เพิ่ม ${requestHost(use.dataset.msUse)} เป็นแหล่งสำรองแล้ว`);
     return;
   }
   const rm = e.target.closest("[data-ms-remove]");
@@ -4231,6 +4240,198 @@ function initMangaSheet() {
     if (await saveMangaSources(m, [...urls, url])) toast(`เพิ่มแหล่งสำรอง ${requestHost(url)} แล้ว`);
     else e.target.querySelector("button").disabled = false;
   });
+}
+
+// ---------- ＋ เพิ่ม (แอดมิน): วางลิงก์อะไรก็ได้ → เดาชนิด → มังงะดูตัวอย่าง/เช็คซ้ำก่อนเพิ่ม, ที่เหลือส่งต่อฟอร์มเดิม ----------
+// เดิม 6 ฟอร์มกระจาย 3 ที่ (เพิ่มเรื่อง, YouTube, Anifume, วางลิงก์ FB, ติดตามเพจ, หมวด)
+const ADD_KINDS = {
+  manga: ["📚", "เรื่องมังงะ"], fb: ["🔗", "คลิป Facebook"], watch: ["📡", "ติดตามเพจ"],
+  yt: ["▶", "YouTube"], af: ["🎬", "Anifume"], category: ["🏷", "หมวดมังงะใหม่"],
+};
+const ADD_KIND_HINT = {
+  fb: "วางได้หลายลิงก์ (บรรทัดละลิงก์) — ไปที่ฟอร์มวางลิงก์ Facebook เลือกหมวดแล้วกดเพิ่ม",
+  watch: "ไปที่ฟอร์มติดตามเพจ เลือกหมวดที่จะใส่คลิปใหม่แล้วกดติดตาม",
+  yt: "ไปที่ฟอร์ม YouTube และดึงข้อมูลให้เลย",
+  af: "ไปที่ฟอร์ม Anifume / FairyAnime และดึงข้อมูลให้เลย",
+  category: "สร้างหมวดมังงะใหม่ชื่อนี้",
+};
+let addKind = "";
+let addPreview = null; // ผลดูตัวอย่างมังงะล่าสุด
+let addPreviewSeq = 0;
+
+function detectAddKind(text) {
+  const urls = text.match(/https?:\/\/\S+/g) || [];
+  if (!urls.length) return text.trim() ? "category" : "";
+  const u = urls[0].toLowerCase();
+  if (/(^|\.)(youtube\.com|youtu\.be)\//.test(u.replace(/^https?:\/\//, ""))) return "yt";
+  if (/anifume\.|fairyanime\./.test(u)) return "af";
+  if (/facebook\.com|fb\.watch|fb\.com/.test(u)) {
+    const pageReels = /\/reels\/?(\?|#|$)|sk=reels_tab/.test(u) && !/\/reel\/\d/.test(u);
+    return urls.length === 1 && pageReels ? "watch" : "fb";
+  }
+  return "manga";
+}
+
+function openAddSheet(text = "") {
+  addPreview = null;
+  el("#addSheetBody").innerHTML = `
+    <div class="add-head"><h3>เพิ่มเข้า Mee+</h3><button class="link-btn" data-add-close>ปิด</button></div>
+    <textarea id="addInput" rows="2" placeholder="วางลิงก์: หน้าเรื่องมังงะ, คลิป/เพจ Facebook, YouTube, Anifume — หรือพิมพ์ชื่อหมวดใหม่"></textarea>
+    <div id="addDetect" class="add-detect"></div>
+    <div class="add-kinds">${Object.entries(ADD_KINDS).map(([k, [ic, label]]) => `<button class="add-kind" data-add-kind="${k}"><b>${ic}</b>${label}</button>`).join("")}</div>
+    <div id="addResult"></div>`;
+  el("#addInput").value = text;
+  el("#addSheet").hidden = false;
+  onAddInput(true);
+  setTimeout(() => el("#addInput")?.focus(), 50);
+}
+
+function closeAddSheet() {
+  addPreviewSeq++;
+  el("#addSheet").hidden = true;
+}
+
+function setAddKind(kind, { auto = false } = {}) {
+  addKind = kind;
+  els("#addSheet [data-add-kind]").forEach((b) => b.classList.toggle("active", b.dataset.addKind === kind));
+  const text = el("#addInput").value.trim();
+  el("#addDetect").textContent = !text ? "" : auto && kind ? `✓ รู้จักลิงก์นี้: ${ADD_KINDS[kind][1]}` : kind ? `เลือกเอง: ${ADD_KINDS[kind][1]}` : "";
+  const result = el("#addResult");
+  if (!text || !kind) { result.innerHTML = ""; return; }
+  if (kind === "manga") return previewAddManga();
+  result.innerHTML = `<p class="hint">${ADD_KIND_HINT[kind]}</p><button class="btn primary add-go" data-add-handoff>ไปต่อ ›</button>`;
+}
+
+let addInputTimer = null;
+function onAddInput(now = false) {
+  clearTimeout(addInputTimer);
+  addInputTimer = setTimeout(() => setAddKind(detectAddKind(el("#addInput").value), { auto: true }), now ? 0 : 500);
+}
+
+async function previewAddManga() {
+  const url = (el("#addInput").value.match(/https?:\/\/\S+/) || [""])[0];
+  const result = el("#addResult");
+  const seq = ++addPreviewSeq;
+  result.innerHTML = '<p class="hint">กำลังเปิดหน้าเรื่อง…</p>';
+  let data;
+  try {
+    data = await sendJSON("POST", "/api/manga/preview", { url });
+  } catch (e) {
+    if (seq === addPreviewSeq) result.innerHTML = `<p class="form-msg error">เปิดหน้านี้ไม่ได้: ${escapeHtml(e.message)}</p>`;
+    return;
+  }
+  if (seq !== addPreviewSeq) return; // พิมพ์/วางใหม่ไปแล้ว
+  addPreview = { ...data, url };
+  const similar = (data.similar || []).filter((s) => !s.same_host);
+  result.innerHTML = `
+    <div class="add-preview">
+      <img src="${proxied(data.cover_url, THUMB_WIDTH)}" alt="" onerror="this.style.opacity=0" />
+      <div class="grow"><b>${escapeHtml(data.title || "(ไม่พบชื่อเรื่อง)")}</b>
+        <small>${escapeHtml(data.latest_chapter || "ไม่พบตอน")} · ${data.chapters || 0} ตอน · ${escapeHtml(requestHost(url))}</small></div>
+    </div>
+    ${data.exists ? `<div class="add-note">ลิงก์นี้อยู่ในเรื่อง <b>${escapeHtml(data.exists.name)}</b> แล้ว
+        <div class="admin-task-acts"><button class="btn primary" data-add-open="${escapeHtml(data.exists.id)}">เปิดเรื่องนี้</button></div></div>`
+    : `${similar.map((s) => `<div class="add-note">ชื่อตรงกับเรื่องที่มีแล้ว: <b>${escapeHtml(s.name)}</b> (${escapeHtml(s.latest_chapter || "-")})
+        <div class="admin-task-acts"><button class="btn primary" data-add-backup="${escapeHtml(s.id)}">เพิ่มเป็นแหล่งสำรองของเรื่องนี้</button></div></div>`).join("")}
+      <div class="ms-title">${similar.length ? "หรือเพิ่มเป็นเรื่องใหม่" : "เพิ่มเป็นเรื่องใหม่"}</div>
+      <input id="addMangaName" class="add-name" maxlength="120" value="${escapeHtml(data.title || "")}" placeholder="ชื่อเรื่อง" />
+      ${state.categories.length ? `<div class="ms-cats">${state.categories.map((c) => `<button class="video-chip" data-add-cat="${escapeHtml(c.id)}">${escapeHtml(c.name)}</button>`).join("")}</div>` : ""}
+      <label class="checkbox-label add-follow"><input type="checkbox" id="addMangaFollow" /> ติดตามเรื่องนี้ด้วย</label>
+      <button class="btn${similar.length ? "" : " primary"} add-go" data-add-manga>เพิ่มเรื่องใหม่</button>`}
+    <div id="addMsg" class="form-msg"></div>`;
+}
+
+function handoffAdd(kind, text) {
+  closeAddSheet();
+  const url = (text.match(/https?:\/\/\S+/) || [""])[0];
+  if (kind === "category") {
+    openAdminPage("categoryManage");
+    el("#newCategoryName").value = text.trim().slice(0, 40);
+    return el("#newCategoryName").focus();
+  }
+  openAdminPage("videoManage", "add");
+  const show = (sel) => setTimeout(() => el(sel)?.scrollIntoView({ block: "center" }), 50);
+  if (kind === "yt") { el("#ytAddUrl").value = url; el("#ytAddForm").requestSubmit(); show("#ytAddForm"); }
+  if (kind === "af") { el("#afUrl").value = url; el("#afForm").requestSubmit(); show("#afForm"); }
+  if (kind === "fb") { el("#addLinksText").value = text.trim(); show("#addLinksText"); }
+  if (kind === "watch") { el("#watchSourceForm").hidden = false; el("#watchSourceUrl").value = url; show("#watchSourceForm"); }
+}
+
+async function addSheetClick(e) {
+  if (e.target === el("#addSheet") || e.target.closest("[data-add-close]")) return closeAddSheet();
+  const kindBtn = e.target.closest("[data-add-kind]");
+  if (kindBtn) return setAddKind(kindBtn.dataset.addKind);
+  if (e.target.closest("[data-add-handoff]")) return handoffAdd(addKind, el("#addInput").value);
+  const cat = e.target.closest("[data-add-cat]");
+  if (cat) return cat.classList.toggle("active");
+  const openId = e.target.closest("[data-add-open]")?.dataset.addOpen;
+  if (openId) { closeAddSheet(); openAdminPage("mangaManage"); return openMangaSheet(openId); }
+  const backupId = e.target.closest("[data-add-backup]")?.dataset.addBackup;
+  if (backupId && addPreview) {
+    const m = state.catalog.find((x) => x.id === backupId);
+    if (!m) return;
+    closeAddSheet();
+    openAdminPage("mangaManage");
+    openMangaSheet(m.id);
+    const urls = (m.sources || []).map((s) => s.url).filter(Boolean);
+    if (await saveMangaSources(m, [...urls, addPreview.url])) toast(`เพิ่ม ${requestHost(addPreview.url)} เป็นแหล่งสำรองของ ${m.name} แล้ว`);
+    return;
+  }
+  const addBtn = e.target.closest("[data-add-manga]");
+  if (addBtn && addPreview) {
+    const name = el("#addMangaName").value.trim();
+    const msg = el("#addMsg");
+    if (!name) { msg.className = "form-msg error"; msg.textContent = "ต้องมีชื่อเรื่อง"; return; }
+    addBtn.disabled = true;
+    msg.className = "form-msg";
+    msg.textContent = "กำลังเพิ่ม…";
+    try {
+      const created = await sendJSON("POST", "/api/manga", { name, sources: [addPreview.url], follow: el("#addMangaFollow").checked });
+      const ids = els("#addSheet [data-add-cat].active").map((b) => b.dataset.addCat);
+      if (ids.length) await sendJSON("PUT", `/api/manga/${created.id}/categories`, { category_ids: ids });
+      await Promise.all([loadCatalog(), loadManga()]);
+      adminTasksCache && (adminTasksCache.at = 0);
+      lastSettingsSignature = null;
+      closeAddSheet();
+      openAdminPage("mangaManage");
+      renderSettings();
+      openMangaSheet(created.id);
+      toast(`เพิ่ม "${name}" แล้ว`);
+    } catch (err) {
+      addBtn.disabled = false;
+      msg.className = "form-msg error";
+      msg.textContent = err.message;
+    }
+  }
+}
+
+function initAddSheet() {
+  el("#addSheet").addEventListener("click", addSheetClick);
+  el("#addSheet").addEventListener("input", (e) => { if (e.target.id === "addInput") onAddInput(); });
+  el("#adminAddFab").addEventListener("click", () => openAddSheet());
+}
+
+// แผ่นรายละเอียดเรื่อง: ค้นเรื่องเดียวกันในเว็บอื่นที่ระบบใช้อยู่ → ปุ่มใช้เป็นสำรอง
+async function findMangaSources(m) {
+  const box = el("#msFindResult");
+  box.innerHTML = '<p class="hint">กำลังค้นในเว็บอื่น (ไม่เกิน ~10 วิ)…</p>';
+  let data;
+  try {
+    data = await getJSON(`/api/manga/${m.id}/find-sources`);
+  } catch (e) {
+    box.innerHTML = `<p class="form-msg error">${escapeHtml(e.message)}</p>`;
+    return;
+  }
+  if (mangaSheetId !== m.id) return;
+  const gapText = (c) => c.error ? `เปิดไม่ได้: ${c.error}` : c.gap == null ? (c.latest_chapter || "ไม่พบตอน")
+    : `${c.latest_chapter} · ${c.close ? "✓ ใกล้ของเรา" : `ห่าง ${c.gap > 0 ? "+" : ""}${c.gap} ตอน`}`;
+  box.innerHTML = data.candidates.length ? `<div class="ms-group">${data.candidates.map((c) => `
+      <div class="ms-row">
+        <span class="status-dot ${c.close ? "ok" : "warn"}"></span>
+        <span class="grow"><b>${escapeHtml(c.host.replace(/^www\./, ""))}</b> · ${escapeHtml(c.title)}<small>${escapeHtml(gapText(c))}</small></span>
+        <button class="btn${c.close ? " primary" : ""}" data-ms-use="${escapeHtml(c.url)}"${c.error ? " disabled" : ""}>ใช้</button>
+      </div>`).join("")}</div><p class="hint">ค้น ${data.searched} เว็บ · เทียบกับของเรา ${escapeHtml(data.latest_chapter || "-")} — ตอนห่างมากอาจเป็นคนละภาค (Remake) หรือเว็บลงช้า</p>`
+    : `<p class="hint">ไม่เจอในเว็บอื่น (ค้น ${data.searched} เว็บ) — ลองวางลิงก์เองด้วย "＋ เพิ่มแหล่งสำรอง"</p>`;
 }
 
 async function refreshOne(id, btn) {
@@ -4740,7 +4941,7 @@ function closeMangaModal() {
 }
 
 function initMangaForm() {
-  el("#openAddMangaBtn").addEventListener("click", () => openMangaModal());
+  el("#openAddMangaBtn").addEventListener("click", () => openAddSheet()); // ช่องเดียวกับปุ่ม ＋ เพิ่ม (ดูตัวอย่าง + เช็คซ้ำ)
   el("#addSourceRowBtn").addEventListener("click", () => addSourceRow());
   el("#mangaFormCancel").addEventListener("click", closeMangaModal);
 
@@ -7296,6 +7497,7 @@ function goBack() {
   if (!el("#commentSheet").hidden) return closeComments(), true;
   if (!el("#vmSheet").hidden) return closeVmSheet(), true;
   if (!el("#mangaSheet").hidden) return closeMangaSheet(), true;
+  if (!el("#addSheet").hidden) return closeAddSheet(), true;
   if (!el("#installSheet").hidden) return closeInstallSheet(), true;
   if (!el("#videoFormModal").hidden) return showVideoForm(false), true;
   if (!el("#mangaFormModal").hidden) return closeMangaModal(), true;
@@ -7392,6 +7594,7 @@ function init() {
   initGridClicks();
   initSettingsClicks();
   initMangaSheet();
+  initAddSheet();
   initChapterListClicks();
   initMangaForm();
   initChapterSearch();

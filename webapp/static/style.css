@@ -1697,3 +1697,28 @@ button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%
 .ms-row .grow { flex: 1; min-width: 0; }
 .ms-row .chev { color: var(--text-dim); }
 .ms-row .icon-btn { width: 30px; height: 30px; font-size: 0.85rem; border-color: transparent; color: var(--text-dim); flex: none; }
+
+/* ＋ เพิ่ม: ปุ่มลอยในหน้าจัดการระบบ (sticky ไม่ใช่ fixed — Safari ค้าง viewport แล้ว fixed ลอยผิดที่) + แผ่นเพิ่ม */
+.admin-fab { position: sticky; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 14px); display: block; margin: 16px 0 0 auto; z-index: 20; border: 0; border-radius: 26px; padding: 13px 20px; background: var(--accent); color: #fff; font: inherit; font-weight: 700; font-size: 1rem; box-shadow: 0 6px 18px rgba(22, 160, 102, 0.45); cursor: pointer; }
+.add-sheet { background: var(--bg); }
+.add-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.add-head h3 { margin: 0; font-size: 1.1rem; }
+#addInput { width: 100%; background: var(--bg-elevated); border: 1.5px solid var(--accent); color: var(--text); padding: 10px 12px; border-radius: 12px; font: inherit; font-size: 0.92rem; resize: vertical; }
+.add-detect { min-height: 1.2em; margin: 8px 2px; font-size: 0.85rem; font-weight: 600; color: var(--accent); }
+.add-kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.add-kind { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; padding: 9px 4px; color: var(--text); font: inherit; font-size: 0.78rem; font-weight: 600; cursor: pointer; }
+.add-kind b { display: block; font-size: 1.2rem; font-weight: 400; margin-bottom: 2px; }
+.add-kind.active { border: 2px solid var(--accent); background: rgba(22, 160, 102, 0.12); }
+#addResult { margin-top: 12px; }
+#addResult .hint { margin: 0 0 10px; }
+.add-preview { display: flex; gap: 12px; align-items: center; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; padding: 10px; }
+.add-preview img { width: 48px; height: 66px; object-fit: cover; border-radius: 6px; background: var(--img-bg); flex: none; }
+.add-preview .grow { min-width: 0; }
+.add-preview small { display: block; color: var(--text-dim); font-size: 0.78rem; margin-top: 2px; }
+.add-note { margin-top: 10px; background: rgba(59, 130, 246, 0.1); border-radius: 10px; padding: 10px 12px; font-size: 0.85rem; }
+.add-name { width: 100%; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text); padding: 9px 12px; border-radius: 10px; font: inherit; margin-bottom: 8px; }
+.add-follow { margin: 10px 0; }
+.add-go { width: 100%; justify-content: center; margin-top: 6px; }
+.ms-find { display: block; margin: 10px 4px 0; }
+#msFindResult { margin-top: 8px; }
+#msFindResult .hint { margin: 6px 4px 0; font-size: 0.78rem; }

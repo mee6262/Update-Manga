@@ -626,6 +626,70 @@ def _parse_series_chapterlist(soup: BeautifulSoup) -> list[dict]:
     return chapters
 
 
+def parse_manga_title(html: str) -> str:
+    """ชื่อเรื่องจากหน้ารายละเอียด (ใช้ดูตัวอย่างก่อนเพิ่ม) — h1 ของธีม ก่อน og:title (มักมีชื่อเว็บต่อท้าย)"""
+    soup = BeautifulSoup(html, "html.parser")
+    for sel in ("h1.entry-title", ".post-title h1", ".seriestuheader h1", "h1"):
+        node = soup.select_one(sel)
+        if node and node.get_text(strip=True):
+            return node.get_text(" ", strip=True)[:120]
+    og = soup.find("meta", attrs={"property": "og:title"})
+    title = (og.get("content") if og else "") or (soup.title.get_text() if soup.title else "")
+    return re.split(r"\s[–\-|]\s", title.strip())[0][:120]
+
+
+def _norm_title(text: str) -> str:
+    return re.sub(r"[^0-9a-z฀-๿]+", "", (text or "").lower())
+
+
+SEARCH_TIMEOUT = 8
+
+
+def search_site(host: str, query: str) -> list[dict]:
+    """ค้นชื่อเรื่องในเว็บมังงะหนึ่งเว็บ คืน [{title, url}] — รองรับธีม MangaStream (.bsx), Madara (post-title),
+    oremanga (a[title] ใต้ /series/), niceoppai (/manga_list/search/) ตามที่ทดสอบ 24 ต.ค."""
+    from urllib.parse import quote
+    base = f"https://{host}"
+    if "niceoppai" in host:
+        pages = [f"{base}/manga_list/search/{quote(query)}/"]
+    else:
+        pages = [f"{base}/?s={quote(query)}", f"{base}/?s={quote(query)}&post_type=wp-manga"]
+    found: list[dict] = []
+    for page in pages:
+        try:
+            html = fetch(page, timeout=SEARCH_TIMEOUT)
+        except Exception:
+            continue
+        soup = BeautifulSoup(html, "html.parser")
+        anchors = soup.select(".bsx a, .c-tabs-item__content .post-title a, .row.c-tabs-item .post-title a, .fcard__body a, a[title][href*='/series/']")
+        for a in anchors:
+            href = urljoin(page, a.get("href") or "")
+            title = (a.get("title") or a.get_text(" ", strip=True)).strip()
+            path = [p for p in urlparse(href).path.split("/") if p]
+            # ลิงก์ตอน (/เรื่อง/12/, ...-chapter-12) ไม่ใช่หน้าเรื่อง
+            if not title or not path or len(path) > 2 or re.search(r"(chapter|ตอนที่|/\d+/?$)", href, re.I) or urlparse(href).netloc != urlparse(page).netloc:
+                continue
+            if href not in {f["url"] for f in found}:
+                found.append({"title": title[:120], "url": href})
+        if found:
+            break
+    return found
+
+
+def title_match_score(name: str, title: str) -> int:
+    """0 = ไม่ใช่, 2 = ชื่อตรง (ไม่นับคำไทย/วงเล็บท้าย), 1 = มีชื่อเราอยู่ในชื่อเว็บนั้น"""
+    a = _norm_title(re.sub(r"\(.*?\)", "", name))
+    b_full = _norm_title(title)
+    b_latin = _norm_title(re.sub(r"[฀-๿]+", " ", re.sub(r"\(.*?\)", "", title)))
+    if not a:
+        return 0
+    if a == b_latin or a == b_full:
+        # "Overgeared (Remake)" กับเรื่องเรา "Overgeared" = อาจคนละภาค → คะแนนรอง (ผู้ดูแลดูเลขตอนเทียบเอง)
+        extra = re.findall(r"\((.*?)\)", title)
+        return 1 if extra and not all(_norm_title(x) in _norm_title(name) for x in extra) else 2
+    return 1 if a in b_full else 0
+
+
 def parse_index_page(html: str, url: str | None = None, min_interval: float = 0.0) -> dict:
     """ดึงตอนล่าสุด + ลิงก์ + รูปปก + รายชื่อตอนทั้งหมด จากหน้ารายละเอียดเรื่อง
     (url ใช้เฉพาะตอนเจอเว็บกลุ่ม Madara ที่ต้องยิงขอรายชื่อตอนเพิ่มอีก request)"""

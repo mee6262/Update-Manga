@@ -4169,6 +4169,87 @@ def edit_manga(manga_id):
     return jsonify(public_manga(manga))
 
 
+def _manga_hosts(m: dict) -> set[str]:
+    return {urlparse(s.get("url") or "").netloc.lower() for s in m.get("sources") or [] if s.get("url")}
+
+
+def _preview_index(url: str) -> dict:
+    """ดึงหน้าเรื่องหนึ่งหน้า คืน ชื่อ/ปก/ตอนล่าสุด/จำนวนตอน (ไว้ดูตัวอย่าง ไม่บันทึกอะไร)"""
+    if scraper.host_is_down(url) or scraper.host_is_stalled(url):
+        return {"url": url, "error": "เว็บนี้ล่ม/ตอบช้าอยู่"}
+    try:
+        html = scraper.fetch(url, timeout=scraper.SEARCH_TIMEOUT)
+        parsed = scraper.parse_index_page(html, url)
+    except Exception as e:
+        return {"url": url, "error": str(e)[:120]}
+    return {"url": url, "title": scraper.parse_manga_title(html), "cover_url": parsed.get("cover_url"),
+            "latest_chapter": parsed.get("latest_chapter"), "chapters": len(parsed.get("chapters") or [])}
+
+
+@app.route("/api/manga/preview", methods=["POST"])
+@require_admin
+def preview_manga():
+    """ปุ่ม ＋ เพิ่ม: วางลิงก์หน้าเรื่อง → ดูชื่อ/ปก/ตอนล่าสุดก่อนบันทึก + บอกว่ามีในระบบแล้วไหม
+    (ลิงก์นี้อยู่ในเรื่องไหนแล้ว / ชื่อตรงกับเรื่องไหน → เสนอเพิ่มเป็นแหล่งสำรองแทนสร้างเรื่องซ้ำ)"""
+    url = str((request.get_json(force=True, silent=True) or {}).get("url") or "").strip()
+    try:
+        scraper.check_public(url)
+    except Exception:
+        return jsonify({"error": "ลิงก์ไม่ถูกต้อง"}), 400
+    info = _preview_index(url)
+    if info.get("error"):
+        return jsonify(info), 502
+    norm = scraper._norm_title
+    items = storage.load_manga()
+    exists = next((m for m in items if any(_norm_url(s.get("url") or "") == _norm_url(url) for s in m.get("sources") or [])), None)
+    similar = [m for m in items if m is not exists and info.get("title")
+               and (scraper.title_match_score(m["name"], info["title"]) or norm(m["name"]) == norm(info["title"]))]
+    info["exists"] = {"id": exists["id"], "name": exists["name"]} if exists else None
+    info["similar"] = [{"id": m["id"], "name": m["name"], "latest_chapter": m.get("latest_chapter"),
+                        "same_host": urlparse(url).netloc.lower() in _manga_hosts(m)} for m in similar[:5]]
+    return jsonify(info)
+
+
+@app.route("/api/manga/<manga_id>/find-sources", methods=["GET"])
+@require_admin
+def find_manga_sources(manga_id):
+    """หาเรื่องเดียวกันในเว็บมังงะอื่นที่ระบบใช้อยู่ (ค้นชื่อในแต่ละเว็บ) → ผู้ดูแลกดเพิ่มเป็นแหล่งสำรอง
+    ยิงเน็ตอย่างเดียว ไม่บันทึก; เว็บที่ล่ม/ช้า/ติดหน้าตรวจข้าม; ครั้งละไม่เกิน ~10 วิ"""
+    manga = storage.get_manga(manga_id)
+    if not manga:
+        return jsonify({"error": "ไม่พบเรื่องนี้"}), 404
+    mine = _manga_hosts(manga)
+    hosts = sorted({h for m in storage.load_manga() for h in _manga_hosts(m)} - mine)
+    hosts = [h for h in hosts if not scraper.host_is_down(f"https://{h}/") and not scraper.host_is_stalled(f"https://{h}/")]
+    query = re.sub(r"\s*\(.*?\)\s*", " ", manga["name"]).strip()
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(lambda h: (h, scraper.search_site(h, query)), hosts))
+    candidates = []
+    for host, found in results:
+        for f in found:
+            score = scraper.title_match_score(manga["name"], f["title"])
+            if score and urlparse(f["url"]).netloc.lower() not in mine:
+                candidates.append({**f, "host": urlparse(f["url"]).netloc.lower(), "score": score})
+    candidates.sort(key=lambda c: -c["score"])
+    candidates = candidates[:8]
+    # ตอนล่าสุดของแต่ละตัวเลือก — ไว้เทียบกับของเรา (กันเลือก "(Remake)"/คนละภาค)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        previews = list(pool.map(lambda c: _preview_index(c["url"]), candidates))
+    ours = scraper.chapter_number(manga.get("latest_chapter") or "")
+    for c, p in zip(candidates, previews):
+        c["latest_chapter"] = re.sub(r"\s+", " ", p.get("latest_chapter") or "").strip() or None
+        c["chapters"] = p.get("chapters")
+        c["error"] = p.get("error")
+        num = scraper.chapter_number(c["latest_chapter"] or "")
+        c["gap"] = None if num is None or ours is None else round(num - ours, 1)
+    # ชื่อตรงก่อน แล้วเลขตอนใกล้ของเรา (ตอนห่างมาก = น่าจะคนละภาค/เว็บลงช้า)
+    for c in candidates:
+        c["close"] = c["gap"] is not None and abs(c["gap"]) <= max(5, (ours or 0) * 0.1)
+    candidates.sort(key=lambda c: (not c["close"], -c["score"], bool(c["error"]), abs(c["gap"]) if c["gap"] is not None else 1e9))
+    return jsonify({"name": manga["name"], "latest_chapter": manga.get("latest_chapter"),
+                    "searched": len(hosts), "candidates": candidates})
+
+
 @app.route("/api/manga/<manga_id>", methods=["DELETE"])
 @require_admin
 def delete_manga(manga_id):
