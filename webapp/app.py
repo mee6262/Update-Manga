@@ -1134,7 +1134,9 @@ def refresh_from_sources(sources: list[dict], min_interval: float = 0.0, manga_i
         try:
             html = scraper.fetch(url, min_interval=min_interval)
             per_source.append(scraper.parse_index_page(html, url, min_interval))
+            scraper.record_index_result(url, None)
         except Exception as e:
+            scraper.record_index_result(url, e)
             failed += 1
             print(f"⚠️ ดึงข้อมูลจาก {url} ไม่สำเร็จ: {e}")
 
@@ -3803,6 +3805,9 @@ def admin_status():
                 info["last_checked_at"] = checked
             info["down"] = info["down"] or scraper.host_is_down(url)
             info["stalled"] = info["stalled"] or scraper.host_is_stalled(url)
+            result = scraper.index_result(url)
+            if result and result["at"] > info.get("result_at", ""):
+                info["result_at"], info["error"] = result["at"], result["error"]
 
     log_dir = storage.DATA_DIR / "logs"
     errors = [line for line in _tail_lines(log_dir / "webapp.log") if _LOG_ERROR_RE.search(line)][-30:]
@@ -3814,7 +3819,7 @@ def admin_status():
         "caches": caches,
         "counts": {"manga": len(storage.load_manga()), "videos": len(storage.load_videos()),
                    "users": len(storage.load_users()), "comments": sum(len(v) for v in storage.load_comments().values())},
-        "hosts": sorted(hosts.values(), key=lambda h: (not h["down"], not h["stalled"], h["host"])),
+        "hosts": sorted(hosts.values(), key=lambda h: (not h["down"], not h.get("error"), not h["stalled"], h["host"])),
         "errors": errors,
         "supervisor": restarts,
         "has_logs": (log_dir / "webapp.log").exists(),

@@ -674,6 +674,8 @@ body:not([data-tab="list"]) #pushBtn, body:not([data-tab="list"]) #installBtn { 
 /* เมนูล่าง */
 .bottom-nav {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  /* ชั้นวาดของตัวเองเสมอ: iPhone วาดการ์ด/แถวที่ Safari แยกชั้นไว้ทับเมนู (23 ต.ค. 20:48 เมนูตำแหน่งถูกแต่อยู่ใต้เนื้อหา) */
+  transform: translateZ(0); -webkit-backface-visibility: hidden; backface-visibility: hidden;
   display: flex; height: calc(var(--nav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
   background: var(--bg-elevated); border-top: 1px solid var(--border);
 }

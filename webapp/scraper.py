@@ -10,6 +10,7 @@ import re
 import socket
 import threading
 import time
+from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -132,6 +133,23 @@ def _host_key(url: str) -> str:
 
 def host_is_down(url: str) -> bool:
     return _host_down_until.get(_host_key(url), 0.0) > time.monotonic()
+
+
+# ผลดึงหน้าเรื่องรอบล่าสุดต่อเว็บ (หน้าแอดมิน "เว็บต้นทาง") — 403 จาก Cloudflare ไม่เข้า host-down ข้างบน
+# เดิมเลยขึ้น "ปกติ" ทั้งที่ดึงไม่ได้ทุกเรื่อง; เก็บในหน่วยความจำพอ (รีเฟรชรอบหน้าก็ได้ค่าใหม่)
+_index_result: dict[str, dict] = {}
+
+
+def record_index_result(url: str, error: Exception | None):
+    code = re.search(r"\b([45]\d\d)\b", str(error)) if error else None
+    _index_result[_host_key(url)] = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "error": (code.group(1) if code else (str(error) or error.__class__.__name__)[:60]) if error else None,
+    }
+
+
+def index_result(url: str) -> dict | None:
+    return _index_result.get(_host_key(url))
 
 
 def _mark_host(url: str, down: bool):

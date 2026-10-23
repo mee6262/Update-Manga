@@ -2035,7 +2035,7 @@ function pinBottomNav() {
   document.documentElement.classList.toggle("vp-stuck", !!shift || !!(vv && vv.height <= 0));
   if (shift === navShift) return;
   navShift = shift;
-  nav.style.transform = shift ? `translateY(${shift}px)` : "";
+  nav.style.transform = shift ? `translate3d(0, ${shift}px, 0)` : ""; // "" = กลับไปใช้ translateZ(0) ใน CSS
 }
 function schedulePinBottomNav() {
   if (!navShiftFrame) navShiftFrame = requestAnimationFrame(pinBottomNav);
@@ -6033,9 +6033,9 @@ async function loadSystemStatus() {
       statTile("สมาชิก / คอมเมนต์", `${st.counts.users} / ${st.counts.comments}`),
     ].join("");
     el("#systemHosts").innerHTML = st.hosts.map((h) => `<li class="host-row">
-      <span class="host-dot ${h.down ? "down" : h.stalled ? "stalled" : "ok"}"></span>
+      <span class="host-dot ${h.down || h.error ? "down" : h.stalled ? "stalled" : "ok"}"></span>
       <span class="grow"><b>${escapeHtml(h.host)}</b><br><small>${h.manga} เรื่อง · เช็คล่าสุด ${h.last_checked_at ? timeAgo(h.last_checked_at) : "-"}</small></span>
-      <small>${h.down ? "ล่ม (พัก 10 นาที)" : h.stalled ? "ตอบช้า" : "ปกติ"}</small></li>`).join("");
+      <small>${h.down ? "ล่ม (พัก 10 นาที)" : h.error ? `ดึงไม่ได้ (${escapeHtml(h.error)})` : h.stalled ? "ตอบช้า" : "ปกติ"}</small></li>`).join("");
     const top = (title, rows) => `<div class="top-list"><b>${title}</b><ol>${rows.length ? rows.map((r) => `<li>${escapeHtml(r.name)} <small>(${r.count})</small></li>`).join("") : "<li><small>ยังไม่มีข้อมูล</small></li>"}</ol></div>`;
     el("#systemTop").innerHTML = top("📚 มังงะ (ครั้งที่อ่าน)", stats.top_manga) + top("🎬 คลิป (ครั้งที่เปิด)", stats.top_videos);
     el("#systemErrors").textContent = st.has_logs ? (st.errors.join("\n") || "ไม่มีข้อผิดพลาด 🎉") : "ไม่มีไฟล์ log (ไม่ได้รันผ่าน run_windows.py)";
