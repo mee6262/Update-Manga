@@ -6013,6 +6013,13 @@ function statTile(label, value) {
   return `<div class="stat-tile"><div class="stat-value">${escapeHtml(String(value))}</div><div class="stat-label">${escapeHtml(label)}</div></div>`;
 }
 
+// เว็บที่ติดหน้าตรวจ Cloudflare: ตัวแก้ (cf_solve.py) ทำงานอยู่/ผ่านแล้ว/พลาด
+function cfLabel(cf) {
+  if (!cf) return "";
+  if (cf.state === "solving") return "<br>Cloudflare: กำลังผ่าน…";
+  if (cf.state === "failed") return `<br>Cloudflare: ${escapeHtml(cf.error || "ไม่ผ่าน")}`;
+  return "<br>ผ่าน Cloudflare";
+}
 async function loadSystemStatus() {
   el("#systemStats").innerHTML = el("#systemHealth").innerHTML = '<div class="hint">กำลังโหลด...</div>';
   try {
@@ -6035,7 +6042,7 @@ async function loadSystemStatus() {
     el("#systemHosts").innerHTML = st.hosts.map((h) => `<li class="host-row">
       <span class="host-dot ${h.down || h.error ? "down" : h.stalled ? "stalled" : "ok"}"></span>
       <span class="grow"><b>${escapeHtml(h.host)}</b><br><small>${h.manga} เรื่อง · เช็คล่าสุด ${h.last_checked_at ? timeAgo(h.last_checked_at) : "-"}</small></span>
-      <small>${h.down ? "ล่ม (พัก 10 นาที)" : h.error ? `ดึงไม่ได้ (${escapeHtml(h.error)})` : h.stalled ? "ตอบช้า" : "ปกติ"}</small></li>`).join("");
+      <small>${h.down ? "ล่ม (พัก 10 นาที)" : h.error ? `ดึงไม่ได้ (${escapeHtml(h.error)})` : h.stalled ? "ตอบช้า" : "ปกติ"}${cfLabel(h.cf)}</small></li>`).join("");
     const top = (title, rows) => `<div class="top-list"><b>${title}</b><ol>${rows.length ? rows.map((r) => `<li>${escapeHtml(r.name)} <small>(${r.count})</small></li>`).join("") : "<li><small>ยังไม่มีข้อมูล</small></li>"}</ol></div>`;
     el("#systemTop").innerHTML = top("📚 มังงะ (ครั้งที่อ่าน)", stats.top_manga) + top("🎬 คลิป (ครั้งที่เปิด)", stats.top_videos);
     el("#systemErrors").textContent = st.has_logs ? (st.errors.join("\n") || "ไม่มีข้อผิดพลาด 🎉") : "ไม่มีไฟล์ log (ไม่ได้รันผ่าน run_windows.py)";

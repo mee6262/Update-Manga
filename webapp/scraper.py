@@ -8,9 +8,12 @@ import json
 import os
 import re
 import socket
+import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -152,6 +155,101 @@ def index_result(url: str) -> dict | None:
     return _index_result.get(_host_key(url))
 
 
+# Cloudflare หน้าตรวจ ("รอสักครู่...", cf-mitigated: challenge) → ให้ cf_solve.py (camoufox, process แยก) ผ่านให้
+# แล้วจำคุกกี้ cf_clearance + User-Agent คู่กันไว้ต่อเว็บ ทุกคำขอไปเว็บนั้น (หน้าเรื่อง/ตอน/รูป) ส่งคู่นี้ไปด้วย
+# แก้แบบเบื้องหลังเสมอ: คำขอที่โดนตรวจล้มทันทีเหมือนเดิม ไม่รอเบราว์เซอร์ 20-60 วิ (กัน thread waitress หมด)
+# เรื่องถัดไปในรอบรีเฟรชเดียวกัน / ครั้งหน้าที่เปิดอ่าน ก็ได้คุกกี้ใหม่แล้ว
+CF_SOLVE_TIMEOUT = 120
+CF_RETRY_SECONDS = 30 * 60  # แก้ไม่ผ่าน/ยังไม่ได้ติดตั้ง camoufox → เว้นก่อนลองใหม่ (เปิดเบราว์เซอร์กิน CPU/RAM)
+CF_FILE = Path(__file__).with_name("data") / "cf_clearance.json"
+_cf_lock = threading.Lock()
+_cf_solving: set[str] = set()
+_cf_retry_at: dict[str, float] = {}
+_cf_last_error: dict[str, str] = {}
+try:
+    _cf_clearance: dict[str, dict] = json.loads(CF_FILE.read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    _cf_clearance = {}
+
+
+def cf_headers(url: str) -> dict:
+    """User-Agent + Cookie ที่ผ่าน Cloudflare แล้วของเว็บนี้ ({} = ไม่เคยโดนตรวจ)"""
+    entry = _cf_clearance.get(_host_key(url))
+    if not entry:
+        return {}
+    return {"User-Agent": entry["ua"], "Cookie": "; ".join(f"{k}={v}" for k, v in entry["cookies"].items())}
+
+
+def is_cf_challenge(resp: requests.Response | None) -> bool:
+    return resp is not None and resp.status_code in (403, 503) and resp.headers.get("cf-mitigated") == "challenge"
+
+
+def cf_status(url: str) -> dict | None:
+    host = _host_key(url)
+    if host in _cf_solving:
+        return {"state": "solving"}
+    if host in _cf_last_error:
+        return {"state": "failed", "error": _cf_last_error[host]}
+    if host in _cf_clearance:
+        return {"state": "ok", "at": _cf_clearance[host].get("at")}
+    return None
+
+
+def _run_cf_solver(url: str):
+    host = _host_key(url)
+    started = time.monotonic()
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(Path(__file__).with_name("cf_solve.py")), url],
+            capture_output=True, text=True, encoding="utf-8", timeout=CF_SOLVE_TIMEOUT,
+            stdin=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if proc.returncode != 0:
+            lines = (proc.stderr or "").strip().splitlines()
+            message = lines[-1] if lines else f"exit {proc.returncode}"
+            if "No module named 'camoufox'" in message:
+                message = "ยังไม่ได้ติดตั้ง camoufox"
+            raise RuntimeError(message[:200])
+        result = json.loads(proc.stdout.strip().splitlines()[-1])
+        if "cf_clearance" not in result.get("cookies", {}):
+            raise RuntimeError("ไม่ได้คุกกี้ cf_clearance")
+        with _cf_lock:
+            _cf_clearance[host] = {**result, "at": datetime.now(timezone.utc).isoformat()}
+            _cf_last_error.pop(host, None)
+            tmp = CF_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(_cf_clearance, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, CF_FILE)
+        print(f"[cloudflare] ผ่านหน้าตรวจ {host} ใน {time.monotonic() - started:.0f} วิ", flush=True)
+    except Exception as e:
+        message = "หมดเวลา" if isinstance(e, subprocess.TimeoutExpired) else (str(e) or e.__class__.__name__)
+        with _cf_lock:
+            _cf_last_error[host] = message
+            _cf_retry_at[host] = time.monotonic() + CF_RETRY_SECONDS
+        print(f"[cloudflare] ⚠️ ผ่านหน้าตรวจ {host} ไม่สำเร็จ: {message}", flush=True)
+    finally:
+        with _cf_lock:
+            _cf_solving.discard(host)
+
+
+def request_cf_solve(url: str):
+    """โดนหน้าตรวจ → สั่งแก้เบื้องหลัง (ครั้งละ 1 ต่อเว็บ, พลาดแล้วเว้น 30 นาที) ไม่รอผล"""
+    host = _host_key(url)
+    with _cf_lock:
+        if host in _cf_solving or _cf_retry_at.get(host, 0.0) > time.monotonic():
+            return
+        _cf_solving.add(host)
+    threading.Thread(target=_run_cf_solver, args=(url,), daemon=True, name=f"cf-solve-{host}").start()
+
+
+def wait_cf_solve(url: str, timeout: float) -> bool:
+    """สำหรับงานเบื้องหลัง (รอบรีเฟรช) เท่านั้น — รอให้การแก้ของเว็บนี้จบ คืน True ถ้าได้คุกกี้"""
+    host = _host_key(url)
+    deadline = time.monotonic() + timeout
+    while host in _cf_solving and time.monotonic() < deadline:
+        time.sleep(1)
+    return host in _cf_clearance and host not in _cf_last_error
+
+
 def _mark_host(url: str, down: bool):
     if down:
         _host_down_until[_host_key(url)] = time.monotonic() + HOST_DOWN_SECONDS
@@ -261,7 +359,7 @@ def _read_body(resp: requests.Response, max_seconds: float) -> str:
 
 
 def fetch(url: str, referer: str | None = None, min_interval: float = 0.0, timeout: float = TIMEOUT) -> str:
-    headers = dict(HEADERS)
+    headers = {**HEADERS, **cf_headers(url)}
     if referer:
         headers["Referer"] = referer
     check_public(url)
@@ -273,6 +371,8 @@ def fetch(url: str, referer: str | None = None, min_interval: float = 0.0, timeo
         resp.raise_for_status()
         text = _read_body(resp, max_seconds=max(15, timeout * 2))
     except requests.RequestException as e:
+        if is_cf_challenge(e.response):
+            request_cf_solve(url)
         if e.response is not None:
             e.response.close()  # stream=True: ตอบ 4xx/5xx แล้วต้องคืน connection เอง
         if is_outage(e):
@@ -453,7 +553,7 @@ def fetch_madara_chapters(manga_url: str, min_interval: float = 0.0) -> list[dic
     endpoint = manga_url.rstrip("/") + "/ajax/chapters/"
     if not is_public_url(endpoint):
         return []
-    headers = dict(HEADERS)
+    headers = {**HEADERS, **cf_headers(manga_url)}
     headers["X-Requested-With"] = "XMLHttpRequest"
     if min_interval:
         throttle(endpoint, min_interval)

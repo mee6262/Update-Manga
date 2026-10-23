@@ -1132,7 +1132,15 @@ def refresh_from_sources(sources: list[dict], min_interval: float = 0.0, manga_i
             print(f"⚠️ ข้าม {url} (เว็บนี้เพิ่งล่ม)")
             continue
         try:
-            html = scraper.fetch(url, min_interval=min_interval)
+            try:
+                html = scraper.fetch(url, min_interval=min_interval)
+            except requests.HTTPError as e:
+                # รอบรีเฟรชเบื้องหลัง (min_interval > 0) รอตัวแก้ Cloudflare ได้ แล้วลองซ้ำ 1 ครั้ง
+                # กดรีเฟรช/เพิ่มเรื่องจากหน้าเว็บไม่รอ (ตัวแก้ทำต่อเบื้องหลัง ครั้งหน้าก็ผ่าน)
+                if not (min_interval and scraper.is_cf_challenge(e.response)
+                        and scraper.wait_cf_solve(url, scraper.CF_SOLVE_TIMEOUT)):
+                    raise
+                html = scraper.fetch(url, min_interval=min_interval)
             per_source.append(scraper.parse_index_page(html, url, min_interval))
             scraper.record_index_result(url, None)
         except Exception as e:
@@ -3808,6 +3816,7 @@ def admin_status():
             result = scraper.index_result(url)
             if result and result["at"] > info.get("result_at", ""):
                 info["result_at"], info["error"] = result["at"], result["error"]
+            info["cf"] = info.get("cf") or scraper.cf_status(url)
 
     log_dir = storage.DATA_DIR / "logs"
     errors = [line for line in _tail_lines(log_dir / "webapp.log") if _LOG_ERROR_RE.search(line)][-30:]
@@ -4998,6 +5007,7 @@ def _fetch_image(src: str, netloc: str) -> tuple[bytes, str, tuple[str, int] | N
                         src,
                         headers={
                             "User-Agent": scraper.HEADERS["User-Agent"],
+                            **scraper.cf_headers(src),  # รูปบนเว็บที่ติด Cloudflare ต้องใช้คุกกี้ + UA คู่เดียวกับหน้าเว็บ
                             "Referer": f"https://{netloc}/",
                         },
                         timeout=IMAGE_TIMEOUT,
