@@ -271,8 +271,8 @@
           </div>
           <nav class="sub-tabs" hidden>
             <button class="sub-tab-btn active" data-subtab="overview" data-group="overview" hidden>ภาพรวม</button>
-            <button class="sub-tab-btn" data-subtab="mangaManage" data-group="content">📚 มังงะ</button>
-            <button class="sub-tab-btn" data-subtab="videoManage" data-group="content">🎬 คลิป / Playlist</button>
+            <button class="sub-tab-btn" data-subtab="mangaManage" data-group="content">📋 รายการ</button>
+            <button class="sub-tab-btn" data-subtab="videoManage" data-group="content">🎬 หมวด · เพิ่มวิดีโอ</button>
             <button class="sub-tab-btn" data-subtab="categoryManage" data-group="content">🏷 หมวดมังงะ</button>
             <button class="sub-tab-btn" data-subtab="userManage" data-group="users">👥 สมาชิก</button>
             <button class="sub-tab-btn" data-subtab="requestsManage" data-group="users">📮 คำขอ</button>
@@ -293,18 +293,20 @@
 
         <div id="mangaManageSubview" class="subview">
         <div class="manage-actions">
-          <button id="openAddMangaBtn" class="btn primary">+ เพิ่มเรื่องใหม่</button>
+          <button id="openAddMangaBtn" class="btn primary">＋ เพิ่ม</button>
           <button id="refreshAllBtn" class="btn with-icon">
             <svg viewBox="0 0 24 24" width="20" height="20"><path d="M21 12a9 9 0 1 1-2.64-6.36" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M21 3v6h-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <span>รีเฟรชทั้งหมด</span>
           </button>
         </div>
         <div id="statusBar" class="status-bar" hidden></div>
+        <div id="contentTypes" class="pl-controls"></div>
         <div id="mangaAdminFilters" class="pl-controls">
           <button class="video-chip active" data-manga-filter="all">ทั้งหมด</button>
           <button class="video-chip" data-manga-filter="problem">มีปัญหา</button>
           <button class="video-chip" data-manga-filter="nocat">ไม่มีหมวด</button>
           <button class="video-chip" data-manga-filter="single">ไม่มีแหล่งสำรอง</button>
+          <button class="video-chip" data-manga-filter="similar">ชื่อคล้ายกัน</button>
         </div>
         <ul id="settingsList" class="settings-list"></ul>
         </div>

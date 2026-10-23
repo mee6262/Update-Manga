@@ -3029,7 +3029,7 @@ function initSearch() {
 // ---------- แท็บย่อยในหน้าตั้งค่า (จัดการเรื่อง / จัดการสมาชิก) ----------
 // ---------- ค้นหาในหน้าจัดการ (แอดมิน) ----------
 // กรองแถวของทุกรายการในหน้าจัดการพร้อมกัน + ตัวเลขผลบนแท็บย่อย; รายการถูกวาดใหม่ (โหลด/แก้) ก็กรองซ้ำเอง
-const ADMIN_SEARCH_ROWS = ["#settingsList", "#categoryList", "#userList", "#watchSourceList", "#playlistManageList", "#videoManageList", "#commentManageList"]
+const ADMIN_SEARCH_ROWS = ["#settingsList", "#categoryList", "#userList", "#watchSourceList", "#commentManageList"]
   .map((id) => `${id} > li`).join(", ") + ", #adminRequestList > .rq-row";
 let adminSearchLoaded = false;
 
@@ -3212,7 +3212,9 @@ function adminGoAttrs(a) {
 
 function adminGo(target) {
   const go = target.dataset.adminGo;
-  if (target.dataset.adminFilter) mangaAdminFilter = target.dataset.adminFilter;
+  const filter = target.dataset.adminFilter;
+  if (filter?.startsWith("type:")) { contentType = filter.slice(5); mangaAdminFilter = "all"; }
+  else if (filter) { mangaAdminFilter = filter; contentType = "manga"; } // การ์ดปัญหามังงะ/เว็บต้นทาง
   openAdminPage(go, target.dataset.adminVm);
   if (go === "mangaManage") renderSettings();
 }
@@ -3249,7 +3251,7 @@ async function renderAdminOverview(force = false) {
   const card = (go, label, value, status, tone) => `<button class="admin-card" data-admin-go="${go}"><div class="mm-meta">${label}</div><div class="admin-card-num">${value}</div>${status ? `<div class="admin-card-status"><span class="status-dot ${tone}"></span>${escapeHtml(status)}</div>` : ""}</button>`;
   el("#adminCards").innerHTML = [
     card("mangaManage", "มังงะ", state.catalog.length, info.problems ? `มีปัญหา ${info.problems} เรื่อง` : "ปกติทุกเรื่อง", info.problems ? "bad" : "ok"),
-    card("videoManage", "คลิป / Playlist", `${clips} / ${(state.videoPlaylists || []).length}`,
+    card("mangaManage\" data-admin-filter=\"type:series", "คลิป / Playlist", `${clips} / ${(state.videoPlaylists || []).length}`,
       watch.last_run ? `เช็คเพจ ${timeAgo(watch.last_run, "เมื่อสักครู่")}${info.watchErr ? " ⚠️" : ""}` : "", info.watchErr ? "warn" : "ok"),
     card("userManage", "สมาชิก", info.users ?? "–", info.pending ? `คำขอรอ ${info.pending}` : "", info.pending ? "warn" : ""),
     card("categoryManage", "หมวดหมู่มังงะ", state.categories.length, info.nocat ? `ไม่มีหมวด ${info.nocat} เรื่อง` : "", info.nocat ? "warn" : "ok"),
@@ -3997,21 +3999,117 @@ const ICON_DELETE =
   '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 6h18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><line x1="10" y1="11" x2="10" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="11" x2="14" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
 let lastSettingsSignature = null;
-let mangaAdminFilter = "all"; // all / problem (ดึงไม่สำเร็จทุกแหล่ง) / nocat (ไม่มีหมวด) / single (ไม่มีแหล่งสำรอง) / host:<เว็บ>
-const MANGA_FILTER_LABELS = { all: "ทั้งหมด", problem: "มีปัญหา", nocat: "ไม่มีหมวด", single: "ไม่มีแหล่งสำรอง" };
+let mangaAdminFilter = "all"; // all / problem / nocat / single (ไม่มีแหล่งสำรอง) / similar (ชื่อคล้ายกัน) / host:<เว็บ>
+let contentType = "all"; // all / manga / series / clip
+const CONTENT_TYPES = { all: "ทั้งหมด", manga: "📚 มังงะ", series: "🎬 ซีรีส์", clip: "🎞 คลิปเดี่ยว" };
+const MANGA_FILTER_LABELS = { all: "ทุกสถานะ", problem: "มีปัญหา", nocat: "ไม่มีหมวด", single: "ไม่มีแหล่งสำรอง", similar: "ชื่อคล้ายกัน" };
+
+// ตอนขาดของซีรีส์: เลขตอนจำนวนเต็มที่ข้ามไปในแต่ละซีซั่น (เช่น มี 1–15 แล้ว 20 = ขาด 16–19)
+function playlistGaps(id) {
+  const bySeason = new Map();
+  for (const v of allPlaylistEpisodes(id)) {
+    const n = Number(v.episode);
+    if (!Number.isInteger(n) || n <= 0) continue;
+    (bySeason.get(v.season || 1) || bySeason.set(v.season || 1, new Set()).get(v.season || 1)).add(n);
+  }
+  const gaps = [];
+  for (const [season, nums] of bySeason) {
+    const max = Math.max(...nums);
+    for (let n = Math.min(...nums); n < max; n++) if (!nums.has(n)) gaps.push({ season, n });
+  }
+  return gaps;
+}
+
+function gapText(gaps, limit = 6) {
+  const label = (g) => `${g.season > 1 ? `S${g.season}·` : ""}${g.n}`;
+  return gaps.slice(0, limit).map(label).join(", ") + (gaps.length > limit ? ` … (+${gaps.length - limit})` : "");
+}
+
+// มังงะ + ซีรีส์คลิป + คลิปเดี่ยว เป็นรายการเดียว: { kind, id, name, time, problem, nocat, ... }
+function contentItems(hosts) {
+  const similar = similarPlaylists();
+  const manga = state.catalog.map((m) => ({
+    kind: "manga", id: m.id, name: m.name, item: m, time: m.last_updated_at || m.last_checked_at || "",
+    problem: !!(m.refresh_error || mangaHasBadHost(m, hosts)), nocat: !(m.categories || []).length,
+    single: mangaHosts(m).length < 2, similar: false,
+  }));
+  const series = (state.videoPlaylists || []).map((p) => {
+    const gaps = playlistGaps(p.id);
+    const trackErr = (p.tracks || []).some((t) => t.error);
+    return { kind: "series", id: p.id, name: p.name, item: p, time: p.updated_at || "", gaps,
+      problem: !!(gaps.length || trackErr), nocat: !p.category_id, single: false, similar: similar.has(p.id), twins: similar.get(p.id) };
+  });
+  const clips = state.videos.filter((v) => !v.playlist_id).map((v) => ({
+    kind: "clip", id: v.id, name: v.title, item: v, time: v.created_at || "", problem: false, nocat: !v.category_id, single: false, similar: false,
+  }));
+  return [...manga, ...series, ...clips];
+}
+
+function contentRowHtml(x, hosts) {
+  const ago = (t) => timeAgo(t, "เมื่อสักครู่");
+  if (x.kind === "manga") {
+    const m = x.item;
+    const status = m.refresh_error
+      ? `<span class="status-bad">ดึงไม่สำเร็จทุกแหล่ง ตั้งแต่ ${ago(m.refresh_error.since || m.refresh_error.at)}</span>`
+      : m.last_checked_at ? `เช็ค ${ago(m.last_checked_at)}` : "ยังไม่เคยเช็ค";
+    return `<li class="settings-row tappable" data-id="${escapeHtml(m.id)}" data-kind="manga">
+        <span class="cr-cover"><img src="${proxied(m.cover_url, THUMB_WIDTH)}" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0" /><i>📚</i></span>
+        <div class="grow">
+          <div class="name">${escapeHtml(m.name)}</div>
+          <div class="meta">${m.latest_chapter ? escapeHtml(m.latest_chapter) : "-"} · ${status}${m.followers ? ` · 👥 ${m.followers}` : ""}</div>
+          <div class="src-pills">${(m.categories || []).length ? "" : '<span class="src-pill warn">ไม่มีหมวด</span>'}${sourcePillsHtml(m, hosts)}</div>
+        </div>
+        <span class="chev" aria-hidden="true">›</span>
+      </li>`;
+  }
+  if (x.kind === "series") {
+    const p = x.item;
+    const eps = allPlaylistEpisodes(p.id);
+    const range = eps.length ? ` (${Number(eps[0].episode)}–${Number(eps[eps.length - 1].episode)})` : "";
+    const tracks = (p.tracks || []).map((t) => `<span class="src-pill ${t.error ? "bad" : "ok"}">${t.kind === "anifume" || t.kind === "fairyanime" ? "🎬" : "▶"} ${escapeHtml(LANG_LABEL[t.lang] || providerName({ provider: t.kind || "youtube" }))}${t.follow ? " ✓ติดตาม" : ""}${t.error ? " · มีปัญหา" : ""}</span>`).join("");
+    const twin = x.twins ? (state.videoPlaylists || []).find((o) => o.id === x.twins[0]) : null;
+    return `<li class="settings-row tappable" data-id="${escapeHtml(p.id)}" data-kind="series">
+        <span class="cr-cover wide">${p.thumbnail_url ? `<img src="${escapeHtml(p.thumbnail_url)}" alt="" loading="lazy" />` : ""}<i>🎬</i></span>
+        <div class="grow">
+          <div class="name">${escapeHtml(p.name)}</div>
+          <div class="meta">${p.count} ตอน${range} · ตอนใหม่ ${ago(p.updated_at)}</div>
+          <div class="src-pills">${p.category_id ? `<span class="src-pill vid">${escapeHtml(categoryName(p.category_id))}</span>` : '<span class="src-pill warn">ไม่มีหมวด</span>'}${tracks}${x.gaps.length ? `<span class="src-pill warn">ตอนขาด ${x.gaps.length}</span>` : ""}${twin ? `<span class="src-pill bad">คล้าย "${escapeHtml(twin.name)}"</span>` : ""}</div>
+        </div>
+        <span class="chev" aria-hidden="true">›</span>
+      </li>`;
+  }
+  const v = x.item;
+  const dur = Number(v.duration_seconds) || 0;
+  return `<li class="settings-row tappable" data-id="${escapeHtml(v.id)}" data-kind="clip">
+      <span class="cr-cover wide">${v.thumbnail_url ? `<img src="${escapeHtml(v.thumbnail_url)}" alt="" loading="lazy" />` : ""}<i>🎞</i></span>
+      <div class="grow">
+        <div class="name">${escapeHtml(v.title)}</div>
+        <div class="meta">คลิปเดี่ยว${dur ? ` · ${Math.max(1, Math.round(dur / 60))} นาที` : ""} · เพิ่ม ${ago(v.created_at)}</div>
+        <div class="src-pills">${v.category_id ? `<span class="src-pill vid">${escapeHtml(categoryName(v.category_id))}</span>` : '<span class="src-pill warn">ไม่มีหมวด</span>'}<span class="src-pill ok">${escapeHtml(providerName(v))}${v.external ? " · เปิดนอกแอป" : ""}</span></div>
+      </div>
+      <span class="chev" aria-hidden="true">›</span>
+    </li>`;
+}
 
 function renderSettings() {
   const list = el("#settingsList");
   const hosts = hostStatusMap();
-  const bad = (m) => m.refresh_error || mangaHasBadHost(m, hosts);
+  const all = contentItems(hosts);
+  const ofType = all.filter((x) => contentType === "all" || x.kind === contentType);
   const counts = {
-    all: state.catalog.length, problem: state.catalog.filter(bad).length,
-    nocat: state.catalog.filter((m) => !(m.categories || []).length).length,
-    single: state.catalog.filter((m) => mangaHosts(m).length < 2).length,
+    all: ofType.length, problem: ofType.filter((x) => x.problem).length, nocat: ofType.filter((x) => x.nocat).length,
+    single: ofType.filter((x) => x.single).length, similar: ofType.filter((x) => x.similar).length,
   };
+  el("#contentTypes").innerHTML = Object.entries(CONTENT_TYPES).map(([k, label]) =>
+    `<button class="video-chip${contentType === k ? " active" : ""}" data-content-type="${k}">${label} ${k === "all" ? all.length : all.filter((x) => x.kind === k).length}</button>`).join("");
+  // ชิปปัญหาที่ไม่เกี่ยวกับชนิดที่เลือก (ไม่มีแหล่งสำรอง = มังงะ, ชื่อคล้าย = ซีรีส์) ซ่อน
   els("[data-manga-filter]").forEach((b) => {
-    b.classList.toggle("active", b.dataset.mangaFilter === mangaAdminFilter);
-    if (MANGA_FILTER_LABELS[b.dataset.mangaFilter]) b.textContent = `${MANGA_FILTER_LABELS[b.dataset.mangaFilter]} ${counts[b.dataset.mangaFilter]}`;
+    const f = b.dataset.mangaFilter;
+    b.classList.toggle("active", f === mangaAdminFilter);
+    if (MANGA_FILTER_LABELS[f]) {
+      b.textContent = `${MANGA_FILTER_LABELS[f]} ${counts[f]}`;
+      b.hidden = f !== "all" && f !== mangaAdminFilter && !counts[f];
+    }
   });
   // host:<เว็บ> = มาจากการ์ดเว็บล่มในภาพรวม / แตะชื่อเว็บ — ชิปชั่วคราวบอกว่ากรองอยู่ แตะเพื่อล้าง
   const hostFilter = mangaAdminFilter.startsWith("host:") ? mangaAdminFilter.slice(5) : "";
@@ -4020,37 +4118,21 @@ function renderSettings() {
   if (hostChip) {
     if (hostFilter) { hostChip.dataset.mangaFilter = mangaAdminFilter; hostChip.classList.add("active"); hostChip.textContent = `🌐 ${hostFilter.replace(/^www\./, "")} ✕`; } else hostChip.remove();
   }
-  const items = state.catalog.filter((m) => mangaAdminFilter === "problem" ? bad(m)
-    : mangaAdminFilter === "nocat" ? !(m.categories || []).length
-    : mangaAdminFilter === "single" ? mangaHosts(m).length < 2
-    : hostFilter ? mangaHosts(m).includes(hostFilter) : true);
-  // เรื่องที่มีปัญหาขึ้นก่อน (แยกหัวข้อ) ที่เหลือเรียงชื่อเหมือนเดิม
-  const problemItems = items.filter(bad);
-  const okItems = items.filter((m) => !bad(m));
-  const signature = JSON.stringify([mangaAdminFilter, Math.floor(Date.now() / 600000), Object.values(hosts).map((h) => [h.host, h.down, h.error]),
-    items.map((m) => [m.id, m.name, m.latest_chapter, m.cover_url, (m.sources || []).length, m.refresh_error, m.last_checked_at, m.followers, (m.categories || []).length])]);
+  const items = ofType.filter((x) => mangaAdminFilter === "all" ? true
+    : hostFilter ? x.kind === "manga" && mangaHosts(x.item).includes(hostFilter) : x[mangaAdminFilter])
+    .sort((a, b) => (b.time || "").localeCompare(a.time || ""));
+  const signature = JSON.stringify([contentType, mangaAdminFilter, Math.floor(Date.now() / 600000), Object.values(hosts).map((h) => [h.host, h.down, h.error]),
+    items.map((x) => [x.kind, x.id, x.name, x.time, x.problem, x.nocat, x.kind === "manga" ? [x.item.latest_chapter, (x.item.sources || []).length, x.item.followers, x.item.cover_url]
+      : x.kind === "series" ? [x.item.count, x.item.category_id, x.gaps.length, (x.item.tracks || []).map((t) => [t.follow, t.error])] : [x.item.category_id, x.item.title]])]);
   if (signature === lastSettingsSignature) return;
   lastSettingsSignature = signature;
-
-  const row = (m) => {
-    const status = m.refresh_error
-      ? `<span class="status-bad">ดึงไม่สำเร็จทุกแหล่ง ตั้งแต่ ${timeAgo(m.refresh_error.since || m.refresh_error.at, "เมื่อสักครู่")}</span>`
-      : m.last_checked_at ? `เช็ค ${timeAgo(m.last_checked_at, "เมื่อสักครู่")}` : "ยังไม่เคยเช็ค";
-    return `
-        <li class="settings-row tappable" data-id="${escapeHtml(m.id)}">
-          <img src="${proxied(m.cover_url, THUMB_WIDTH)}" alt="" loading="lazy" decoding="async" onerror="this.style.opacity=0" />
-          <div class="grow">
-            <div class="name">${escapeHtml(m.name)}</div>
-            <div class="meta">${m.latest_chapter ? escapeHtml(m.latest_chapter) : "-"} · ${status}${m.followers ? ` · 👥 ${m.followers}` : ""}${(m.categories || []).length ? "" : ' · <span class="status-warn">ไม่มีหมวด</span>'}</div>
-            <div class="src-pills">${sourcePillsHtml(m, hosts)}</div>
-          </div>
-          <span class="chev" aria-hidden="true">›</span>
-        </li>`;
-  };
+  // เรื่องที่มีปัญหาขึ้นก่อน (แยกหัวข้อ) ที่เหลือเรียงอัปเดตล่าสุด
+  const problemItems = mangaAdminFilter === "all" ? items.filter((x) => x.problem) : [];
+  const rest = problemItems.length ? items.filter((x) => !x.problem) : items;
   const heading = (text) => `<li class="settings-group-head">${text}</li>`;
-  list.innerHTML = (problemItems.length && okItems.length
-    ? heading(`มีปัญหา · ${problemItems.length}`) + problemItems.map(row).join("") + heading(`ปกติ · ${okItems.length}`) + okItems.map(row).join("")
-    : items.map(row).join("")) || '<li class="hint">ไม่มีเรื่องตามตัวกรองนี้</li>';
+  list.innerHTML = (problemItems.length
+    ? heading(`มีปัญหา · ${problemItems.length}`) + problemItems.map((x) => contentRowHtml(x, hosts)).join("") + heading(`อัปเดตล่าสุด · ${rest.length}`)
+    : "") + rest.map((x) => contentRowHtml(x, hosts)).join("") || '<li class="hint">ไม่มีรายการตามตัวกรองนี้</li>';
 }
 
 function initSettingsClicks() {
@@ -4060,12 +4142,23 @@ function initSettingsClicks() {
     mangaAdminFilter = f.startsWith("host:") ? "all" : f; // ชิปเว็บ = ล้างตัวกรอง
     renderSettings();
   });
-  // แตะแถว = แผ่นรายละเอียด (เดิมเมนู ⋯ แก้ไข/รีเฟรช/ลบ — ย้ายเข้าแผ่นแล้ว)
+  el("#contentTypes").addEventListener("click", (e) => {
+    const t = e.target.closest("[data-content-type]")?.dataset.contentType;
+    if (!t) return;
+    contentType = t;
+    if (mangaAdminFilter.startsWith("host:") && t !== "manga" && t !== "all") mangaAdminFilter = "all";
+    renderSettings();
+  });
+  // แตะแถว = แผ่นรายละเอียด (มังงะ/ซีรีส์/คลิป หน้าตาเดียวกัน)
   el("#settingsList").addEventListener("click", (e) => {
     const row = e.target.closest(".settings-row[data-id]");
-    if (row) openMangaSheet(row.dataset.id);
+    if (!row) return;
+    if (row.dataset.kind === "series") openSeriesSheet(row.dataset.id);
+    else if (row.dataset.kind === "clip") openClipSheet(row.dataset.id);
+    else openMangaSheet(row.dataset.id);
   });
 }
+
 // ---------- แผ่นรายละเอียดเรื่อง (แอดมิน): ทุกอย่างของเรื่องเดียวในที่เดียว ----------
 // แหล่งที่มา + สถานะรายเว็บ (ล่ม/403/Cloudflare) · เพิ่มแหล่งสำรอง · หมวด (แตะสลับได้เลย) · รีเฟรช/แก้ไข/ลบ/เปิดแบบผู้ใช้
 let mangaSheetId = null;
@@ -4096,6 +4189,7 @@ function mangaHasBadHost(m, hosts) {
 
 function closeMangaSheet() {
   mangaSheetId = null;
+  videoSheetKey = null;
   el("#mangaSheet").hidden = true;
 }
 
@@ -4103,6 +4197,7 @@ function openMangaSheet(id) {
   const m = state.catalog.find((x) => x.id === id);
   if (!m) return closeMangaSheet();
   mangaSheetId = id;
+  videoSheetKey = null;
   const hosts = hostStatusMap();
   const urls = (m.sources || []).map((s) => s.url).filter(Boolean);
   const cats = new Set(m.categories || []);
@@ -4169,6 +4264,7 @@ async function saveMangaSources(m, urls) {
 
 async function mangaSheetClick(e) {
   if (e.target === el("#mangaSheet")) return closeMangaSheet(); // แตะพื้นหลัง
+  if (videoSheetKey) return videoSheetClick(e);
   const m = state.catalog.find((x) => x.id === mangaSheetId);
   if (!m) return;
   const urls = (m.sources || []).map((s) => s.url).filter(Boolean);
@@ -4228,7 +4324,9 @@ async function mangaSheetClick(e) {
 
 function initMangaSheet() {
   el("#mangaSheet").addEventListener("click", mangaSheetClick);
+  el("#mangaSheet").addEventListener("change", videoSheetChange);
   el("#mangaSheet").addEventListener("submit", async (e) => {
+    if (videoSheetKey) return videoSheetSubmit(e);
     e.preventDefault();
     const m = state.catalog.find((x) => x.id === mangaSheetId);
     const input = e.target.querySelector("input");
@@ -4240,6 +4338,199 @@ function initMangaSheet() {
     if (await saveMangaSources(m, [...urls, url])) toast(`เพิ่มแหล่งสำรอง ${requestHost(url)} แล้ว`);
     else e.target.querySelector("button").disabled = false;
   });
+}
+
+// ---------- แผ่นรายละเอียดซีรีส์คลิป / คลิปเดี่ยว — โครงเดียวกับแผ่นมังงะ (ที่มา · ตอน · หมวด · จัดการ) ----------
+// ใช้กล่อง #mangaSheet ร่วมกัน; หมวด/แนว/ติดตาม แตะแล้วบันทึกทันที (เดิมต้องกดปุ่มบันทึก)
+let videoSheetKey = null; // "pl:<id>" / "v:<id>"
+
+function videoGenreChips(item) {
+  return (state.videoGenres || []).map((g) => {
+    const auto = !!genreKeywordIn(g, gridItemText(item));
+    return `<button class="video-chip${itemHasGenre(item, g) ? " active" : ""}${auto ? " auto" : ""}" data-vs-genre="${escapeHtml(g.id)}">${escapeHtml(g.name)}</button>`;
+  }).join("");
+}
+
+function videoCatChips(selected) {
+  return (state.videoCategories || []).map((c) =>
+    `<button class="video-chip${selected === c.id ? " active" : ""}" data-vs-cat="${escapeHtml(c.id)}">${escapeHtml(c.name)}</button>`).join("");
+}
+
+function sheetCatsHtml(item) {
+  const genres = videoGenreChips(item);
+  return `<div class="ms-title">หมวด <small>แตะเพื่อเลือก (แตะซ้ำ = ไม่มีหมวด)</small></div><div class="ms-cats">${videoCatChips(item.category_id)}</div>
+    ${genres ? `<div class="ms-title">แนว <small>เส้นประ = ระบบติดให้จากชื่อ</small></div><div class="ms-cats">${genres}</div>` : ""}`;
+}
+
+function renameRowHtml(name) {
+  return `<button class="ms-row" data-vs-rename><span class="set-ic">✏️</span><span class="grow">แก้ชื่อ</span><span class="chev">›</span></button>
+    <form class="ms-add ms-rename" data-vs-rename-form hidden><input value="${escapeHtml(name)}" maxlength="160" required /><button type="submit" class="btn primary">บันทึก</button></form>`;
+}
+
+function openSeriesSheet(id) {
+  const p = playlistById(id);
+  if (!p) return closeMangaSheet();
+  mangaSheetId = null;
+  videoSheetKey = `pl:${id}`;
+  const eps = allPlaylistEpisodes(id);
+  const gaps = playlistGaps(id);
+  const seasons = new Set(eps.map((v) => v.season || 1)).size;
+  const gapSet = new Set(gaps.map((g) => `${g.season}:${g.n}`));
+  // ตารางตอน (ตอนขาดแดง) — แสดงไม่เกิน 80 ช่อง เรื่องยาวดูทั้งหมดในหน้าแก้เลขตอน
+  const cells = [];
+  const bySeason = new Map();
+  for (const v of eps) (bySeason.get(v.season || 1) || bySeason.set(v.season || 1, []).get(v.season || 1)).push(Number(v.episode));
+  for (const [season, nums] of bySeason) {
+    const ints = nums.filter((n) => Number.isInteger(n) && n > 0);
+    const lo = Math.min(...ints), hi = Math.max(...ints);
+    if (seasons > 1) cells.push(`<span class="ep-season">S${season}</span>`);
+    if (!ints.length) continue;
+    for (let n = lo; n <= hi && cells.length < 80; n++) cells.push(`<span class="${gapSet.has(`${season}:${n}`) ? "miss" : ""}">${n}</span>`);
+  }
+  const providers = {};
+  for (const v of eps) providers[providerName(v)] = (providers[providerName(v)] || 0) + 1;
+  const tracks = (p.tracks || []).map((t) => `<div class="ms-row">
+      <span class="status-dot ${t.error ? "bad" : "ok"}"></span>
+      <span class="grow"><b>${t.lang ? `${LANG_LABEL[t.lang]} · ` : ""}${escapeHtml(t.title || t.list_id)}</b><small>${escapeHtml(providerName({ provider: t.kind || "youtube" }))} · ${t.error ? escapeHtml(t.error) : `เช็ค ${timeAgo(t.checked_at, "เมื่อสักครู่")}`}</small></span>
+      <input type="checkbox" class="switch" data-vs-track="${escapeHtml(t.list_id)}"${t.follow ? " checked" : ""} aria-label="ติดตามตอนใหม่" />
+    </div>`).join("");
+  const twins = (similarPlaylists().get(id) || []).map(playlistById).filter(Boolean);
+  el("#mangaSheetBody").innerHTML = `
+    <div class="ms-head">
+      ${p.thumbnail_url ? `<img class="wide" src="${escapeHtml(p.thumbnail_url)}" alt="" />` : '<span class="ms-thumb-ph">🎬</span>'}
+      <div class="grow"><h3>${escapeHtml(p.name)}</h3>
+        <small>🎬 ซีรีส์ · ${p.count} ตอน${eps.length ? ` (${Number(eps[0].episode)}–${Number(eps[eps.length - 1].episode)})` : ""}${seasons > 1 ? ` · ${seasons} ซีซั่น` : ""} · ตอนใหม่ ${timeAgo(p.updated_at, "เมื่อสักครู่")}</small></div>
+    </div>
+    ${gaps.length ? `<div class="ms-alert warn">ตอนขาด ${gaps.length} ตอน: ${escapeHtml(gapText(gaps))}</div>` : ""}
+    ${twins.length ? `<div class="ms-alert info">ชื่อคล้ายกับ ${twins.map((t) => `"${escapeHtml(t.name)}" (${t.count} ตอน)`).join(", ")} — อาจเป็นเรื่องเดียวกัน รวมได้ที่ "ซีซั่น · รวมเรื่อง"</div>` : ""}
+    <div class="ms-title">ที่มา</div>
+    <div class="ms-group">
+      ${tracks}
+      <div class="ms-row"><span class="set-ic">📼</span><span class="grow">${Object.entries(providers).map(([k, n]) => `${escapeHtml(k)} ${n} ตอน`).join(" · ") || "ยังไม่มีตอน"}<small>${tracks ? "สวิตช์ = ติดตามตอนใหม่อัตโนมัติ (เช็คทุก 1 ชม.)" : "เพิ่มตอนใหม่: ปุ่ม ＋ เพิ่ม → วางลิงก์ / ติดตามเพจ"}</small></span></div>
+    </div>
+    <div class="ms-title">ตอน <button class="link-btn" data-vs-advanced="episodes">เรียง / แก้เลขตอน ›</button></div>
+    <div class="ep-grid">${cells.join("") || '<span class="hint">ยังไม่มีตอน</span>'}</div>
+    ${sheetCatsHtml(p)}
+    <div class="ms-title">จัดการ</div>
+    <div class="ms-group">
+      ${renameRowHtml(p.name)}
+      <button class="ms-row" data-vs-advanced="pl"><span class="set-ic">🔗</span><span class="grow">ซีซั่น · ภาษา · รวมเข้ากับเรื่องอื่น${twins.length ? `<small>เจอชื่อคล้าย: ${escapeHtml(twins[0].name)}</small>` : ""}</span><span class="chev">›</span></button>
+      <button class="ms-row" data-vs-open><span class="set-ic">👁</span><span class="grow">เปิดแบบผู้ใช้</span><span class="chev">›</span></button>
+      <button class="ms-row danger" data-vs-delete><span class="set-ic">🗑</span><span class="grow">ลบทั้งเรื่อง (${p.count} ตอน)</span></button>
+    </div>
+    <div id="mangaSheetMsg" class="form-msg"></div>`;
+  el("#mangaSheet").hidden = false;
+}
+
+function openClipSheet(id) {
+  const v = state.videos.find((x) => x.id === id);
+  if (!v) return closeMangaSheet();
+  mangaSheetId = null;
+  videoSheetKey = `v:${id}`;
+  const dur = Number(v.duration_seconds) || 0;
+  el("#mangaSheetBody").innerHTML = `
+    <div class="ms-head">
+      ${v.thumbnail_url ? `<img class="wide" src="${escapeHtml(v.thumbnail_url)}" alt="" />` : '<span class="ms-thumb-ph">🎞</span>'}
+      <div class="grow"><h3>${escapeHtml(v.title)}</h3>
+        <small>🎞 คลิปเดี่ยว${dur ? ` · ${Math.max(1, Math.round(dur / 60))} นาที` : ""} · เพิ่มโดย ${escapeHtml(v.added_by || "-")} ${timeAgo(v.created_at, "เมื่อสักครู่")}</small></div>
+    </div>
+    <div class="ms-title">ที่มา</div>
+    <div class="ms-group"><div class="ms-row"><span class="set-ic">📼</span><span class="grow">${escapeHtml(providerName(v))}<small>${v.external ? "เล่นในแอปไม่ได้ — เปิดในแอปต้นทาง" : "เล่นในแอปได้"}</small></span></div></div>
+    ${sheetCatsHtml(v)}
+    <div class="ms-title">จัดการ</div>
+    <div class="ms-group">
+      ${renameRowHtml(v.title)}
+      <button class="ms-row" data-vs-play><span class="set-ic">▶</span><span class="grow">เปิดดูคลิป</span><span class="chev">›</span></button>
+      <button class="ms-row danger" data-vs-delete><span class="set-ic">🗑</span><span class="grow">ลบคลิป</span></button>
+    </div>
+    <div id="mangaSheetMsg" class="form-msg"></div>`;
+  el("#mangaSheet").hidden = false;
+}
+
+function reopenVideoSheet() {
+  if (!videoSheetKey) return;
+  const id = videoSheetKey.slice(videoSheetKey.indexOf(":") + 1);
+  videoSheetKey.startsWith("pl:") ? openSeriesSheet(id) : openClipSheet(id);
+}
+
+async function patchVideoItem(body) {
+  const [kind, id] = [videoSheetKey.slice(0, videoSheetKey.indexOf(":")), videoSheetKey.slice(videoSheetKey.indexOf(":") + 1)];
+  const url = kind === "pl" ? `/api/video-playlists/${encodeURIComponent(id)}` : `/api/videos/${encodeURIComponent(id)}`;
+  await sendJSON("PATCH", url, body);
+  await loadVideos();
+  adminTasksCache && (adminTasksCache.at = 0);
+  renderSettings();
+  reopenVideoSheet();
+}
+
+async function videoSheetClick(e) {
+  const key = videoSheetKey;
+  const kind = key.slice(0, key.indexOf(":"));
+  const id = key.slice(key.indexOf(":") + 1);
+  const item = kind === "pl" ? playlistById(id) : state.videos.find((x) => x.id === id);
+  if (!item) return closeMangaSheet();
+  const msg = el("#mangaSheetMsg");
+  try {
+    const cat = e.target.closest("[data-vs-cat]");
+    if (cat) return await patchVideoItem({ category_id: cat.classList.contains("active") ? null : cat.dataset.vsCat });
+    const genre = e.target.closest("[data-vs-genre]");
+    if (genre) {
+      genre.classList.toggle("active");
+      const add = [], remove = [];
+      for (const chip of els("#mangaSheet [data-vs-genre]")) {
+        const g = (state.videoGenres || []).find((x) => x.id === chip.dataset.vsGenre);
+        const auto = g && !!genreKeywordIn(g, gridItemText(item));
+        if (chip.classList.contains("active") && !auto) add.push(chip.dataset.vsGenre);
+        if (!chip.classList.contains("active") && auto) remove.push(chip.dataset.vsGenre);
+      }
+      return await patchVideoItem({ genres_add: add, genres_remove: remove });
+    }
+    if (e.target.closest("[data-vs-rename]")) {
+      const form = el("#mangaSheet [data-vs-rename-form]");
+      form.hidden = !form.hidden;
+      if (!form.hidden) form.querySelector("input").focus();
+      return;
+    }
+    const adv = e.target.closest("[data-vs-advanced]")?.dataset.vsAdvanced;
+    if (adv) {
+      // ฟังก์ชันที่ยังไม่ย้ายมา (ซีซั่น/ภาษา/รวมเรื่อง/แก้เลขตอน) เปิดแผ่นเดิม
+      closeMangaSheet();
+      return openVmSheet(`pl:${id}`, { episodes: adv === "episodes" });
+    }
+    if (e.target.closest("[data-vs-open]")) { closeMangaSheet(); showTab("videos"); return openPlaylist(id); }
+    if (e.target.closest("[data-vs-play]")) { closeMangaSheet(); return openVideo(item); }
+    if (e.target.closest("[data-vs-delete]")) {
+      const ask = kind === "pl" ? `ลบ "${item.name}" พร้อมทั้ง ${item.count} ตอน?\n(ทุกคนจะไม่เห็นอีก)` : `ลบคลิป "${item.title}"?`;
+      if (!(await askConfirm(ask))) return;
+      await sendJSON("DELETE", kind === "pl" ? `/api/video-playlists/${encodeURIComponent(id)}` : `/api/videos/${encodeURIComponent(id)}`);
+      closeMangaSheet();
+      await loadVideos();
+      return renderSettings();
+    }
+  } catch (err) {
+    if (msg) { msg.className = "form-msg error"; msg.textContent = err.message || "บันทึกไม่สำเร็จ"; }
+  }
+}
+
+async function videoSheetChange(e) {
+  const track = e.target.closest("[data-vs-track]");
+  if (!track || !videoSheetKey?.startsWith("pl:")) return;
+  try {
+    await patchVideoItem({ track: { list_id: track.dataset.vsTrack, follow: track.checked } });
+    toast(track.checked ? "ติดตามตอนใหม่แล้ว" : "เลิกติดตามตอนใหม่แล้ว");
+  } catch (err) { track.checked = !track.checked; toast(err.message || "บันทึกไม่สำเร็จ", { error: true }); }
+}
+
+async function videoSheetSubmit(e) {
+  if (!e.target.matches("[data-vs-rename-form]")) return false;
+  e.preventDefault();
+  const name = e.target.querySelector("input").value.trim();
+  if (!name) return true;
+  try {
+    await patchVideoItem(videoSheetKey.startsWith("pl:") ? { name } : { title: name });
+    toast("เปลี่ยนชื่อแล้ว");
+  } catch (err) { toast(err.message || "บันทึกไม่สำเร็จ", { error: true }); }
+  return true;
 }
 
 // ---------- ＋ เพิ่ม (แอดมิน): วางลิงก์อะไรก็ได้ → เดาชนิด → มังงะดูตัวอย่าง/เช็คซ้ำก่อนเพิ่ม, ที่เหลือส่งต่อฟอร์มเดิม ----------
@@ -6545,7 +6836,7 @@ async function loadCommentManage() {
 }
 
 // ---------- จัดการคลิป (แอดมิน): แท็บ คลิป / Playlist / หมวด / เพิ่ม + แผ่นแก้ไข ----------
-let vmTab = "playlists";
+let vmTab = "cats"; // คลิป/Playlist ย้ายไปรายการรวม (เนื้อหา › รายการ) — หน้านี้เหลือหมวด/เพิ่ม
 let vmPlFilter = "updated"; // updated / nocat / similar
 let vmClipFilter = "all"; // all / nocat / external
 
@@ -7408,6 +7699,7 @@ function initAdminPanels() {
     if (btn.dataset.subtab === "systemManage") loadSystemStatus();
     if (btn.dataset.subtab === "commentManage") loadCommentManage();
     if (btn.dataset.subtab === "videoManage") loadVideos().then(() => { renderVideoManage(); loadPlaylistWatch(); });
+    if (btn.dataset.subtab === "mangaManage") (state.videoPlaylists?.length ? Promise.resolve() : loadVideos()).then(() => { lastSettingsSignature = null; renderSettings(); });
   }));
   el("#systemRefreshBtn").addEventListener("click", loadSystemStatus);
   el("#commentManageList").addEventListener("click", async (event) => {

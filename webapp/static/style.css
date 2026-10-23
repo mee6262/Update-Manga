@@ -1722,3 +1722,27 @@ button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%
 .ms-find { display: block; margin: 10px 4px 0; }
 #msFindResult { margin-top: 8px; }
 #msFindResult .hint { margin: 6px 4px 0; font-size: 0.78rem; }
+
+/* เนื้อหา › รายการรวม (มังงะ + ซีรีส์ + คลิปเดี่ยว): ปกมีไอคอนชนิด, ป้ายหมวดวิดีโอสีม่วง */
+#contentTypes { margin-bottom: 6px; }
+.cr-cover { position: relative; width: 42px; height: 58px; flex: none; border-radius: 6px; background: var(--img-bg); }
+.cr-cover.wide { width: 72px; height: 42px; margin-top: 8px; align-self: flex-start; }
+.cr-cover img { width: 100%; height: 100%; object-fit: cover; border-radius: 6px; display: block; }
+.cr-cover i { position: absolute; left: -5px; bottom: -5px; font-size: 0.68rem; font-style: normal; background: var(--bg-elevated); border-radius: 6px; padding: 0 3px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
+.settings-row > .cr-cover + .grow { min-width: 0; }
+.src-pill.vid { background: rgba(124, 58, 237, 0.14); color: #8b5cf6; }
+#mangaAdminFilters .video-chip[hidden] { display: none; }
+/* แผ่นซีรีส์/คลิป */
+.ms-head img.wide { width: 96px; height: 54px; }
+.ms-thumb-ph { width: 96px; height: 54px; border-radius: 8px; background: var(--img-bg); display: grid; place-items: center; font-size: 1.4rem; flex: none; }
+.ms-alert.warn { background: rgba(212, 160, 23, 0.14); color: #b7841a; }
+.ms-alert.info { background: rgba(59, 130, 246, 0.12); color: #3b82f6; }
+.ep-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(38px, 1fr)); gap: 4px; }
+.ep-grid span { font-size: 0.72rem; text-align: center; padding: 5px 0; border-radius: 6px; background: var(--bg-elevated); border: 1px solid var(--border); }
+.ep-grid span.miss { background: rgba(229, 72, 77, 0.14); border-color: rgba(229, 72, 77, 0.4); color: var(--danger); font-weight: 700; }
+.ep-grid .ep-season { grid-column: 1 / -1; text-align: left; background: none; border: 0; font-weight: 700; color: var(--text-dim); padding: 4px 2px 0; }
+.ms-cats .video-chip.auto { border-style: dashed; }
+.ms-rename { margin: 0; padding: 0 13px 11px; }
+.ms-row .switch { flex: none; }
+/* หน้าวิดีโอเดิม: คลิป/Playlist ย้ายไปรายการรวมแล้ว เหลือหมวด + เพิ่ม */
+#vmSeg [data-vm-tab="clips"], #vmSeg [data-vm-tab="playlists"] { display: none; }
