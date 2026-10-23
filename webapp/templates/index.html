@@ -184,6 +184,13 @@
         <a class="btn primary" href="/login">เข้าสู่ระบบ</a>
         <a id="guestRegisterBtn" class="btn" href="/register">สมัครสมาชิก</a>
       </div>
+      <div class="admin-only" hidden>
+        <button id="openAdminHub" class="admin-entry">
+          <span class="admin-entry-head"><b>🛡 จัดการระบบ</b><span id="adminDot" class="admin-entry-badge" hidden></span><span class="chev" aria-hidden="true">›</span></span>
+          <span id="adminEntrySub" class="admin-entry-sub">กำลังตรวจสถานะ…</span>
+          <span id="adminEntryChips" class="admin-entry-chips"></span>
+        </button>
+      </div>
       <button id="donateCard" class="donate-card" hidden><span class="donate-ic" aria-hidden="true">💚</span>
         <span class="grow"><b>สนับสนุนค่าใช้จ่าย Mee+</b><small id="donateCardSub"></small></span><span class="chev">›</span></button>
 
@@ -236,13 +243,7 @@
         <a href="/logout" class="set-item set-row set-danger member-only"><span class="set-ic">↩</span><span class="set-label">ออกจากระบบ</span></a>
       </div>
 
-      <div class="admin-only" hidden>
-        <h3 class="set-group-title">ผู้ดูแลระบบ</h3>
-        <div class="set-group">
-          <button id="openAdminHub" class="set-item set-row"><span class="set-ic">🛡</span><span class="set-label"><b>จัดการระบบ</b></span><span id="adminDot" class="status-dot warn" hidden></span><span class="chev" aria-hidden="true">›</span></button>
-        </div>
-      </div>
-      </div>
+      </div>      </div>
 
       <div id="requestsPane" hidden>
         <button class="btn set-back" data-admin-back="main">‹ ตั้งค่า</button>
@@ -251,90 +252,46 @@
         <div id="myRequestList" class="rq-list"></div>
       </div>
 
-      <div id="requestsAdminPane" hidden>
-        <button class="btn set-back" data-admin-back="hub">‹ จัดการระบบ</button>
-        <h2 id="requestsAdminTitle" class="section-title">คำขอเรื่อง</h2>
-        <p class="hint">มีคำขอใหม่ = แจ้งเข้า Telegram/แจ้งเตือนของแอดมิน · "เพิ่มเรื่องนี้" เปิดฟอร์มเพิ่มเรื่องพร้อมลิงก์ (มังงะ: เพิ่มเสร็จแล้วผูกคำขอให้เอง) · เพิ่มแล้วคนที่ขอได้ติดตามอัตโนมัติ + แจ้งเตือน</p>
-        <div id="adminRequestList" class="rq-list"></div>
-      </div>
-
       <div id="donatePane" class="donate-page" hidden>
         <button class="btn set-back" data-admin-back="main">‹ ตั้งค่า</button>
         <div id="donateBody"></div>
       </div>
 
-      <div id="donateAdminPane" hidden>
-        <button class="btn set-back" data-admin-back="hub">‹ จัดการระบบ</button>
-        <h2 class="section-title">หน้าสนับสนุน</h2>
-        <form id="donateForm" class="donate-form">
-          <div class="donate-box">
-            <label class="donate-sw">แสดงหน้าสนับสนุนให้ผู้ใช้เห็น<input type="checkbox" id="donateEnabled" class="switch" role="switch" /></label>
-            <label>ข้อความถึงผู้ใช้<textarea id="donateMessage" maxlength="600" rows="3" placeholder="เช่น Mee+ เปิดให้ใช้ฟรี ไม่มีโฆษณา ใครอยากช่วยค่าเซิร์ฟเวอร์ โอนได้ตามสะดวก"></textarea></label>
-            <label>ค่าเซิร์ฟเวอร์<input id="donateServerCost" maxlength="60" placeholder="เช่น 1,500 บาท/เดือน" /></label>
-          </div>
-          <div class="donate-box">
-            <h3>บัญชีรับโอน</h3>
-            <label>ธนาคาร<input id="donateBank" maxlength="40" list="donateBankList" placeholder="เช่น กสิกรไทย" /></label>
-            <datalist id="donateBankList"></datalist>
-            <label>เลขบัญชี<input id="donateAccountNo" maxlength="30" inputmode="numeric" placeholder="xxx-x-xxxxx-x" /></label>
-            <label>ชื่อบัญชี<input id="donateAccountName" maxlength="80" /></label>
-            <div class="donate-qr-admin">
-              <span class="donate-label">QR พร้อมเพย์ (รูปจากแอปธนาคาร · PNG/JPG/WebP ไม่เกิน 2 MB)</span>
-              <div class="donate-up"><span id="donateQrPreview" class="donate-qr-thumb"></span>
-                <label class="btn">เลือกรูป<input type="file" id="donateQrFile" accept="image/png,image/jpeg,image/webp" hidden /></label>
-                <button type="button" id="donateQrDelete" class="btn danger" hidden>ลบ</button></div>
-            </div>
-          </div>
-          <div class="donate-box">
-            <h3>ขอบคุณผู้สนับสนุน</h3>
-            <label>ชื่อที่แสดง (คั่นด้วยจุลภาค · เว้นว่าง = ไม่แสดงส่วนนี้)<textarea id="donateThanks" maxlength="600" rows="2"></textarea></label>
-          </div>
-          <div id="donateMsg" class="form-msg"></div>
-          <button type="submit" class="btn primary donate-save">บันทึก</button>
-          <button type="button" id="donatePreview" class="btn donate-save">ดูหน้าที่ผู้ใช้เห็น</button>
-        </form>
-      </div>
-
-      <div id="adminHub" hidden>
-        <button class="btn set-back" data-admin-back="main">‹ ตั้งค่า</button>
-        <h2 class="section-title">จัดการระบบ</h2>
-        <button id="adminHubSearch" class="admin-search admin-search-fake">🔍 ค้นหา: เรื่อง, หมวด, สมาชิก, คลิป, playlist, คอมเมนต์</button>
-        <div id="adminCards" class="admin-cards"></div>
-        <h3 class="set-group-title">เนื้อหา</h3>
-        <div class="set-group">
-          <button class="set-item set-row" data-admin-open="mangaManage"><span class="set-ic">📚</span><span class="set-label">มังงะ</span><span class="set-value" data-admin-count="manga"></span><span class="chev">›</span></button>
-          <button class="set-item set-row" data-admin-open="categoryManage"><span class="set-ic">🏷</span><span class="set-label">หมวดหมู่มังงะ</span><span class="set-value" data-admin-count="nocat"></span><span class="chev">›</span></button>
-          <button class="set-item set-row" data-admin-open="videoManage"><span class="set-ic">🎬</span><span class="set-label">คลิป / Playlist / หมวดคลิป</span><span class="chev">›</span></button>
-          <button id="openAdminRequests" class="set-item set-row"><span class="set-ic">📮</span><span class="set-label">คำขอเรื่องจากผู้ใช้</span><span id="adminRequestsCount" class="set-value"></span><span class="chev">›</span></button>
-          <button class="set-item set-row" data-admin-open="videoManage" data-admin-vm="add"><span class="set-ic">📡</span><span class="set-label">ติดตามเพจ + วางลิงก์</span><span class="set-value" data-admin-count="watch"></span><span class="chev">›</span></button>
-        </div>
-        <h3 class="set-group-title">ผู้ใช้</h3>
-        <div class="set-group">
-          <button class="set-item set-row" data-admin-open="userManage"><span class="set-ic">👥</span><span class="set-label">สมาชิก + เปิดรับสมัคร</span><span class="set-value" data-admin-count="users"></span><span class="chev">›</span></button>
-          <button class="set-item set-row" data-admin-open="commentManage"><span class="set-ic">💬</span><span class="set-label">คอมเมนต์</span><span class="chev">›</span></button>
-        </div>
-        <h3 class="set-group-title">ระบบ</h3>
-        <div class="set-group">
-          <button class="set-item set-row" data-admin-open="systemManage"><span class="set-ic">🖥</span><span class="set-label">สถานะเซิร์ฟเวอร์ + ล็อก</span><span class="chev">›</span></button>
-          <button id="openDonateAdmin" class="set-item set-row"><span class="set-ic">💚</span><span class="set-label">หน้าสนับสนุน (บัญชีรับโอน)</span><span class="chev">›</span></button>
-          <button id="adminRefreshAll" class="set-item set-row"><span class="set-ic">🔄</span><span class="set-label">รีเฟรชมังงะทั้งหมด</span><span class="set-value" data-admin-count="checked"></span></button>
-        </div>
-      </div>
-
       <div id="adminPage" hidden>
-        <button class="btn set-back" data-admin-back="hub">‹ จัดการระบบ</button>
-        <input type="search" id="adminSearch" class="admin-search" placeholder="🔍 ค้นหา: เรื่อง, หมวด, สมาชิก, คลิป, playlist, คอมเมนต์" autocomplete="off" />
+        <button class="btn set-back" data-admin-back="main">‹ ตั้งค่า</button>
+        <h2 class="section-title admin-title">จัดการระบบ</h2>
+        <input type="search" id="adminSearch" class="admin-search" placeholder="🔍 ค้นหาทุกอย่าง: เรื่อง, คลิป, สมาชิก, คำขอ, คอมเมนต์" autocomplete="off" />
         <div id="adminSearchMsg" class="hint admin-search-msg" hidden></div>
-        <nav class="sub-tabs">
-          <button class="sub-tab-btn active" data-subtab="mangaManage">เรื่อง</button>
-          <button class="sub-tab-btn" data-subtab="categoryManage">หมวดหมู่</button>
-          <button class="sub-tab-btn" data-subtab="userManage">สมาชิก</button>
-          <button class="sub-tab-btn" data-subtab="videoManage">คลิป</button>
-          <button class="sub-tab-btn" data-subtab="commentManage">คอมเมนต์</button>
-          <button class="sub-tab-btn" data-subtab="systemManage">ระบบ</button>
-        </nav>
+        <div class="admin-sticky">
+          <div class="admin-seg" role="tablist">
+            <button class="admin-seg-btn active" data-admin-group="overview">ภาพรวม<i data-group-badge="overview" hidden></i></button>
+            <button class="admin-seg-btn" data-admin-group="content">เนื้อหา<i data-group-badge="content" hidden></i></button>
+            <button class="admin-seg-btn" data-admin-group="users">ผู้ใช้<i data-group-badge="users" hidden></i></button>
+            <button class="admin-seg-btn" data-admin-group="system">ระบบ<i data-group-badge="system" hidden></i></button>
+          </div>
+          <nav class="sub-tabs" hidden>
+            <button class="sub-tab-btn active" data-subtab="overview" data-group="overview" hidden>ภาพรวม</button>
+            <button class="sub-tab-btn" data-subtab="mangaManage" data-group="content">📚 มังงะ</button>
+            <button class="sub-tab-btn" data-subtab="videoManage" data-group="content">🎬 คลิป / Playlist</button>
+            <button class="sub-tab-btn" data-subtab="categoryManage" data-group="content">🏷 หมวดมังงะ</button>
+            <button class="sub-tab-btn" data-subtab="userManage" data-group="users">👥 สมาชิก</button>
+            <button class="sub-tab-btn" data-subtab="requestsManage" data-group="users">📮 คำขอ</button>
+            <button class="sub-tab-btn" data-subtab="commentManage" data-group="users">💬 คอมเมนต์</button>
+            <button class="sub-tab-btn" data-subtab="systemManage" data-group="system">🖥 สถานะ</button>
+            <button class="sub-tab-btn" data-subtab="donateManage" data-group="system">💚 หน้าสนับสนุน</button>
+          </nav>
+        </div>
 
-        <div id="mangaManageSubview" class="subview active">
+        <div id="overviewSubview" class="subview active">
+          <h3 class="set-group-title">ต้องจัดการ<span id="adminTaskCount"></span></h3>
+          <div id="adminTasks" class="admin-tasks"><div class="hint">กำลังตรวจ…</div></div>
+          <h3 class="set-group-title">วันนี้</h3>
+          <div id="adminToday" class="admin-today"></div>
+          <h3 class="set-group-title">สรุป</h3>
+          <div id="adminCards" class="admin-cards"></div>
+        </div>
+
+        <div id="mangaManageSubview" class="subview">
         <div class="manage-actions">
           <button id="openAddMangaBtn" class="btn primary">+ เพิ่มเรื่องใหม่</button>
           <button id="refreshAllBtn" class="btn with-icon">
@@ -507,6 +464,41 @@
           <pre id="systemErrors" class="log-box"></pre>
           <h3 class="section-title">ตัวคุมเซิร์ฟเวอร์ (supervisor.log)</h3>
           <pre id="systemSupervisor" class="log-box"></pre>
+        </div>
+
+        <div id="requestsManageSubview" class="subview">
+          <p class="hint">มีคำขอใหม่ = แจ้งเข้า Telegram/แจ้งเตือนของแอดมิน · "เพิ่มเรื่องนี้" เปิดฟอร์มเพิ่มเรื่องพร้อมลิงก์ (มังงะ: เพิ่มเสร็จแล้วผูกคำขอให้เอง) · เพิ่มแล้วคนที่ขอได้ติดตามอัตโนมัติ + แจ้งเตือน</p>
+        <div id="adminRequestList" class="rq-list"></div>
+        </div>
+
+        <div id="donateManageSubview" class="subview">
+          <form id="donateForm" class="donate-form">
+          <div class="donate-box">
+            <label class="donate-sw">แสดงหน้าสนับสนุนให้ผู้ใช้เห็น<input type="checkbox" id="donateEnabled" class="switch" role="switch" /></label>
+            <label>ข้อความถึงผู้ใช้<textarea id="donateMessage" maxlength="600" rows="3" placeholder="เช่น Mee+ เปิดให้ใช้ฟรี ไม่มีโฆษณา ใครอยากช่วยค่าเซิร์ฟเวอร์ โอนได้ตามสะดวก"></textarea></label>
+            <label>ค่าเซิร์ฟเวอร์<input id="donateServerCost" maxlength="60" placeholder="เช่น 1,500 บาท/เดือน" /></label>
+          </div>
+          <div class="donate-box">
+            <h3>บัญชีรับโอน</h3>
+            <label>ธนาคาร<input id="donateBank" maxlength="40" list="donateBankList" placeholder="เช่น กสิกรไทย" /></label>
+            <datalist id="donateBankList"></datalist>
+            <label>เลขบัญชี<input id="donateAccountNo" maxlength="30" inputmode="numeric" placeholder="xxx-x-xxxxx-x" /></label>
+            <label>ชื่อบัญชี<input id="donateAccountName" maxlength="80" /></label>
+            <div class="donate-qr-admin">
+              <span class="donate-label">QR พร้อมเพย์ (รูปจากแอปธนาคาร · PNG/JPG/WebP ไม่เกิน 2 MB)</span>
+              <div class="donate-up"><span id="donateQrPreview" class="donate-qr-thumb"></span>
+                <label class="btn">เลือกรูป<input type="file" id="donateQrFile" accept="image/png,image/jpeg,image/webp" hidden /></label>
+                <button type="button" id="donateQrDelete" class="btn danger" hidden>ลบ</button></div>
+            </div>
+          </div>
+          <div class="donate-box">
+            <h3>ขอบคุณผู้สนับสนุน</h3>
+            <label>ชื่อที่แสดง (คั่นด้วยจุลภาค · เว้นว่าง = ไม่แสดงส่วนนี้)<textarea id="donateThanks" maxlength="600" rows="2"></textarea></label>
+          </div>
+          <div id="donateMsg" class="form-msg"></div>
+          <button type="submit" class="btn primary donate-save">บันทึก</button>
+          <button type="button" id="donatePreview" class="btn donate-save">ดูหน้าที่ผู้ใช้เห็น</button>
+        </form>
         </div>
       </div>
     </section>

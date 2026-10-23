@@ -172,11 +172,20 @@ except (OSError, ValueError):
     _cf_clearance = {}
 
 
+CF_RENEW_SECONDS = 100 * 60  # dark-manga: คุกกี้อยู่ ~2 ชม. (23:04 → แก้ใหม่ 01:09) → ต่อล่วงหน้า ไม่ให้มีช่วงรูป/หน้าโหลดไม่ขึ้น
+
+
 def cf_headers(url: str) -> dict:
-    """User-Agent + Cookie ที่ผ่าน Cloudflare แล้วของเว็บนี้ ({} = ไม่เคยโดนตรวจ)"""
+    """User-Agent + Cookie ที่ผ่าน Cloudflare แล้วของเว็บนี้ ({} = ไม่เคยโดนตรวจ) — ใกล้หมดอายุสั่งแก้ใหม่เบื้องหลัง"""
     entry = _cf_clearance.get(_host_key(url))
     if not entry:
         return {}
+    try:
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(entry["at"])).total_seconds()
+    except (KeyError, ValueError):
+        age = CF_RENEW_SECONDS
+    if age >= CF_RENEW_SECONDS:
+        request_cf_solve(url)  # ใช้คุกกี้เดิมต่อระหว่างรอ
     return {"User-Agent": entry["ua"], "Cookie": "; ".join(f"{k}={v}" for k, v in entry["cookies"].items())}
 
 

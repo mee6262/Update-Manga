@@ -384,6 +384,7 @@ function showTab(tab, fromBack = false) {
     loadCatalog().then(() => { renderSettings(); renderCategoryAdmin(); });
     renderUserList();
     loadSiteSettings();
+    renderAdminOverview().catch(() => {}); // การ์ดจัดการระบบบนหน้าตั้งค่า (แคช 1 นาที)
   }
 }
 
@@ -3029,7 +3030,7 @@ function initSearch() {
 // ---------- ค้นหาในหน้าจัดการ (แอดมิน) ----------
 // กรองแถวของทุกรายการในหน้าจัดการพร้อมกัน + ตัวเลขผลบนแท็บย่อย; รายการถูกวาดใหม่ (โหลด/แก้) ก็กรองซ้ำเอง
 const ADMIN_SEARCH_ROWS = ["#settingsList", "#categoryList", "#userList", "#watchSourceList", "#playlistManageList", "#videoManageList", "#commentManageList"]
-  .map((id) => `${id} > li`).join(", ");
+  .map((id) => `${id} > li`).join(", ") + ", #adminRequestList > .rq-row";
 let adminSearchLoaded = false;
 
 function adminRowText(row) {
@@ -3041,7 +3042,7 @@ function adminRowText(row) {
 function applyAdminSearch(jump = false) {
   const words = el("#adminSearch").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const counts = {};
-  const searchable = new Set(["mangaManage", "categoryManage", "userManage", "videoManage", "commentManage"]);
+  const searchable = new Set(["mangaManage", "categoryManage", "userManage", "videoManage", "commentManage", "requestsManage"]);
   els(ADMIN_SEARCH_ROWS).forEach((row) => {
     const text = words.length ? adminRowText(row) : "";
     const hit = words.every((w) => text.includes(w));
@@ -3061,6 +3062,7 @@ function applyAdminSearch(jump = false) {
   const text = words.length ? (total ? `พบ ${total} รายการ` : "ไม่พบ") : "";
   if (msg.textContent !== text) msg.textContent = text;
   msg.hidden = !words.length;
+  syncAdminTabs();
   // แท็บที่เปิดอยู่ไม่มีผล แต่แท็บอื่นมี → พาไปแท็บนั้น (เฉพาะตอนพิมพ์ ไม่กระโดดตอนรายการวาดใหม่)
   const active = el(".sub-tab-btn.active")?.dataset.subtab;
   if (jump && words.length && !counts[active]) {
@@ -3089,54 +3091,173 @@ function initAdminSearch() {
   }).observe(el("#adminPage"), { childList: true, subtree: true });
 }
 
-// ---------- หน้าตั้งค่า: ตั้งค่าของฉัน → ศูนย์จัดการ (แอดมิน) → หน้าจัดการย่อย ----------
-const SETTINGS_PANES = { main: "#settingsMain", hub: "#adminHub", page: "#adminPage", donate: "#donatePane", donateAdmin: "#donateAdminPane",
-  requests: "#requestsPane", requestsAdmin: "#requestsAdminPane" };
-const SETTINGS_PANE_BACK = { page: "hub", donateAdmin: "hub", requestsAdmin: "hub" }; // ที่เหลือ กลับหน้าตั้งค่า
+// ---------- หน้าตั้งค่า: ตั้งค่าของฉัน → จัดการระบบ (4 แท็บ: ภาพรวม · เนื้อหา · ผู้ใช้ · ระบบ) ----------
+// เดิม hub + หน้าย่อย 9 หน้า (ย้อนกลับ 2 แบบ, คำขอ/หน้าสนับสนุนแยกออกไป) → หน้าเดียว แท็บหลักอยู่ด้านบนตลอด
+const SETTINGS_PANES = { main: "#settingsMain", page: "#adminPage", donate: "#donatePane", requests: "#requestsPane" };
+const SETTINGS_PANE_BACK = {}; // ทุกหน้ากลับหน้าตั้งค่า
+const ADMIN_GROUP_FIRST = { overview: "overview", content: "mangaManage", users: "userManage", system: "systemManage" };
+const adminLastSubtab = {}; // กลับมาแท็บหลักเดิม → เปิดแท็บย่อยที่ดูค้างไว้
 
 function showSettingsPane(pane) {
+  if (pane === "hub") return openAdminPage("overview"); // ลิงก์/โค้ดเก่า
   for (const [name, sel] of Object.entries(SETTINGS_PANES)) el(sel).hidden = pane !== name;
   window.scrollTo(0, 0);
-  if (pane === "hub") renderAdminHub();
   if (pane === "donate") renderDonatePage();
-  if (pane === "donateAdmin") renderDonateAdmin();
-  if (pane === "requests" || pane === "requestsAdmin") loadRequests();
+  if (pane === "requests") loadRequests();
 }
 
 function settingsPane() {
   return Object.keys(SETTINGS_PANES).find((name) => !el(SETTINGS_PANES[name]).hidden) || "main";
 }
 
-function openAdminPage(subtab, vm) {
-  showSettingsPane("page");
-  if (vm) setVmTab(vm);
-  const btn = el(`.sub-tab-btn[data-subtab="${subtab}"]`);
-  if (btn) btn.click(); // ใช้ตัวโหลดข้อมูลของแท็บย่อยเดิม
+function activeAdminSubtab() {
+  return el(".sub-tab-btn.active")?.dataset.subtab || "overview";
 }
 
-// การ์ดสรุป + ตัวเลขในศูนย์จัดการ + จุดเตือนที่แถว "จัดการระบบ"
-async function renderAdminHub() {
+function openAdminPage(subtab = "overview", vm) {
+  showSettingsPane("page");
+  if (vm) setVmTab(vm);
+  el(`.sub-tab-btn[data-subtab="${subtab}"]`)?.click(); // ใช้ตัวโหลดข้อมูลของแท็บย่อยเดิม
+}
+
+// แสดงเฉพาะแท็บย่อยของแท็บหลักที่เลือก — ตอนค้นหาโชว์ทุกแท็บย่อยที่มีผล
+function syncAdminTabs() {
+  const group = el(".sub-tab-btn.active")?.dataset.group || "overview";
+  const searching = el("#adminPage").classList.contains("searching");
+  els(".admin-seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.adminGroup === group));
+  els(".sub-tab-btn").forEach((b) => {
+    const hit = b.querySelector(".sub-tab-count")?.textContent.trim();
+    b.hidden = b.dataset.subtab === "overview" || (searching ? !hit || hit === "0" : b.dataset.group !== group);
+  });
+  el("#adminPage .sub-tabs").hidden = !searching && group === "overview";
+  el(".admin-sticky").style.top = `${el(".topbar")?.offsetHeight || 0}px`; // ติดใต้แถบบน (มี safe-area บน iPhone)
+}
+
+// ---------- ภาพรวม: "ต้องจัดการ" รวมปัญหาจากทุกส่วน + ปุ่มพาไปแก้ ----------
+let adminTasksCache = null; // { at, tasks, ... } — หน้าตั้งค่าเปิดบ่อย ไม่ต้องยิง API ใหม่ทุกครั้ง
+
+function mangaHosts(m) {
+  const urls = (m.sources || []).map((s) => s.url).filter(Boolean);
+  return [...new Set(urls.map((u) => { try { return new URL(u).host.toLowerCase(); } catch (e) { return ""; } }).filter(Boolean))];
+}
+
+function cfText(cf) {
+  if (!cf) return "";
+  return cf.state === "solving" ? "Cloudflare: กำลังผ่าน…" : cf.state === "failed" ? `Cloudflare: ${cf.error || "ไม่ผ่าน"}` : "";
+}
+
+async function computeAdminTasks(force = false) {
+  if (!force && adminTasksCache && Date.now() - adminTasksCache.at < 60000) return adminTasksCache;
   if (!state.catalog.length) await loadCatalog();
-  const problems = state.catalog.filter((m) => m.refresh_error);
+  const [status, requests, watch, users] = await Promise.all([
+    getJSON("/api/admin/status").catch(() => null),
+    getJSON("/api/requests").catch(() => null),
+    getJSON("/api/video-playlists/watch").catch(() => null),
+    getJSON("/api/users").then((u) => u.length).catch(() => null),
+  ]);
+  if (watch && watch.sources) playlistWatch = watch;
+  const tasks = [];
+  // เว็บต้นทางล่ม/ดึงไม่ได้ → บอกเรื่องที่โดน + เรื่องที่ไม่มีแหล่งอื่นให้อ่าน
+  const badHosts = (status?.hosts || []).filter((h) => h.down || h.error);
+  const badSet = new Set(badHosts.map((h) => h.host));
+  for (const h of badHosts) {
+    const hit = state.catalog.filter((m) => mangaHosts(m).includes(h.host));
+    const alone = hit.filter((m) => mangaHosts(m).every((x) => badSet.has(x))).length;
+    const why = h.down ? "ล่ม" : `ดึงไม่ได้ (${h.error})`;
+    tasks.push({ tone: "bad", chip: `🔴 ${h.host.replace(/^www\./, "")} ${h.down ? "ล่ม" : "ดึงไม่ได้"}`,
+      title: `${h.host.replace(/^www\./, "")} ${why}`,
+      desc: [`${hit.length} เรื่อง`, alone ? `${alone} เรื่องไม่มีแหล่งสำรอง` : "ทุกเรื่องมีแหล่งสำรอง", cfText(h.cf)].filter(Boolean).join(" · "),
+      actions: [{ label: "ดูเรื่องที่โดน", go: "mangaManage", filter: `host:${h.host}`, primary: true }, { label: "สถานะเว็บ", go: "systemManage" }] });
+  }
+  const stuck = state.catalog.filter((m) => m.refresh_error && !mangaHosts(m).some((x) => badSet.has(x)));
+  if (stuck.length) {
+    tasks.push({ tone: "bad", chip: `🔴 ${stuck.length} เรื่องดึงไม่ได้`, title: `${stuck.length} เรื่องดึงไม่สำเร็จทุกแหล่ง`,
+      desc: stuck.slice(0, 3).map((m) => m.name).join(", ") + (stuck.length > 3 ? " …" : ""),
+      actions: [{ label: "ดูรายการ", go: "mangaManage", filter: "problem", primary: true }] });
+  }
+  const pending = (requests?.items || []).filter((r) => r.status === "pending");
+  if (pending.length) {
+    const first = pending[0];
+    tasks.push({ tone: "info", chip: `📮 คำขอใหม่ ${pending.length}`,
+      title: pending.length === 1 ? `คำขอเรื่องใหม่ · ${first.title}` : `คำขอเรื่องใหม่ ${pending.length} รายการ`,
+      desc: pending.length === 1 ? [`จาก ${(first.by || []).join(", ") || "-"}`, first.count > 1 ? `${first.count} คนขอเหมือนกัน` : "", timeAgo(first.created_at, "เมื่อสักครู่")].filter(Boolean).join(" · ")
+        : pending.slice(0, 3).map((r) => r.title).join(", ") + (pending.length > 3 ? " …" : ""),
+      actions: [{ label: "เปิดคำขอ", go: "requestsManage", primary: true }] });
+  }
+  for (const r of (watch?.last_result || []).filter((x) => x.error)) {
+    const src = (watch.sources || []).find((s) => s.url === r.url);
+    tasks.push({ tone: "warn", chip: "📡 เพจล้ม", title: `ติดตามเพจ${src?.category ? ` "${src.category}"` : ""}: ${r.error}`,
+      desc: `เช็คล่าสุด ${timeAgo(r.checked_at, "เมื่อสักครู่")} · ${requestHost(r.url)}`,
+      actions: [{ label: "เปิดการติดตามเพจ", go: "videoManage", vm: "add", primary: true }] });
+  }
+  const dayAgo = Date.now() - 86400000;
+  const hangs = (status?.supervisor || []).filter((line) => /ไม่ตอบ/.test(line) && Date.parse(line.slice(0, 19).replace(" ", "T")) > dayAgo).length;
+  if (hangs) {
+    tasks.push({ tone: "warn", chip: "🖥 เซิร์ฟเวอร์สะดุด", title: `เซิร์ฟเวอร์ไม่ตอบ ${hangs} ครั้งใน 24 ชม.`,
+      desc: "ตัวคุมเซิร์ฟเวอร์ตรวจไม่ผ่าน (ครบ 3 ครั้งติด = รีสตาร์ทเอง)", actions: [{ label: "ดูล็อก", go: "systemManage", primary: true }] });
+  }
   const nocat = state.catalog.filter((m) => !(m.categories || []).length).length;
+  if (nocat) {
+    tasks.push({ tone: "warn", chip: `🏷 ไม่มีหมวด ${nocat}`, title: `${nocat} เรื่องยังไม่มีหมวด`, desc: "ผู้ใช้จะไม่เจอเรื่องนี้ตอนเลือกดูตามหมวด",
+      actions: [{ label: "ใส่หมวด", go: "mangaManage", filter: "nocat", primary: true }] });
+  }
+  adminTasksCache = { at: Date.now(), tasks, status, users, pending: pending.length, badHosts: badHosts.length,
+    problems: state.catalog.filter((m) => m.refresh_error).length, nocat, watchErr: (watch?.last_result || []).some((x) => x.error), watch };
+  return adminTasksCache;
+}
+
+function adminGoAttrs(a) {
+  return `data-admin-go="${escapeHtml(a.go)}"${a.filter ? ` data-admin-filter="${escapeHtml(a.filter)}"` : ""}${a.vm ? ` data-admin-vm="${escapeHtml(a.vm)}"` : ""}`;
+}
+
+function adminGo(target) {
+  const go = target.dataset.adminGo;
+  if (target.dataset.adminFilter) mangaAdminFilter = target.dataset.adminFilter;
+  openAdminPage(go, target.dataset.adminVm);
+  if (go === "mangaManage") renderSettings();
+}
+
+// การ์ด "จัดการระบบ" บนหน้าตั้งค่า + ตัวเลขบนแท็บหลัก
+function renderAdminEntry(info) {
+  const n = info.tasks.length;
+  el("#adminDot").hidden = !n;
+  el("#adminDot").textContent = n;
+  el("#adminEntrySub").textContent = n ? `มี ${n} อย่างรอจัดการ` : "ทุกอย่างปกติ ✓";
+  el("#adminEntryChips").innerHTML = info.tasks.slice(0, 3).map((t) => `<span class="admin-chip ${t.tone}" ${adminGoAttrs(t.actions[0])}>${escapeHtml(t.chip)}</span>`).join("")
+    + (n > 3 ? `<span class="admin-chip">+${n - 3}</span>` : "");
+  const badges = { overview: n, content: info.problems, users: info.pending, system: info.badHosts };
+  els("[data-group-badge]").forEach((b) => { const v = badges[b.dataset.groupBadge]; b.hidden = !v; b.textContent = v || ""; });
+}
+
+async function renderAdminOverview(force = false) {
+  const info = await computeAdminTasks(force);
+  renderAdminEntry(info);
+  if (settingsPane() !== "page") return;
+  el("#adminTaskCount").textContent = info.tasks.length ? ` · ${info.tasks.length}` : "";
+  el("#adminTasks").innerHTML = info.tasks.map((t) => `<div class="admin-task ${t.tone}">
+      <div class="admin-task-title">${escapeHtml(t.title)}</div>
+      ${t.desc ? `<div class="admin-task-desc">${escapeHtml(t.desc)}</div>` : ""}
+      <div class="admin-task-acts">${t.actions.map((a) => `<button class="btn${a.primary ? " primary" : ""}" ${adminGoAttrs(a)}>${escapeHtml(a.label)}</button>`).join("")}</div>
+    </div>`).join("") || '<div class="admin-task ok"><div class="admin-task-title">✓ ไม่มีอะไรต้องจัดการ</div><div class="admin-task-desc">เว็บต้นทาง คำขอ เพจที่ติดตาม และเซิร์ฟเวอร์ปกติทั้งหมด</div></div>';
+  getJSON("/api/admin/stats").then((s) => {
+    el("#adminToday").innerHTML = [["ผู้ใช้", s.today_users], ["ตอนที่อ่าน", s.today_reads], ["คลิปที่ดู", s.today_plays]]
+      .map(([label, v]) => `<div class="admin-today-tile"><b>${v ?? "–"}</b><small>${label}</small></div>`).join("");
+  }).catch(() => { el("#adminToday").innerHTML = ""; });
   const clips = state.videos.filter((v) => !v.playlist_id).length;
-  const watch = playlistWatch && playlistWatch.last_result ? playlistWatch : await getJSON("/api/video-playlists/watch").catch(() => ({}));
-  if (watch.sources) playlistWatch = watch;
-  const watchErr = (watch.last_result || []).some((r) => r.error);
-  let users = null;
-  try { users = (await getJSON("/api/users")).length; } catch (e) { /* ไม่โชว์ตัวเลข */ }
-  const card = (label, value, status, tone) => `<div class="admin-card"><div class="mm-meta">${label}</div><div class="admin-card-num">${value}</div>${status ? `<div class="admin-card-status"><span class="status-dot ${tone}"></span>${escapeHtml(status)}</div>` : ""}</div>`;
+  const watch = info.watch || {};
+  const card = (go, label, value, status, tone) => `<button class="admin-card" data-admin-go="${go}"><div class="mm-meta">${label}</div><div class="admin-card-num">${value}</div>${status ? `<div class="admin-card-status"><span class="status-dot ${tone}"></span>${escapeHtml(status)}</div>` : ""}</button>`;
   el("#adminCards").innerHTML = [
-    card("มังงะ", state.catalog.length, problems.length ? `มีปัญหา ${problems.length} เรื่อง` : "ปกติทุกเรื่อง", problems.length ? "bad" : "ok"),
-    card("คลิป / Playlist", `${clips} / ${(state.videoPlaylists || []).length}`,
-      watch.last_run ? `เช็คเพจ ${timeAgo(watch.last_run, "เมื่อสักครู่")}${watchErr ? " ⚠️" : ""}` : (watch.sources || []).length ? "ยังไม่เคยเช็คเพจ" : "", watchErr ? "warn" : "ok"),
-    card("สมาชิก", users ?? "–", "", ""),
-    card("หมวดหมู่มังงะ", state.categories.length, nocat ? `ไม่มีหมวด ${nocat} เรื่อง` : "", nocat ? "warn" : "ok"),
+    card("mangaManage", "มังงะ", state.catalog.length, info.problems ? `มีปัญหา ${info.problems} เรื่อง` : "ปกติทุกเรื่อง", info.problems ? "bad" : "ok"),
+    card("videoManage", "คลิป / Playlist", `${clips} / ${(state.videoPlaylists || []).length}`,
+      watch.last_run ? `เช็คเพจ ${timeAgo(watch.last_run, "เมื่อสักครู่")}${info.watchErr ? " ⚠️" : ""}` : "", info.watchErr ? "warn" : "ok"),
+    card("userManage", "สมาชิก", info.users ?? "–", info.pending ? `คำขอรอ ${info.pending}` : "", info.pending ? "warn" : ""),
+    card("categoryManage", "หมวดหมู่มังงะ", state.categories.length, info.nocat ? `ไม่มีหมวด ${info.nocat} เรื่อง` : "", info.nocat ? "warn" : "ok"),
   ].join("");
-  const counts = { manga: problems.length ? `${state.catalog.length} · ⚠️ ${problems.length}` : String(state.catalog.length), nocat: nocat ? `ไม่มีหมวด ${nocat}` : "", watch: watchErr ? "⚠️" : "", users: users ?? "",
-    checked: state.catalog.length ? `ล่าสุด ${timeAgo(state.catalog.map((m) => m.last_checked_at || "").sort().pop(), "เมื่อสักครู่")}` : "" };
-  els("[data-admin-count]").forEach((x) => { x.textContent = counts[x.dataset.adminCount] ?? ""; });
-  el("#adminDot").hidden = !(problems.length || watchErr);
+}
+
+// ชื่อเดิม (โค้ดส่วนอื่นเรียกหลังแก้ข้อมูล) — คำนวณใหม่เสมอ
+function renderAdminHub() {
+  return renderAdminOverview(true);
 }
 
 // ---------- คำขอเรื่อง: ผู้ใช้ขอเรื่อง/เว็บที่อยากให้เพิ่ม — แอดมินเพิ่มแล้วคนที่ขอได้ติดตามอัตโนมัติ + แจ้งเตือน ----------
@@ -3153,13 +3274,13 @@ async function loadRequests() {
     renderRequestCounts(data.pending);
   } catch (e) { requestItems = []; }
   if (settingsPane() === "requests") renderMyRequests();
-  if (settingsPane() === "requestsAdmin") renderAdminRequests();
+  if (settingsPane() === "page" && activeAdminSubtab() === "requestsManage") renderAdminRequests();
 }
 
 function renderRequestCounts(pending) {
   const mine = requestItems.filter((r) => r.mine && r.status === "pending").length;
   el("#myRequestsCount").textContent = mine ? `รอ ${mine}` : "";
-  el("#adminRequestsCount").textContent = state.currentUser.is_admin && pending ? `ใหม่ ${pending}` : "";
+  if (state.currentUser.is_admin && adminTasksCache) { adminTasksCache.at = 0; } // คำขอเปลี่ยน → ภาพรวมคำนวณใหม่รอบหน้า
 }
 
 function requestHost(url) {
@@ -3192,7 +3313,7 @@ function renderMyRequests() {
 
 function renderAdminRequests() {
   const pending = requestItems.filter((r) => r.status === "pending").length;
-  el("#requestsAdminTitle").textContent = pending ? `คำขอเรื่อง · ใหม่ ${pending}` : "คำขอเรื่อง";
+  el('.sub-tab-btn[data-subtab="requestsManage"]').firstChild.textContent = pending ? `📮 คำขอ · ใหม่ ${pending}` : "📮 คำขอ";
   el("#adminRequestList").innerHTML = requestItems.length ? requestItems.map((r) => requestRowHtml(r, true)).join("")
     : '<div class="empty-state">ยังไม่มีคำขอ</div>';
 }
@@ -3308,7 +3429,6 @@ function initRequests() {
     if (open) return openRequestTarget(open);
   });
   el("#openMyRequests").addEventListener("click", () => showSettingsPane("requests"));
-  el("#openAdminRequests").addEventListener("click", () => showSettingsPane("requestsAdmin"));
   el("#requestSheet").addEventListener("click", async (event) => {
     if (event.target.closest("[data-request-close]")) { el("#requestSheet").hidden = true; return; }
     const kind = event.target.closest("[data-request-kind]")?.dataset.requestKind;
@@ -3498,7 +3618,6 @@ function showDonateQrViewer(url) {
 
 function initDonate() {
   el("#donateCard").addEventListener("click", () => showSettingsPane("donate"));
-  el("#openDonateAdmin").addEventListener("click", async () => { await loadDonate(); showSettingsPane("donateAdmin"); });
   el("#donatePreview").addEventListener("click", () => showSettingsPane("donate"));
   el("#donateBody").addEventListener("click", async (event) => {
     if (event.target.closest("[data-donate-save-qr]")) return saveDonateQr();
@@ -3550,23 +3669,18 @@ function initDonate() {
 
 function initSettingsPanes() {
   initDonate();
-  el("#openAdminHub").addEventListener("click", () => showSettingsPane("hub"));
+  // แตะการ์ด/ชิปในการ์ดจัดการระบบ: ชิปพาไปงานนั้นตรง ๆ ที่เหลือเปิดภาพรวม
+  el("#openAdminHub").addEventListener("click", (e) => {
+    const chip = e.target.closest("[data-admin-go]");
+    chip ? adminGo(chip) : openAdminPage("overview");
+  });
   els("[data-admin-back]").forEach((b) => b.addEventListener("click", () => showSettingsPane(b.dataset.adminBack)));
-  el("#adminHub").addEventListener("click", (e) => {
-    const row = e.target.closest("[data-admin-open]");
-    if (row) openAdminPage(row.dataset.adminOpen, row.dataset.adminVm);
+  el("#adminPage").addEventListener("click", (e) => {
+    const go = e.target.closest("[data-admin-go]");
+    if (go) adminGo(go);
   });
-  el("#adminHubSearch").addEventListener("click", () => {
-    openAdminPage("mangaManage");
-    el("#adminSearch").focus();
-  });
-  el("#adminRefreshAll").addEventListener("click", async () => {
-    await refreshAll();
-    await loadCatalog();
-    renderAdminHub();
-  });
-  // จุดเตือนที่แถว "จัดการระบบ" — เช็คเงียบ ๆ ครั้งแรกที่เปิดหน้าตั้งค่า
-  if (state.currentUser.is_admin) setTimeout(() => renderAdminHub().catch(() => {}), 1500);
+  // การ์ดบนหน้าตั้งค่า — เช็คเงียบ ๆ ครั้งแรกที่เปิดแอป แล้วทุกครั้งที่กลับมาหน้าตั้งค่า (แคช 1 นาที)
+  if (state.currentUser.is_admin) setTimeout(() => renderAdminOverview().catch(() => {}), 1500);
 }
 
 function initSubTabs() {
@@ -3576,8 +3690,14 @@ function initSubTabs() {
       els(".subview").forEach((v) => v.classList.remove("active"));
       btn.classList.add("active");
       el(`#${btn.dataset.subtab}Subview`).classList.add("active");
+      adminLastSubtab[btn.dataset.group] = btn.dataset.subtab;
+      syncAdminTabs();
     });
   });
+  els(".admin-seg-btn").forEach((seg) => seg.addEventListener("click", () => {
+    const group = seg.dataset.adminGroup;
+    el(`.sub-tab-btn[data-subtab="${adminLastSubtab[group] || ADMIN_GROUP_FIRST[group]}"]`).click();
+  }));
 }
 
 // ---------- List view ----------
@@ -3887,8 +4007,16 @@ function renderSettings() {
     const n = { all: state.catalog.length, problem: problems, nocat }[b.dataset.mangaFilter];
     b.textContent = `${{ all: "ทั้งหมด", problem: "มีปัญหา", nocat: "ไม่มีหมวด" }[b.dataset.mangaFilter]} ${n}`;
   });
+  // host:<เว็บ> = มาจากการ์ด "เว็บนี้ดึงไม่ได้" ในภาพรวม — ชิปชั่วคราวบอกว่ากรองอยู่ แตะ "ทั้งหมด" เพื่อล้าง
+  const hostFilter = mangaAdminFilter.startsWith("host:") ? mangaAdminFilter.slice(5) : "";
+  let hostChip = el("#mangaAdminFilters [data-manga-filter^='host:']");
+  if (hostFilter && !hostChip) el("#mangaAdminFilters").appendChild(hostChip = Object.assign(document.createElement("button"), { className: "video-chip active" }));
+  if (hostChip) {
+    if (hostFilter) { hostChip.dataset.mangaFilter = mangaAdminFilter; hostChip.textContent = `🌐 ${hostFilter.replace(/^www\./, "")} ✕`; } else hostChip.remove();
+  }
   const items = state.catalog.filter((m) => mangaAdminFilter === "problem" ? m.refresh_error
-    : mangaAdminFilter === "nocat" ? !(m.categories || []).length : true);
+    : mangaAdminFilter === "nocat" ? !(m.categories || []).length
+    : hostFilter ? mangaHosts(m).includes(hostFilter) : true);
   const signature = JSON.stringify([mangaAdminFilter, Math.floor(Date.now() / 600000), items.map((m) => [m.id, m.name, m.source, m.latest_chapter, m.cover_url, (m.sources || []).length, m.refresh_error, m.last_checked_at])]);
   if (signature === lastSettingsSignature) return;
   lastSettingsSignature = signature;
@@ -3924,7 +4052,7 @@ function initSettingsClicks() {
   el("#mangaAdminFilters").addEventListener("click", (e) => {
     const f = e.target.closest("[data-manga-filter]")?.dataset.mangaFilter;
     if (!f) return;
-    mangaAdminFilter = f;
+    mangaAdminFilter = f.startsWith("host:") ? "all" : f; // ชิปเว็บ = ล้างตัวกรอง
     renderSettings();
   });
   el("#settingsList").addEventListener("click", (e) => {
@@ -5764,8 +5892,8 @@ function initShare() {
 function openFromUrl(url) {
   if (url.searchParams.get("admin") === "requests" || url.searchParams.get("requests")) {
     history.replaceState(null, "", "/");
-    const pane = url.searchParams.get("admin") === "requests" && state.currentUser.is_admin ? "requestsAdmin" : "requests";
-    setTimeout(() => { showTab("settings"); showSettingsPane(pane); }, 0);
+    const admin = url.searchParams.get("admin") === "requests" && state.currentUser.is_admin;
+    setTimeout(() => { showTab("settings"); admin ? openAdminPage("requestsManage") : showSettingsPane("requests"); }, 0);
     return;
   }
   if (url.searchParams.get("comments")) {
@@ -6917,6 +7045,9 @@ function initAnifumeAdmin() {
 
 function initAdminPanels() {
   els(".sub-tab-btn").forEach((btn) => btn.addEventListener("click", () => {
+    if (btn.dataset.subtab === "overview") renderAdminOverview().catch(() => {});
+    if (btn.dataset.subtab === "requestsManage") loadRequests();
+    if (btn.dataset.subtab === "donateManage") loadDonate().then(renderDonateAdmin);
     if (btn.dataset.subtab === "systemManage") loadSystemStatus();
     if (btn.dataset.subtab === "commentManage") loadCommentManage();
     if (btn.dataset.subtab === "videoManage") loadVideos().then(() => { renderVideoManage(); loadPlaylistWatch(); });

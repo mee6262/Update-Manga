@@ -5015,6 +5015,9 @@ def _fetch_image(src: str, netloc: str) -> tuple[bytes, str, tuple[str, int] | N
                     )
                 resp.raise_for_status()
             except Exception as e:
+                # รูปโดนหน้าตรวจ Cloudflare (คุกกี้หมด/ยังไม่มี) → สั่งแก้เบื้องหลัง โหลดรูปรอบหน้าก็ผ่าน
+                if isinstance(e, requests.HTTPError) and scraper.is_cf_challenge(e.response):
+                    scraper.request_cf_solve(src)
                 # จำไว้ว่าเซิร์ฟเวอร์รูปนี้ล่ม หน้าอ่านจะได้ขอรายการรูปใหม่จากแหล่งสำรองแทน (ดู get_chapter)
                 if scraper.is_outage(e):
                     scraper.mark_host_down(src)

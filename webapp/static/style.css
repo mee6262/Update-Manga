@@ -1221,7 +1221,7 @@ a.mm-tile { text-decoration: none; }
 .row-menu[hidden] { display: none; }
 .row-menu .btn { font-size: 0.85rem; padding: 6px 10px; display: inline-flex; align-items: center; gap: 6px; }
 .row-menu .btn svg { width: 16px; height: 16px; }
-#settingsMain[hidden], #adminHub[hidden], #adminPage[hidden] { display: none; }
+#settingsMain[hidden], #adminPage[hidden] { display: none; }
 
 /* ===== จัดการคลิป (แอดมิน) ===== */
 .vm-seg { margin: 0 0 12px; }
@@ -1519,7 +1519,7 @@ button.vc-grow { background: none; border: 0; padding: 0; text-align: left; font
 .donate-card b { display: block; font-size: 0.98rem; }
 .donate-card small { color: var(--text-dim); font-size: 0.78rem; }
 .donate-ic { font-size: 1.6rem; }
-.donate-page[hidden], #donateAdminPane[hidden] { display: none; }
+.donate-page[hidden] { display: none; }
 .donate-hero { text-align: center; padding: 8px 8px 4px; }
 .donate-big { font-size: 2.6rem; }
 .donate-hero h2 { margin: 4px 0 6px; font-size: 1.3rem; }
@@ -1621,3 +1621,44 @@ button.vc-grow { background: none; border: 0; padding: 0; text-align: left; font
 
 /* Safari ค้าง viewport (vp-stuck จาก app.js): มันคิดว่าจออยู่หัวเอกสาร → การ์ดข้างล่างถูกข้ามการวาดเป็นกรอบขาว */
 html.vp-stuck .manga-card, html.vp-stuck .history-row { content-visibility: visible; }
+
+/* ---------- จัดการระบบ (4 แท็บ: ภาพรวม · เนื้อหา · ผู้ใช้ · ระบบ) ---------- */
+/* การ์ดทางเข้าบนหน้าตั้งค่า: บอกเลยว่ามีอะไรรอ แตะชิปไปงานนั้นตรง ๆ */
+.admin-entry { display: block; width: 100%; text-align: left; margin: 12px 0 4px; border: 0; border-radius: 14px; padding: 14px; background: linear-gradient(135deg, #12291f, #16a066); color: #fff; font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.admin-entry-head { display: flex; align-items: center; gap: 8px; font-size: 1.02rem; }
+.admin-entry-head b { flex: 1; }
+.admin-entry-head .chev { color: rgba(255, 255, 255, 0.8); }
+.admin-entry-badge { min-width: 22px; height: 22px; padding: 0 7px; border-radius: 11px; background: #fff; color: var(--danger); font-size: 0.78rem; font-weight: 800; display: grid; place-items: center; }
+.admin-entry-badge[hidden] { display: none; }
+.admin-entry-sub { display: block; font-size: 0.82rem; opacity: 0.9; margin-top: 2px; }
+.admin-entry-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.admin-entry-chips:empty { display: none; }
+.admin-chip { background: rgba(255, 255, 255, 0.18); border-radius: 8px; padding: 4px 9px; font-size: 0.78rem; }
+/* แท็บหลัก + แท็บย่อย ติดใต้แถบบนตอนเลื่อน (top ตั้งจาก JS = ความสูง topbar) */
+.admin-title { margin-top: 4px; }
+.admin-sticky { position: sticky; top: 0; z-index: 9; background: var(--bg); padding: 8px 0; margin-bottom: 8px; }
+.admin-seg { display: flex; gap: 2px; background: var(--border); border-radius: 11px; padding: 3px; }
+.admin-seg-btn { flex: 1; position: relative; border: 0; background: none; color: var(--text-dim); font: inherit; font-size: 0.86rem; font-weight: 600; padding: 8px 0; border-radius: 9px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.admin-seg-btn.active { background: var(--bg-elevated); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15); }
+.admin-seg-btn i { display: inline-block; vertical-align: 1px; margin-left: 4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--danger); color: #fff; font-size: 0.65rem; font-style: normal; line-height: 16px; }
+.admin-seg-btn i[hidden] { display: none; }
+.admin-sticky .sub-tabs { margin: 8px 0 0; }
+.admin-sticky .sub-tabs[hidden], .sub-tab-btn[hidden] { display: none; }
+/* ภาพรวม: ต้องจัดการ / วันนี้ / สรุป */
+.admin-tasks { display: flex; flex-direction: column; gap: 8px; }
+.admin-task { background: var(--bg-card); border: 1px solid var(--border); border-left: 4px solid var(--danger); border-radius: 12px; padding: 11px 13px; }
+.admin-task.warn { border-left-color: #d4a017; }
+.admin-task.info { border-left-color: #3b82f6; }
+.admin-task.ok { border-left-color: var(--accent); }
+.admin-task-title { font-weight: 700; font-size: 0.95rem; }
+.admin-task-desc { color: var(--text-dim); font-size: 0.8rem; margin-top: 3px; line-height: 1.45; }
+.admin-task-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.admin-task-acts:empty { display: none; }
+.admin-task-acts .btn { padding: 6px 12px; font-size: 0.82rem; }
+.admin-today { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.admin-today-tile { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; }
+.admin-today-tile b { display: block; font-size: 1.25rem; }
+.admin-today-tile small { color: var(--text-dim); font-size: 0.75rem; }
+button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%; cursor: pointer; }
+#adminPage.searching #overviewSubview { display: none; }
+#adminPage.searching #requestsManageSubview > .rq-list { display: flex; }
