@@ -159,7 +159,7 @@ def index_result(url: str) -> dict | None:
 # แล้วจำคุกกี้ cf_clearance + User-Agent คู่กันไว้ต่อเว็บ ทุกคำขอไปเว็บนั้น (หน้าเรื่อง/ตอน/รูป) ส่งคู่นี้ไปด้วย
 # แก้แบบเบื้องหลังเสมอ: คำขอที่โดนตรวจล้มทันทีเหมือนเดิม ไม่รอเบราว์เซอร์ 20-60 วิ (กัน thread waitress หมด)
 # เรื่องถัดไปในรอบรีเฟรชเดียวกัน / ครั้งหน้าที่เปิดอ่าน ก็ได้คุกกี้ใหม่แล้ว
-CF_SOLVE_TIMEOUT = 120
+CF_SOLVE_TIMEOUT = 180  # cf_solve.py ลองได้ 2 รอบ (VPS: รอบเดียว ~30 วิ, ต้องใช้รอบสอง 115-133 วิ)
 CF_RETRY_SECONDS = 30 * 60  # แก้ไม่ผ่าน/ยังไม่ได้ติดตั้ง camoufox → เว้นก่อนลองใหม่ (เปิดเบราว์เซอร์กิน CPU/RAM)
 CF_FILE = Path(__file__).with_name("data") / "cf_clearance.json"
 _cf_lock = threading.Lock()

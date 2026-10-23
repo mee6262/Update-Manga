@@ -15,13 +15,15 @@ from urllib.parse import urlparse
 
 from camoufox.sync_api import Camoufox
 
-WAIT_SECONDS = 60
+WAIT_SECONDS = 45
+ATTEMPTS = 2  # camoufox สุ่มลายนิ้วมือใหม่ทุกครั้ง บางชุดไม่ผ่าน (VPS 23 ต.ค.: ผ่าน 4 จาก 6) → ลองชุดใหม่อีกครั้ง
 
 
 def solve(url: str) -> dict:
     host = urlparse(url).hostname or ""
     with Camoufox(headless=True) as browser:
         page = browser.new_page()
+        ua = page.evaluate("navigator.userAgent")  # อ่านก่อนเปิดเว็บ: ผ่านหน้าตรวจแล้วหน้าเปลี่ยน evaluate พัง
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         deadline = time.time() + WAIT_SECONDS
         while time.time() < deadline:
@@ -30,12 +32,19 @@ def solve(url: str) -> dict:
                 break
             page.wait_for_timeout(1000)
         else:
-            raise SystemExit(f"ไม่ผ่านหน้าตรวจ Cloudflare ใน {WAIT_SECONDS} วิ")
+            raise RuntimeError(f"ไม่ผ่านหน้าตรวจ Cloudflare ใน {WAIT_SECONDS} วิ")
         page.wait_for_timeout(1500)  # ให้หน้าจริงตั้งคุกกี้อื่นที่ต้องใช้คู่กันให้ครบ
         jar = {c["name"]: c["value"] for c in page.context.cookies()
                if host.endswith(c["domain"].lstrip("."))}
-        return {"ua": page.evaluate("navigator.userAgent"), "cookies": jar}
+        return {"ua": ua, "cookies": jar}
 
 
 if __name__ == "__main__":
-    print(json.dumps(solve(sys.argv[1])))
+    for attempt in range(ATTEMPTS):
+        try:
+            print(json.dumps(solve(sys.argv[1])))
+            break
+        except Exception as e:
+            print(f"รอบ {attempt + 1}: {e}", file=sys.stderr, flush=True)
+            if attempt + 1 == ATTEMPTS:
+                raise SystemExit(str(e))
