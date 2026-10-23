@@ -4001,6 +4001,7 @@ const ICON_DELETE =
 let lastSettingsSignature = null;
 let mangaAdminFilter = "all"; // all / problem / nocat / single (ไม่มีแหล่งสำรอง) / similar (ชื่อคล้ายกัน) / host:<เว็บ>
 let contentType = "all"; // all / manga / series / clip
+let contentCat = ""; // "" = ทุกหมวด / "m:<id>" หมวดมังงะ / "v:<id>" หมวดวิดีโอ / "none" ไม่มีหมวด
 const CONTENT_TYPES = { all: "ทั้งหมด", manga: "📚 มังงะ", series: "🎬 ซีรีส์", clip: "🎞 คลิปเดี่ยว" };
 const MANGA_FILTER_LABELS = { all: "ทุกสถานะ", problem: "มีปัญหา", nocat: "ไม่มีหมวด", single: "ไม่มีแหล่งสำรอง", similar: "ชื่อคล้ายกัน" };
 
@@ -4091,17 +4092,35 @@ function contentRowHtml(x, hosts) {
     </li>`;
 }
 
-function renderSettings() {
-  const list = el("#settingsList");
+// ตัวเลือกหมวดในแถวตัวกรอง (หมวดมังงะ + หมวดวิดีโอ แยกกลุ่ม พร้อมจำนวน)
+function renderContentCatSelect(all) {
+  const sel = el("#contentCatFilter");
+  const mc = (id) => all.filter((x) => x.kind === "manga" && (x.item.categories || []).includes(id)).length;
+  const vc = (id) => all.filter((x) => x.kind !== "manga" && x.item.category_id === id).length;
+  const html = `<option value="">🏷 ทุกหมวด</option><option value="none">ไม่มีหมวด (${all.filter((x) => x.nocat).length})</option>`
+    + (state.categories.length ? `<optgroup label="หมวดมังงะ">${state.categories.map((c) => `<option value="m:${escapeHtml(c.id)}">${escapeHtml(c.name)} (${mc(c.id)})</option>`).join("")}</optgroup>` : "")
+    + ((state.videoCategories || []).length ? `<optgroup label="หมวดวิดีโอ">${state.videoCategories.map((c) => `<option value="v:${escapeHtml(c.id)}">${escapeHtml(c.name)} (${vc(c.id)})</option>`).join("")}</optgroup>` : "");
+  if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+  if (![...sel.options].some((o) => o.value === contentCat)) contentCat = "";
+  sel.value = contentCat;
+  sel.classList.toggle("active", !!contentCat);
+}
+
+function renderSettings() {  const list = el("#settingsList");
   const hosts = hostStatusMap();
   const all = contentItems(hosts);
-  const ofType = all.filter((x) => contentType === "all" || x.kind === contentType);
+  // หมวด: เลือกหมวดมังงะ = เฉพาะมังงะในหมวดนั้น, หมวดวิดีโอ = ซีรีส์/คลิปในหมวดนั้น
+  const inCat = (x) => !contentCat ? true : contentCat === "none" ? x.nocat
+    : contentCat.startsWith("m:") ? x.kind === "manga" && (x.item.categories || []).includes(contentCat.slice(2))
+    : x.kind !== "manga" && x.item.category_id === contentCat.slice(2);
+  renderContentCatSelect(all);
+  const ofType = all.filter((x) => (contentType === "all" || x.kind === contentType) && inCat(x));
   const counts = {
     all: ofType.length, problem: ofType.filter((x) => x.problem).length, nocat: ofType.filter((x) => x.nocat).length,
     single: ofType.filter((x) => x.single).length, similar: ofType.filter((x) => x.similar).length,
   };
   el("#contentTypes").innerHTML = Object.entries(CONTENT_TYPES).map(([k, label]) =>
-    `<button class="video-chip${contentType === k ? " active" : ""}" data-content-type="${k}">${label} ${k === "all" ? all.length : all.filter((x) => x.kind === k).length}</button>`).join("");
+    `<button class="video-chip${contentType === k ? " active" : ""}" data-content-type="${k}">${label} ${all.filter((x) => inCat(x) && (k === "all" || x.kind === k)).length}</button>`).join("");
   // ชิปปัญหาที่ไม่เกี่ยวกับชนิดที่เลือก (ไม่มีแหล่งสำรอง = มังงะ, ชื่อคล้าย = ซีรีส์) ซ่อน
   els("[data-manga-filter]").forEach((b) => {
     const f = b.dataset.mangaFilter;
@@ -4121,7 +4140,7 @@ function renderSettings() {
   const items = ofType.filter((x) => mangaAdminFilter === "all" ? true
     : hostFilter ? x.kind === "manga" && mangaHosts(x.item).includes(hostFilter) : x[mangaAdminFilter])
     .sort((a, b) => (b.time || "").localeCompare(a.time || ""));
-  const signature = JSON.stringify([contentType, mangaAdminFilter, Math.floor(Date.now() / 600000), Object.values(hosts).map((h) => [h.host, h.down, h.error]),
+  const signature = JSON.stringify([contentType, contentCat, mangaAdminFilter, Math.floor(Date.now() / 600000), Object.values(hosts).map((h) => [h.host, h.down, h.error]),
     items.map((x) => [x.kind, x.id, x.name, x.time, x.problem, x.nocat, x.kind === "manga" ? [x.item.latest_chapter, (x.item.sources || []).length, x.item.followers, x.item.cover_url]
       : x.kind === "series" ? [x.item.count, x.item.category_id, x.gaps.length, (x.item.tracks || []).map((t) => [t.follow, t.error])] : [x.item.category_id, x.item.title]])]);
   if (signature === lastSettingsSignature) return;
@@ -4140,6 +4159,10 @@ function initSettingsClicks() {
     const f = e.target.closest("[data-manga-filter]")?.dataset.mangaFilter;
     if (!f) return;
     mangaAdminFilter = f.startsWith("host:") ? "all" : f; // ชิปเว็บ = ล้างตัวกรอง
+    renderSettings();
+  });
+  el("#contentCatFilter").addEventListener("change", (e) => {
+    contentCat = e.target.value;
     renderSettings();
   });
   el("#contentTypes").addEventListener("click", (e) => {

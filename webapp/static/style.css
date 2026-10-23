@@ -1746,3 +1746,6 @@ button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%
 .ms-row .switch { flex: none; }
 /* หน้าวิดีโอเดิม: คลิป/Playlist ย้ายไปรายการรวมแล้ว เหลือหมวด + เพิ่ม */
 #vmSeg [data-vm-tab="clips"], #vmSeg [data-vm-tab="playlists"] { display: none; }
+/* ตัวกรองหมวดในรายการรวม: dropdown หน้าตาเหมือนชิป */
+.chip-select { -webkit-appearance: none; appearance: none; flex: 0 0 auto; max-width: 190px; font: inherit; font-size: 0.85rem; color: var(--text); background: var(--bg-card) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E") no-repeat right 10px center; border: 1px solid var(--border); border-radius: 999px; padding: 6px 26px 6px 12px; text-overflow: ellipsis; }
+.chip-select.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
