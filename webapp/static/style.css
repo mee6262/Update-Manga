@@ -1790,3 +1790,16 @@ button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%
 .ms-alert.ok { background: rgba(22, 160, 102, 0.12); color: var(--accent); margin: 8px; }
 #mergePreview .ms-alert { margin: 0 10px 10px; }
 .add-head .link-btn { white-space: nowrap; flex: none; margin-left: 10px; }
+
+/* หมวดมังงะ: แถวแบบเดียวกับหมวดวิดีโอ (ลาก ≡ + ⋯) */
+#categoryList .category-picker { list-style: none; }
+.mcat-thumb .video-placeholder { font-size: 1.1rem; }
+/* แผ่นซีซั่น · แก้เลขตอน */
+.adv-input { width: 84px; flex: none; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 0.85rem; }
+.adv-input.wide { width: 120px; }
+.adv-eps .adv-ep { padding: 7px 12px; gap: 10px; }
+.adv-eps .grow { font-size: 0.84rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adv-num { width: 64px; flex: none; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 5px 6px; font: inherit; text-align: center; }
+.adv-num.dup { border-color: var(--danger); color: var(--danger); font-weight: 700; }
+.adv-input.saved, .adv-num.saved:not(.dup) { border-color: var(--accent); }
+.adv-tag { font-size: 0.72rem; color: var(--accent); }

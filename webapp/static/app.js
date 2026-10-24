@@ -4213,6 +4213,8 @@ function mangaHasBadHost(m, hosts) {
 }
 
 function closeMangaSheet() {
+  // แก้เลขตอน/ซีซั่นแล้วปิดแผ่น → รายการ (ตอนขาด/ช่วงตอน) อัปเดตตาม
+  if (el("#mangaSheet").dataset.bulk === "adv") loadVideos().then(() => { lastSettingsSignature = null; renderSettings(); });
   delete el("#mangaSheet").dataset.bulk;
   mangaSheetId = null;
   videoSheetKey = null;
@@ -4292,6 +4294,7 @@ async function saveMangaSources(m, urls) {
 async function mangaSheetClick(e) {
   if (e.target === el("#mangaSheet")) return closeMangaSheet(); // แตะพื้นหลัง
   if (el("#mangaSheet").dataset.bulk === "merge") return mergeSheetClick(e);
+  if (el("#mangaSheet").dataset.bulk === "adv") return advClick(e);
   if (el("#mangaSheet").dataset.bulk) return bulkSheetClick(e);
   if (videoSheetKey) return videoSheetClick(e);
   const m = state.catalog.find((x) => x.id === mangaSheetId);
@@ -4527,8 +4530,7 @@ async function videoSheetClick(e) {
     const adv = e.target.closest("[data-vs-advanced]")?.dataset.vsAdvanced;
     if (adv) {
       // ฟังก์ชันที่ยังไม่ย้ายมา (ซีซั่น/ภาษา/รวมเรื่อง/แก้เลขตอน) เปิดแผ่นเดิม
-      closeMangaSheet();
-      return openVmSheet(`pl:${id}`, { episodes: adv === "episodes" });
+      return openSeriesAdvanced(id);
     }
     if (e.target.closest("[data-vs-open]")) { closeMangaSheet(); showTab("videos"); return openPlaylist(id); }
     if (e.target.closest("[data-vs-play]")) { closeMangaSheet(); return openVideo(item); }
@@ -4993,6 +4995,7 @@ function initMergeAndFollow() {
     else if (e.target.closest("#mergeOptions")) el("#mergePreview").innerHTML = mergePreview(playlistById(mergeSrcId), playlistById(mergeTargetId));
   });
   el("#mangaSheet").addEventListener("change", (e) => {
+    if (el("#mangaSheet").dataset.bulk === "adv") return advChange(e);
     if (el("#mangaSheet").dataset.bulk === "merge" && e.target.closest("#mergeOptions")) el("#mergePreview").innerHTML = mergePreview(playlistById(mergeSrcId), playlistById(mergeTargetId));
   });
   el("#autoFollow").addEventListener("click", autoFollowClick);
@@ -5382,62 +5385,178 @@ async function reloadCategories() {
 }
 
 function renderCategoryAdmin() {
+  // แถวหน้าตาเดียวกับหมวดวิดีโอ: ลาก ≡ เรียง · ปก · ชื่อ/จำนวน · ⋯ (เลือกเรื่อง/เปลี่ยนชื่อ/หมวดพิเศษ/ดูในรายการ/ลบ)
   const list = el("#categoryList");
   if (!state.categories.length) {
-    list.innerHTML = '<li class="empty-state small">ยังไม่มีหมวดหมู่</li>';
+    list.innerHTML = '<li class="hint">ยังไม่มีหมวดหมู่</li>';
     return;
   }
-  const count = (id) => state.catalog.filter((m) => (m.categories || []).includes(id)).length;
-  const last = state.categories.length - 1;
-  list.innerHTML = state.categories
-    .map((c, i) => {
-      const open = c.id === openCategoryId;
-      const members = new Set(state.catalog.filter((m) => (m.categories || []).includes(c.id)).map((m) => m.id));
-      const picker = open
-        ? `<div class="category-members">
-             ${[...state.catalog]
-               .sort((a, b) => a.name.localeCompare(b.name, "th"))
-               .map(
-                 (m) => `<label class="member-row"><input type="checkbox" value="${escapeHtml(m.id)}"${members.has(m.id) ? " checked" : ""} />
-                   <img src="${proxied(m.cover_url, THUMB_WIDTH)}" alt="" loading="lazy" onerror="this.style.opacity=0" /><span>${escapeHtml(m.name)}</span></label>`
-               )
-               .join("")}
-             <div class="modal-actions"><button class="btn" data-action="close-members">ยกเลิก</button><button class="btn primary" data-action="save-members">บันทึก</button></div>
-           </div>`
-        : "";
-      if (c.id === editCategoryId) {
-        return `
-        <li class="category-item open" data-id="${escapeHtml(c.id)}">
-          <form class="settings-row category-edit">
-            <input type="text" name="name" value="${escapeHtml(c.name)}" maxlength="40" required />
-            <label class="checkbox-label"><input type="checkbox" name="special"${c.special ? " checked" : ""} /> หมวดพิเศษ</label>
-            <div class="category-edit-actions">
-              <button type="button" class="btn small" data-action="cancel-edit">ยกเลิก</button>
-              <button type="submit" class="btn small primary">บันทึก</button>
-            </div>
-          </form>
-        </li>`;
-      }
-      return `
-        <li class="category-item${open ? " open" : ""}" data-id="${escapeHtml(c.id)}">
-          <div class="settings-row">
-            <div class="grow">
-              <div class="name">${escapeHtml(c.name)}${c.special ? ' <span class="badge-special">พิเศษ</span>' : ""}</div>
-              <div class="meta">${count(c.id)} เรื่อง</div>
-            </div>
-            <button class="btn small" data-action="members">${open ? "ปิด" : "เลือกเรื่อง"}</button>
-            <button class="icon-btn" data-action="up" title="เลื่อนขึ้น"${i === 0 ? " disabled" : ""}>${ICON_UP}</button>
-            <button class="icon-btn" data-action="down" title="เลื่อนลง"${i === last ? " disabled" : ""}>${ICON_DOWN}</button>
-            <button class="icon-btn" data-action="edit" title="แก้ไข">${ICON_EDIT}</button>
-            <button class="icon-btn danger" data-action="delete" title="ลบ">${ICON_DELETE}</button>
-          </div>
-          ${picker}
-        </li>`;
-    })
-    .join("");
+  list.innerHTML = state.categories.map((c) => {
+    const members = state.catalog.filter((m) => (m.categories || []).includes(c.id));
+    const ids = new Set(members.map((m) => m.id));
+    const cover = members.find((m) => m.cover_url)?.cover_url;
+    const picker = c.id === openCategoryId ? `<li class="category-item category-picker" data-id="${escapeHtml(c.id)}">
+        <div class="category-members">${[...state.catalog].sort((a, b) => a.name.localeCompare(b.name, "th")).map((m) =>
+          `<label class="member-row"><input type="checkbox" value="${escapeHtml(m.id)}"${ids.has(m.id) ? " checked" : ""} />
+            <img src="${proxied(m.cover_url, THUMB_WIDTH)}" alt="" loading="lazy" onerror="this.style.opacity=0" /><span>${escapeHtml(m.name)}</span></label>`).join("")}
+          <div class="modal-actions"><button class="btn" data-action="close-members">ยกเลิก</button><button class="btn primary" data-action="save-members">บันทึก</button></div>
+        </div></li>` : "";
+    return `<li class="vc-row category-item" data-vc-id="${escapeHtml(c.id)}" data-id="${escapeHtml(c.id)}"><span class="vc-drag" aria-label="ลากเพื่อเรียง">≡</span>
+        <span class="vc-thumb mcat-thumb">${cover ? `<img src="${proxied(cover, THUMB_WIDTH)}" alt="" loading="lazy" onerror="this.style.opacity=0" />` : '<span class="video-placeholder">📚</span>'}</span>
+        <div class="vc-grow"><div class="vc-name">${escapeHtml(c.name)}${c.special ? '<small class="vc-badge">พิเศษ</small>' : ""}</div><div class="vc-meta">${members.length} เรื่อง</div></div>
+        <button class="vc-more" data-mcat-menu="${escapeHtml(c.id)}" aria-label="ตัวเลือก">⋯</button></li>${picker}`;
+  }).join("");
+}
+
+async function mangaCatMenuAction(event) {
+  const action = event.target.closest("[data-vc-action]")?.dataset.vcAction || "";
+  if (!action.startsWith("mcat-")) return; // เมนูหมวดวิดีโอ ให้ตัวจัดการเดิมทำ
+  event.stopImmediatePropagation();
+  closeVcMenu();
+  const [verb, id] = [action.slice(0, action.indexOf(":")), action.slice(action.indexOf(":") + 1)];
+  const cat = state.categories.find((c) => c.id === id);
+  if (!cat) return;
+  try {
+    if (verb === "mcat-members") {
+      openCategoryId = openCategoryId === id ? null : id;
+      return renderCategoryAdmin();
+    }
+    if (verb === "mcat-view") {
+      contentCat = `m:${id}`; contentType = "all"; mangaAdminFilter = "all";
+      return openAdminPage("mangaManage");
+    }
+    if (verb === "mcat-rename") {
+      const name = prompt("ชื่อหมวดใหม่", cat.name);
+      if (!name || !name.trim()) return;
+      await sendJSON("PUT", `/api/categories/${id}`, { name: name.trim(), special: !!cat.special });
+      categoryMsg(`เปลี่ยนชื่อเป็น "${name.trim()}" แล้ว`);
+    } else if (verb === "mcat-special") {
+      await sendJSON("PUT", `/api/categories/${id}`, { name: cat.name, special: !cat.special });
+      categoryMsg(cat.special ? `"${cat.name}" ไม่เป็นหมวดพิเศษแล้ว` : `"${cat.name}" เป็นหมวดพิเศษแล้ว (เห็นเฉพาะคนที่เปิดหมวดพิเศษ)`);
+    } else if (verb === "mcat-delete") {
+      if (!(await askConfirm(`ลบหมวด "${cat.name}"? (เรื่องในหมวดนี้ไม่ถูกลบ แค่ไม่อยู่ในหมวดนี้แล้ว)`))) return;
+      await sendJSON("DELETE", `/api/categories/${id}`);
+      categoryMsg(`ลบหมวด "${cat.name}" แล้ว`);
+    }
+    await reloadCategories();
+  } catch (err) { categoryMsg(err.message, true); }
+}
+
+function initMangaCatRows() {
+  el("#categoryList").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-mcat-menu]");
+    if (!btn) return;
+    const c = state.categories.find((x) => x.id === btn.dataset.mcatMenu);
+    if (!c) return;
+    openVcMenu(btn, [
+      [c.id === openCategoryId ? "ปิดรายการเรื่อง" : "เลือกเรื่องในหมวด", `mcat-members:${c.id}`],
+      ["ดูในรายการเนื้อหา", `mcat-view:${c.id}`],
+      ["เปลี่ยนชื่อ", `mcat-rename:${c.id}`],
+      [c.special ? "เลิกเป็นหมวดพิเศษ" : "ตั้งเป็นหมวดพิเศษ (18+)", `mcat-special:${c.id}`],
+      ["ลบหมวด", `mcat-delete:${c.id}`, true],
+    ]);
+  });
+  el("#vcMenu").addEventListener("click", mangaCatMenuAction, true);
+  initDragList(el("#categoryList"), async (ids) => {
+    try { await sendJSON("PUT", "/api/categories/order", { ids }); categoryMsg(""); } catch (e) { categoryMsg(e.message, true); }
+    await reloadCategories();
+  });
+}
+
+// ---------- แผ่นซีซั่น · แก้เลขตอน (แบบใหม่ — เดิมอยู่ท้ายแผ่นฟอร์มยาว) ----------
+let advSeriesId = null;
+
+function advDupKeys(eps) {
+  const seen = new Map();
+  for (const v of eps) {
+    const k = `${v.season || 1}|${v.lang || ""}|${Number(v.episode)}`;
+    seen.set(k, (seen.get(k) || 0) + 1);
+  }
+  return new Set([...seen].filter(([, n]) => n > 1).map(([k]) => k));
+}
+
+function openSeriesAdvanced(id) {
+  const p = playlistById(id);
+  if (!p) return closeMangaSheet();
+  advSeriesId = id;
+  mangaSheetId = null;
+  videoSheetKey = null;
+  el("#mangaSheet").dataset.bulk = "adv";
+  const eps = allPlaylistEpisodes(id);
+  const seasons = [...new Set(eps.map((v) => v.season || 1))].sort((a, b) => a - b);
+  const dups = advDupKeys(eps);
+  const starts = (p.season_starts || []).map(Number).join(", ");
+  el("#mangaSheetBody").innerHTML = `
+    <div class="add-head"><h3>${escapeHtml(p.name)}</h3><button class="link-btn" data-adv-back>‹ กลับ</button></div>
+    <p class="hint">${eps.length} ตอน · ${seasons.length} ซีซั่น — แก้แล้วออกจากช่อง = บันทึกทันที</p>
+    <div class="ms-title">ซีซั่น</div>
+    <div class="ms-group">
+      <label class="ms-row"><span class="set-ic">✂️</span><span class="grow">แบ่งซีซั่นเอง<small>ตอนที่เริ่มซีซั่นใหม่ คั่นด้วย , (ว่าง = ดูจากชื่อคลิป) · ตอนใหม่ที่ดึงทีหลังเข้าซีซั่นตามนี้ด้วย</small></span>
+        <input class="adv-input" data-adv-starts value="${escapeHtml(starts)}" placeholder="เช่น 13" inputmode="decimal" /></label>
+      ${seasons.length > 1 ? seasons.map((n) => `<label class="ms-row"><span class="set-ic">${n}</span><span class="grow">ชื่อซีซั่น ${n}<small>${eps.filter((v) => (v.season || 1) === n).length} ตอน</small></span>
+        <input class="adv-input wide" data-adv-season-name="${n}" value="${escapeHtml((p.season_names || {})[n] || "")}" placeholder="ซีซั่น ${n}" maxlength="30" /></label>`).join("") : ""}
+    </div>
+    <div class="ms-title">ตอน <small id="advDupNote"${dups.size ? ' class="status-bad"' : ""}>${dups.size ? `เลขตอนซ้ำ ${dups.size} เลข (สีแดง)` : "เลขตอนไม่ซ้ำ ✓"}</small></div>
+    <div class="ms-group adv-eps">${eps.map((v) => {
+      const dup = dups.has(`${v.season || 1}|${v.lang || ""}|${Number(v.episode)}`);
+      const tag = `${(v.season || 1) > 1 || seasons.length > 1 ? `S${v.season || 1} ` : ""}${v.lang ? LANG_LABEL[v.lang].replace("ไทย", "") : ""}`.trim();
+      return `<div class="ms-row adv-ep"><input type="number" step="any" class="adv-num${dup ? " dup" : ""}" value="${Number(v.episode)}" data-adv-ep="${escapeHtml(v.id)}" aria-label="เลขตอน" />
+        <span class="grow">${tag ? `<b class="adv-tag">${escapeHtml(tag)}</b> ` : ""}${escapeHtml(v.title)}</span></div>`;
+    }).join("") || '<div class="ms-row"><span class="grow hint">ยังไม่มีตอน</span></div>'}</div>
+    <div id="mangaSheetMsg" class="form-msg"></div>`;
+  el("#mangaSheet").hidden = false;
+}
+
+async function advChange(e) {
+  const p = playlistById(advSeriesId);
+  if (!p) return;
+  const url = `/api/video-playlists/${encodeURIComponent(p.id)}`;
+  try {
+    const ep = e.target.closest("[data-adv-ep]");
+    if (ep) {
+      await sendJSON("PATCH", `/api/videos/${encodeURIComponent(ep.dataset.advEp)}`, { episode: ep.value });
+      const v = state.videos.find((x) => x.id === ep.dataset.advEp);
+      if (v) v.episode = Number(ep.value);
+      // เลขซ้ำคำนวณใหม่ (ไม่วาดทั้งแผ่น — ช่องที่กำลังพิมพ์ต่อจะไม่หลุด)
+      const dups = advDupKeys(allPlaylistEpisodes(p.id));
+      els("#mangaSheet [data-adv-ep]").forEach((input) => {
+        const x = state.videos.find((y) => y.id === input.dataset.advEp);
+        input.classList.toggle("dup", !!x && dups.has(`${x.season || 1}|${x.lang || ""}|${Number(x.episode)}`));
+      });
+      ep.classList.add("saved");
+      const note = el("#advDupNote");
+      note.textContent = dups.size ? `เลขตอนซ้ำ ${dups.size} เลข (สีแดง)` : "เลขตอนไม่ซ้ำ ✓";
+      note.classList.toggle("status-bad", !!dups.size);
+      return;
+    }
+    const starts = e.target.closest("[data-adv-starts]");
+    if (starts) {
+      const list = starts.value.split(/[,\s]+/).filter(Boolean).map(Number);
+      if (list.some((n) => !(n > 0))) return toast("ใส่เลขตอน เช่น 13 หรือ 13, 25", { error: true });
+      await sendJSON("PATCH", url, { season_starts: list });
+      await loadVideos();
+      openSeriesAdvanced(p.id);
+      return toast(list.length ? `แบ่งเป็น ${list.length + 1} ซีซั่นแล้ว` : "กลับไปใช้ซีซั่นตามชื่อคลิปแล้ว");
+    }
+    const sname = e.target.closest("[data-adv-season-name]");
+    if (sname) {
+      await sendJSON("PATCH", url, { season_name: { season: Number(sname.dataset.advSeasonName), name: sname.value } });
+      (p.season_names ||= {})[sname.dataset.advSeasonName] = sname.value;
+      sname.classList.add("saved");
+    }
+  } catch (err) { toast(err.message || "บันทึกไม่สำเร็จ", { error: true }); }
+}
+
+async function advClick(e) {
+  if (e.target.closest("[data-adv-back]")) {
+    await loadVideos();
+    renderSettings();
+    openSeriesSheet(advSeriesId);
+  }
 }
 
 function initCategoryAdmin() {
+  initMangaCatRows();
   // บันทึกฟอร์มแก้ไขหมวด (ชื่อ + หมวดพิเศษ)
   el("#categoryList").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -7664,7 +7783,7 @@ function initVideoCatAdmin() {
   document.addEventListener("click", (event) => {
     // composedPath: ปุ่มในเมนูที่กดอาจถูกแทนด้วยเมนูชั้นถัดไปแล้ว (หลุดจากหน้า) — ยังนับว่ากดในเมนู
     const path = event.composedPath();
-    if (!el("#vcMenu").hidden && !path.includes(el("#vcMenu")) && !event.target.closest("[data-vc-menu], [data-genre-menu]")) closeVcMenu();
+    if (!el("#vcMenu").hidden && !path.includes(el("#vcMenu")) && !event.target.closest("[data-vc-menu], [data-genre-menu], [data-mcat-menu]")) closeVcMenu();
   });
 }
 
