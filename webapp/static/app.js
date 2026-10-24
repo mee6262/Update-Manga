@@ -4291,6 +4291,7 @@ async function saveMangaSources(m, urls) {
 
 async function mangaSheetClick(e) {
   if (e.target === el("#mangaSheet")) return closeMangaSheet(); // แตะพื้นหลัง
+  if (el("#mangaSheet").dataset.bulk === "merge") return mergeSheetClick(e);
   if (el("#mangaSheet").dataset.bulk) return bulkSheetClick(e);
   if (videoSheetKey) return videoSheetClick(e);
   const m = state.catalog.find((x) => x.id === mangaSheetId);
@@ -4443,7 +4444,8 @@ function openSeriesSheet(id) {
     <div class="ms-title">จัดการ</div>
     <div class="ms-group">
       ${renameRowHtml(p.name)}
-      <button class="ms-row" data-vs-advanced="pl"><span class="set-ic">🔗</span><span class="grow">ซีซั่น · ภาษา · รวมเข้ากับเรื่องอื่น${twins.length ? `<small>เจอชื่อคล้าย: ${escapeHtml(twins[0].name)}</small>` : ""}</span><span class="chev">›</span></button>
+      <button class="ms-row" data-vs-merge><span class="set-ic">🔗</span><span class="grow">รวมเข้ากับเรื่องอื่น${twins.length ? `<small>เจอชื่อคล้าย: ${escapeHtml(twins[0].name)}</small>` : ""}</span><span class="chev">›</span></button>
+      <button class="ms-row" data-vs-advanced="pl"><span class="set-ic">🔢</span><span class="grow">ซีซั่น · ชื่อซีซั่น · แก้เลขตอน<small>ตั้งค่าขั้นสูง</small></span><span class="chev">›</span></button>
       <button class="ms-row" data-vs-open><span class="set-ic">👁</span><span class="grow">เปิดแบบผู้ใช้</span><span class="chev">›</span></button>
       <button class="ms-row danger" data-vs-delete><span class="set-ic">🗑</span><span class="grow">ลบทั้งเรื่อง (${p.count} ตอน)</span></button>
     </div>
@@ -4521,6 +4523,7 @@ async function videoSheetClick(e) {
       if (!form.hidden) form.querySelector("input").focus();
       return;
     }
+    if (e.target.closest("[data-vs-merge]")) return openMergeSheet(id);
     const adv = e.target.closest("[data-vs-advanced]")?.dataset.vsAdvanced;
     if (adv) {
       // ฟังก์ชันที่ยังไม่ย้ายมา (ซีซั่น/ภาษา/รวมเรื่อง/แก้เลขตอน) เปิดแผ่นเดิม
@@ -4796,6 +4799,204 @@ function renderNocatCard() {
       <div class="admin-task-title">${[manga && `มังงะ ${manga}`, video && `วิดีโอ ${video}`].filter(Boolean).join(" · ")} ยังไม่มีหมวด</div>
       <div class="admin-task-desc">ผู้ใช้จะไม่เจอตอนเลือกดูตามหมวด — เลือกหลายเรื่องแล้วใส่หมวดทีเดียวได้</div>
       <div class="admin-task-acts"><button class="btn primary" data-nocat-go>เลือกแล้วใส่หมวด</button></div></div>` : "";
+}
+
+// ---------- เนื้อหา › ติดตามอัตโนมัติ: เพจ Facebook + YouTube/Anifume ที่ระบบเช็คตอนใหม่เอง ในหน้าเดียว ----------
+// เดิม: เพจอยู่ในฟอร์มหน้า "เพิ่ม", playlist YouTube/Anifume ซ่อนในแผ่นแก้ไขของแต่ละเรื่อง
+let autoFollowShowOff = false;
+
+function watchPageName(url) {
+  return (url.match(/id=(\d+)/) || url.match(/facebook\.com\/([^/?#]+)/) || [])[1] || url;
+}
+
+function renderAutoFollow() {
+  const box = el("#autoFollow");
+  if (!box) return;
+  const w = playlistWatch || {};
+  const results = w.last_result || [];
+  const pages = (w.sources || []).map((s, i) => {
+    const r = results.find((x) => x.url === s.url);
+    const tone = s.paused ? "" : w.running ? "warn" : !r ? "" : r.error ? "bad" : "ok";
+    const meta = s.paused ? "พักไว้ — ไม่เช็ค" : w.running ? "กำลังเช็ค…" : !r ? "ยังไม่เคยเช็ค"
+      : r.error ? r.error : `เจอ ${r.found} · เพิ่ม ${r.added.length} ตอน · ${timeAgo(r.checked_at, "เมื่อสักครู่")}`;
+    return `<div class="ms-row">
+        <span class="status-dot ${tone}"></span>
+        <span class="grow"><b>เพจ ${escapeHtml(watchPageName(s.url))}</b><small>${escapeHtml(meta)} → หมวด ${escapeHtml(s.category || "ไม่มี")}</small></span>
+        <input type="checkbox" class="switch" data-af-page="${i}"${s.paused ? "" : " checked"} aria-label="เช็คเพจนี้" />
+        <button class="icon-btn" data-af-page-remove="${i}" aria-label="เลิกติดตาม">✕</button>
+      </div>`;
+  }).join("");
+  // playlist ต้นทางทุกเรื่อง: มีปัญหาก่อน แล้วที่ติดตามอยู่ ที่ไม่ได้ติดตามพับไว้
+  const tracks = [];
+  for (const p of state.videoPlaylists || []) for (const t of p.tracks || []) tracks.push({ p, t });
+  tracks.sort((a, b) => (!!b.t.error - !!a.t.error) || (!!b.t.follow - !!a.t.follow) || (b.p.updated_at || "").localeCompare(a.p.updated_at || ""));
+  const shown = tracks.filter((x) => x.t.follow || x.t.error || autoFollowShowOff);
+  const off = tracks.filter((x) => !x.t.follow && !x.t.error).length;
+  const trackRows = shown.map(({ p, t }) => `<div class="ms-row" data-af-open="${escapeHtml(p.id)}">
+      <span class="status-dot ${t.error ? "bad" : t.follow ? "ok" : ""}"></span>
+      <span class="grow"><b>${escapeHtml(p.name)}${t.lang ? ` · ${LANG_LABEL[t.lang]}` : ""}</b><small>${escapeHtml(providerName({ provider: t.kind || "youtube" }))} · ${t.error ? escapeHtml(t.error) : t.checked_at ? `เช็ค ${timeAgo(t.checked_at, "เมื่อสักครู่")}` : "ยังไม่เคยเช็ค"} · ${p.count} ตอน</small></span>
+      <input type="checkbox" class="switch" data-af-track="${escapeHtml(p.id)}|${escapeHtml(t.list_id)}"${t.follow ? " checked" : ""} aria-label="ติดตามตอนใหม่" />
+    </div>`).join("");
+  box.innerHTML = `
+    <div class="ms-title">📡 เพจ Facebook <small>เช็คทุก ${w.interval_hours || 2} ชม.${w.last_run ? ` · ล่าสุด ${timeAgo(w.last_run, "เมื่อสักครู่")}` : ""}</small>
+      <button class="link-btn" data-af-run${w.running ? " disabled" : ""}>${w.running ? "กำลังเช็ค…" : "เช็คตอนนี้"}</button></div>
+    <div class="ms-group">${pages || '<div class="ms-row"><span class="grow hint">ยังไม่ได้ติดตามเพจ — ปุ่ม ＋ เพิ่ม → วางลิงก์หน้า Reels ของเพจ</span></div>'}</div>
+    <div class="ms-title">▶ YouTube / 🎬 Anifume <small>เช็คทุก 1 ชม. · แตะแถวเพื่อเปิดเรื่อง</small></div>
+    <div class="ms-group">${trackRows || '<div class="ms-row"><span class="grow hint">ยังไม่มีเรื่องที่ติดตามตอนใหม่</span></div>'}</div>
+    ${off ? `<button class="link-btn af-more" data-af-toggle-off>${autoFollowShowOff ? "ซ่อนที่ไม่ได้ติดตาม" : `แสดงที่ไม่ได้ติดตาม (${off})`}</button>` : ""}
+    <h3 class="cat-section">เพิ่มด้วยฟอร์ม <small>ปกติใช้ปุ่ม ＋ เพิ่ม ได้เลย</small></h3>`;
+}
+
+async function autoFollowClick(e) {
+  if (e.target.closest("[data-af-toggle-off]")) { autoFollowShowOff = !autoFollowShowOff; return renderAutoFollow(); }
+  if (e.target.closest("[data-af-run]")) {
+    try { await sendJSON("POST", "/api/video-playlists/watch/run"); } catch (err) { toast(err.message, { error: true }); }
+    await loadPlaylistWatch();
+    return renderAutoFollow();
+  }
+  const rm = e.target.closest("[data-af-page-remove]");
+  if (rm) {
+    if (!(await askConfirm("เลิกติดตามเพจนี้? (ตอนที่เพิ่มไปแล้วยังอยู่)"))) return;
+    await saveWatchSources(playlistWatch.sources.filter((_, i) => i !== Number(rm.dataset.afPageRemove)));
+    return renderAutoFollow();
+  }
+  const open = e.target.closest("[data-af-open]");
+  if (open && !e.target.closest("input, label")) return openSeriesSheet(open.dataset.afOpen);
+}
+
+async function autoFollowChange(e) {
+  const page = e.target.closest("[data-af-page]");
+  if (page) {
+    const sources = (playlistWatch.sources || []).map((s, i) => (i === Number(page.dataset.afPage) ? { ...s, paused: !page.checked } : s));
+    await saveWatchSources(sources);
+    toast(page.checked ? "กลับมาเช็คเพจนี้แล้ว" : "พักการเช็คเพจนี้แล้ว");
+    return renderAutoFollow();
+  }
+  const track = e.target.closest("[data-af-track]");
+  if (track) {
+    const [pid, listId] = track.dataset.afTrack.split("|");
+    try {
+      await sendJSON("PATCH", `/api/video-playlists/${encodeURIComponent(pid)}`, { track: { list_id: listId, follow: track.checked } });
+      const t = (playlistById(pid)?.tracks || []).find((x) => x.list_id === listId);
+      if (t) t.follow = track.checked;
+      toast(track.checked ? "ติดตามตอนใหม่แล้ว" : "เลิกติดตามตอนใหม่แล้ว");
+    } catch (err) { track.checked = !track.checked; toast(err.message || "บันทึกไม่สำเร็จ", { error: true }); }
+  }
+}
+
+// ---------- รวมเรื่อง: ค้นชื่อ + แนะนำชื่อคล้าย/ภาคเดียวกัน + ตัวอย่างหลังรวม (แทน dropdown ยาวทุกเรื่อง) ----------
+let mergeSrcId = null;
+let mergeTargetId = null;
+
+function mergeCandidates(src) {
+  const base = (n) => String(n).replace(/(?:ภาค(?:ที่)?|ซีซั่น|ซีซัน|season|ss)\s*\d+/gi, "").replace(/\s+/g, "").toLowerCase();
+  const twins = new Set([...(state.videoPlaylists || []).filter((x) => x.id !== src.id && base(x.name) === base(src.name)).map((x) => x.id),
+    ...(similarPlaylists().get(src.id) || [])]);
+  return twins;
+}
+
+function mergePreview(src, target) {
+  const season = Number(el("#mergeSeason")?.value) || null;
+  const lang = el("#mergeLang")?.value || null;
+  const renumber = el("#mergeRenumber")?.checked;
+  const tEps = allPlaylistEpisodes(target.id);
+  const sEps = allPlaylistEpisodes(src.id);
+  const last = Math.max(0, ...tEps.map((v) => Number(v.episode) || 0));
+  const key = (v, s, l) => `${s || v.season || 1}|${l ?? v.lang ?? ""}|${Number(v.episode)}`;
+  const have = new Set(tEps.map((v) => key(v)));
+  const dup = renumber ? 0 : sEps.filter((v) => have.has(key(v, season, lang))).length;
+  const range = renumber ? `ตอน ${Math.floor(last) + 1}–${Math.floor(last) + sEps.length}` : season ? `ซีซั่น ${season}` : "เลขตอนเดิม";
+  return `<div class="ms-row"><span class="set-ic">🎬</span><span class="grow"><b>${escapeHtml(target.name)}</b>
+      <small>${tEps.length} + ${sEps.length} = ${tEps.length + sEps.length} ตอน · ${range}${lang ? ` · ${LANG_LABEL[lang]}` : ""}</small></span></div>
+    ${dup ? `<div class="ms-alert warn">เลขตอนซ้ำกับเรื่องปลายทาง ${dup} ตอน — ลองใส่ซีซั่น/ภาษา หรือเปิด "ต่อเลขตอน"</div>` : '<div class="ms-alert ok">ไม่มีเลขตอนซ้ำ</div>'}`;
+}
+
+function renderMergeSheet() {
+  const src = playlistById(mergeSrcId);
+  if (!src) return closeMangaSheet();
+  const q = (el("#mergeSearch")?.value || "").trim().toLowerCase();
+  const twins = mergeCandidates(src);
+  const all = (state.videoPlaylists || []).filter((x) => x.id !== src.id);
+  const list = q ? all.filter((x) => x.name.toLowerCase().includes(q)).slice(0, 20) : all.filter((x) => twins.has(x.id));
+  const target = mergeTargetId && playlistById(mergeTargetId);
+  const row = (x) => `<button class="ms-row${x.id === mergeTargetId ? " picked" : ""}" data-merge-pick="${escapeHtml(x.id)}">
+      ${x.thumbnail_url ? `<img class="merge-thumb" src="${escapeHtml(x.thumbnail_url)}" alt="" />` : '<span class="set-ic">🎬</span>'}
+      <span class="grow"><b>${escapeHtml(x.name)}</b><small>${x.count} ตอน · ${escapeHtml(categoryName(x.category_id) || "ไม่มีหมวด")}${twins.has(x.id) ? " · ชื่อคล้าย" : ""}</small></span>
+      <span class="${x.id === mergeTargetId ? "pick-on" : "pick-off"}">${x.id === mergeTargetId ? "✓" : "เลือก"}</span></button>`;
+  el("#mergeList").innerHTML = list.map(row).join("") || `<div class="ms-row"><span class="grow hint">${q ? "ไม่พบเรื่องชื่อนี้" : "ไม่มีเรื่องชื่อคล้าย — พิมพ์ค้นหาด้านบน"}</span></div>`;
+  el("#mergeListTitle").textContent = q ? `ผลค้นหา (${list.length})` : "ชื่อคล้าย / ภาคเดียวกัน (แนะนำ)";
+  el("#mergeOptions").hidden = !target;
+  el("#mergePreview").innerHTML = target ? mergePreview(src, target) : "";
+  el("#mergeGo").disabled = !target;
+}
+
+function openMergeSheet(srcId) {
+  const src = playlistById(srcId);
+  if (!src) return;
+  mergeSrcId = srcId;
+  mergeTargetId = null;
+  mangaSheetId = null;
+  videoSheetKey = null;
+  el("#mangaSheet").dataset.bulk = "merge";
+  el("#mangaSheetBody").innerHTML = `
+    <div class="add-head"><h3>รวม "${escapeHtml(src.name)}" เข้ากับ…</h3><button class="link-btn" data-merge-back>‹ กลับ</button></div>
+    <p class="hint">${src.count} ตอนจะย้ายไปอยู่เรื่องที่เลือก แล้วลบเรื่องนี้</p>
+    <input type="search" id="mergeSearch" class="add-name" placeholder="🔍 พิมพ์ชื่อเรื่องปลายทาง…" autocomplete="off" />
+    <div class="ms-title" id="mergeListTitle"></div>
+    <div class="ms-group" id="mergeList"></div>
+    <div id="mergeOptions" hidden>
+      <div class="ms-title">ตั้งค่าการรวม</div>
+      <div class="ms-group">
+        <label class="ms-row"><span class="set-ic">🔢</span><span class="grow">เป็นซีซั่น<small>ว่าง = ต่อตอนเดิม · ใส่เลข = เป็นภาคใหม่</small></span><input id="mergeSeason" type="number" min="1" max="99" inputmode="numeric" class="merge-num" value="${guessSeason(src.name)}" placeholder="—" /></label>
+        <label class="ms-row"><span class="set-ic">🌐</span><span class="grow">ภาษา</span><select id="mergeLang" class="form-select"><option value="">ไม่ระบุ</option><option value="dub">พากย์ไทย</option><option value="sub">ซับไทย</option></select></label>
+        <label class="ms-row"><span class="set-ic">➕</span><span class="grow">ต่อเลขตอนจากเรื่องปลายทาง<small>ภาคที่เริ่มตอน 1 ใหม่ / ไม่มีเลขตอน</small></span><input type="checkbox" class="switch" id="mergeRenumber" /></label>
+      </div>
+      <div class="ms-title">ตัวอย่างหลังรวม</div>
+      <div class="ms-group" id="mergePreview"></div>
+    </div>
+    <button class="btn primary add-go" id="mergeGo" data-merge-go disabled>รวมเรื่อง</button>
+    <div id="mangaSheetMsg" class="form-msg"></div>`;
+  renderMergeSheet();
+  el("#mangaSheet").hidden = false;
+}
+
+async function mergeSheetClick(e) {
+  if (e.target.closest("[data-merge-back]")) return openSeriesSheet(mergeSrcId);
+  const pick = e.target.closest("[data-merge-pick]");
+  if (pick) { mergeTargetId = pick.dataset.mergePick === mergeTargetId ? null : pick.dataset.mergePick; return renderMergeSheet(); }
+  if (!e.target.closest("[data-merge-go]")) return;
+  const src = playlistById(mergeSrcId), target = playlistById(mergeTargetId);
+  if (!src || !target) return;
+  const season = el("#mergeSeason").value.trim();
+  const btn = e.target.closest("[data-merge-go]");
+  btn.disabled = true;
+  try {
+    const res = await sendJSON("POST", `/api/video-playlists/${encodeURIComponent(src.id)}/merge`, {
+      into: target.id, season: season || null, lang: el("#mergeLang").value || null, renumber: el("#mergeRenumber").checked,
+    });
+    await loadVideos();
+    adminTasksCache && (adminTasksCache.at = 0);
+    renderSettings();
+    openSeriesSheet(target.id);
+    toast(`รวมแล้ว ${res.moved} ตอน เข้า "${target.name}"`);
+  } catch (err) {
+    btn.disabled = false;
+    el("#mangaSheetMsg").className = "form-msg error";
+    el("#mangaSheetMsg").textContent = err.message;
+  }
+}
+
+function initMergeAndFollow() {
+  el("#mangaSheet").addEventListener("input", (e) => {
+    if (el("#mangaSheet").dataset.bulk !== "merge") return;
+    if (e.target.id === "mergeSearch") renderMergeSheet();
+    else if (e.target.closest("#mergeOptions")) el("#mergePreview").innerHTML = mergePreview(playlistById(mergeSrcId), playlistById(mergeTargetId));
+  });
+  el("#mangaSheet").addEventListener("change", (e) => {
+    if (el("#mangaSheet").dataset.bulk === "merge" && e.target.closest("#mergeOptions")) el("#mergePreview").innerHTML = mergePreview(playlistById(mergeSrcId), playlistById(mergeTargetId));
+  });
+  el("#autoFollow").addEventListener("click", autoFollowClick);
+  el("#autoFollow").addEventListener("change", autoFollowChange);
 }
 
 // ---------- ＋ เพิ่ม (แอดมิน): วางลิงก์อะไรก็ได้ → เดาชนิด → มังงะดูตัวอย่าง/เช็คซ้ำก่อนเพิ่ม, ที่เหลือส่งต่อฟอร์มเดิม ----------
@@ -7193,6 +7394,7 @@ function renderVideoManage() {
     }).join("") || '<li class="hint">ไม่มีคลิปตามตัวกรองนี้</li>';
 
   renderVideoCatAdmin();
+  renderAutoFollow();
 
   // ตัวเลือกในแท็บเพิ่ม
   // ส่งหมวดเป็น id — ชื่ออาจถูกเปลี่ยนระหว่างเปิดฟอร์มค้างไว้ (ส่งชื่อเก่า = สร้างหมวดชื่อเก่าขึ้นใหม่)
@@ -7311,6 +7513,7 @@ async function patchGenre(id, body) {
     const genre = await sendJSON("PATCH", `/api/video-genres/${encodeURIComponent(id)}`, body);
     state.videoGenres = (state.videoGenres || []).map((g) => (g.id === id ? genre : g));
     renderVideoCatAdmin();
+  renderAutoFollow();
     if (!el("#videoHome").hidden) renderVideoHome();
   } catch (e) { toast(e.message || "บันทึกไม่สำเร็จ", { error: true }); }
 }
@@ -7349,6 +7552,7 @@ function initVideoCatAdmin() {
       state.videoGenres = [...(state.videoGenres || []), genre];
       vcOpenGenre = genre.id; // กางให้เพิ่มคำต่อเลย (ชื่อแนวเป็นคำแรกให้แล้ว)
       renderVideoCatAdmin();
+  renderAutoFollow();
     } catch (e) { el("#videoGenreMsg").textContent = e.message; }
   });
   initDragList(el("#videoCategoryList"), async (ids) => {
@@ -7362,6 +7566,7 @@ function initVideoCatAdmin() {
       state.videoGenres = ids.map((id) => byId.get(id)).filter(Boolean);
     } catch (e) { toast(e.message, { error: true }); }
     renderVideoCatAdmin();
+  renderAutoFollow();
   });
   el("#videoCategoryList").addEventListener("click", (event) => {
     const btn = event.target.closest("[data-vc-menu]");
@@ -7392,6 +7597,7 @@ function initVideoCatAdmin() {
       try {
         await saveItemGenres(not, (item.genres_add || []).filter((x) => x !== genre.id), [...new Set([...(item.genres_remove || []), genre.id])]);
         renderVideoCatAdmin();
+  renderAutoFollow();
       } catch (e) { toast(e.message || "บันทึกไม่สำเร็จ", { error: true }); }
     }
   });
@@ -7685,6 +7891,7 @@ function renderPlaylistWatch() {
       <button class="btn danger" data-remove-watch="${i}">เลิกติดตาม</button></li>`;
   }).join("") || '<li class="hint">ยังไม่ได้ติดตามเพจไหน — กด "+ เพจ"</li>';
   el("#watchRunBtn").disabled = !sources.length || playlistWatch.running;
+  renderAutoFollow();
   el("#watchStatus").textContent = playlistWatch.running ? "กำลังเช็ค..." : playlistWatch.last_run ? `เช็คอัตโนมัติทุก 2 ชม. · ล่าสุด ${timeAgo(playlistWatch.last_run, "เมื่อสักครู่")}` : "";
 }
 
@@ -8157,6 +8364,7 @@ function init() {
   initMangaSheet();
   initAddSheet();
   initLongPressSelect();
+  initMergeAndFollow();
   el("#catNocatCard").addEventListener("click", (e) => {
     if (!e.target.closest("[data-nocat-go]")) return;
     contentCat = "none"; contentType = "all"; mangaAdminFilter = "all";

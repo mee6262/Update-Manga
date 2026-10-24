@@ -3705,6 +3705,8 @@ def run_playlist_watch() -> bool:
     try:
         report = []
         for source in storage.load_playlist_watch().get("sources", []):
+            if source.get("paused"):
+                continue
             entry = {"url": source["url"], "checked_at": datetime.now(timezone.utc).isoformat(), "found": 0, "added": []}
             try:
                 reels = _newest_page_reels(source["url"])
@@ -3733,7 +3735,7 @@ def _playlist_watch_loop():
     time.sleep(120)  # ให้เว็บเริ่มเสร็จก่อน
     while True:
         try:
-            if storage.load_playlist_watch().get("sources"):
+            if any(not s.get("paused") for s in storage.load_playlist_watch().get("sources", [])):
                 run_playlist_watch()
         except Exception as e:
             print(f"⚠️ playlist-watch ล้ม: {e}", flush=True)
@@ -3788,7 +3790,10 @@ def save_playlist_watch_sources():
         category, error = _body_category_name(raw)
         if error:
             return jsonify({"error": error}), 400
-        sources.append({"url": url, "category": category[:40]})
+        entry = {"url": url, "category": category[:40]}
+        if raw.get("paused"):
+            entry["paused"] = True  # สวิตช์ในหน้าติดตามอัตโนมัติ: พักไว้ ไม่เช็ค (ไม่ต้องลบแล้วเพิ่มใหม่)
+        sources.append(entry)
     with storage.state_lock:
         data = storage.load_playlist_watch(fresh=True)
         data["sources"] = sources

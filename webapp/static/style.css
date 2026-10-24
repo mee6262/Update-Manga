@@ -1773,3 +1773,20 @@ button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%
 #catNocatCard:empty { display: none; }
 #categoryManageSubview > .cat-section:first-of-type { margin-top: 12px; }
 #adminPage.searching #contentSelectBar:not([hidden]) { display: block; } /* ค้นแล้วเลือกจากผลค้นหาได้ */
+
+/* ติดตามอัตโนมัติ: รายการรวมด้านบน — รายการเพจเดิมในการ์ดฟอร์มซ่อน (เหลือฟอร์มเพิ่มเพจ) */
+#autoFollow .ms-title .link-btn { margin-left: auto; }
+#autoFollow .ms-title { align-items: center; }
+#autoFollow .ms-title small { font-weight: 400; margin-left: 6px; }
+#autoFollow .ms-row[data-af-open] { cursor: pointer; }
+.af-more { display: block; margin: 8px 4px 0; }
+#watchSourceList, #watchRunBtn, #watchStatus { display: none !important; }
+/* แผ่นรวมเรื่อง */
+.merge-thumb { width: 56px; height: 32px; object-fit: cover; border-radius: 5px; flex: none; }
+.ms-row.picked { background: rgba(22, 160, 102, 0.12); }
+.pick-off { font-size: 0.8rem; color: var(--accent); font-weight: 600; flex: none; }
+.pick-on { width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 700; flex: none; }
+.merge-num { width: 64px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 6px 8px; font: inherit; text-align: center; }
+.ms-alert.ok { background: rgba(22, 160, 102, 0.12); color: var(--accent); margin: 8px; }
+#mergePreview .ms-alert { margin: 0 10px 10px; }
+.add-head .link-btn { white-space: nowrap; flex: none; margin-left: 10px; }
