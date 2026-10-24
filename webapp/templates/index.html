@@ -131,6 +131,7 @@
         <div id="recentRow" class="cover-row"></div>
       </div>
       <div id="searchResults" hidden>
+        <div id="searchScope" class="search-scope"></div>
         <div id="searchCount" class="search-count"></div>
         <div id="searchGrid" class="manga-grid"></div>
         <h2 id="searchVideoTitle" class="section-title" hidden></h2>
@@ -139,11 +140,12 @@
     </section>
 
     <section id="videosView" class="view">
-      <div id="libraryHead" class="library-head" hidden>
-        <button class="link-btn" data-video-tab="home">‹ หน้าหลัก</button>
-        <div id="librarySeg" class="seg">
-          <button data-video-tab="saved">บันทึกไว้</button>
-          <button data-video-tab="history">ประวัติการดู</button>
+      <div id="libraryHead" class="library-head lib-head2" hidden>
+        <div class="lib-title"><button class="icon-btn plain" data-video-tab="home" aria-label="กลับหน้าวิดีโอ"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button><b>คลังของฉัน</b></div>
+        <div id="librarySeg" class="lib-chips">
+          <button data-video-tab="continue">ดูต่อ <b id="libCntContinue"></b></button>
+          <button data-video-tab="saved">ในคลัง <b id="libCntSaved"></b></button>
+          <button data-video-tab="history">ประวัติ</button>
         </div>
       </div>
       <div id="videoCatPicker" class="vcat-picker" hidden></div>

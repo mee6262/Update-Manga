@@ -25,9 +25,17 @@ const THUMB_WIDTH = 120;
 
 // ---------- ข้อความลอย / แผ่นยืนยัน (แทน alert/confirm ของระบบ ที่บน iPhone เป็นกล่องเทา ๆ ไม่เข้ากับแอป) ----------
 let toastTimer = null;
-function toast(message, { error = false } = {}) {
+function toast(message, { error = false, action = null } = {}) {
   const box = el("#toast");
   box.textContent = message;
+  // action = { label, run } — ปุ่มในแถบแจ้ง (เช่น เลิกทำ) แทน alert/ถามยืนยัน
+  if (action) {
+    const btn = document.createElement("button");
+    btn.className = "toast-act";
+    btn.textContent = action.label;
+    btn.addEventListener("click", () => { box.hidden = true; action.run(); });
+    box.append(btn);
+  }
   box.classList.toggle("error", error);
   box.hidden = false;
   clearTimeout(toastTimer);
@@ -447,7 +455,7 @@ function videoCategoryOf(video) {
 }
 
 function isLibraryTab() {
-  return videoTab === "saved" || videoTab === "history";
+  return videoTab === "continue" || videoTab === "saved" || videoTab === "history";
 }
 
 function renderVideos() {
@@ -455,6 +463,7 @@ function renderVideos() {
   const rows = videoTab === "home"; // "ทั้งหมด" และหน้าหมวด วาดใน #videoHome ทั้งคู่
   el("#videoLibraryBtn").classList.toggle("active", library);
   els("#librarySeg [data-video-tab]").forEach((b) => b.classList.toggle("active", b.dataset.videoTab === videoTab));
+  if (library) renderLibraryCounts();
   el("#libraryHead").hidden = !library;
   // ผลค้นหาในหน้าค้นหาใช้ข้อมูลคลิปชุดเดียวกัน — บันทึก/ลบ/ดูค้างแล้วต้องอัปเดตตามด้วย
   if (el("#searchInput").value.trim()) renderSearch();
@@ -964,16 +973,77 @@ function renderCategoryHome() {
 }
 
 // ---------- คลังของฉัน: บันทึกไว้ / ประวัติการดู ----------
-let lastLibraryTab = "saved";
+let lastLibraryTab = "continue";
+let libDoneShown = false; // "ดูจบแล้ว" ในแท็บดูต่อ (ซ่อนไว้ก่อน)
 let libraryEditing = false;
 const librarySelected = new Set(); // "p:<playlist id>" / "v:<video id>"
 
 function renderLibrary() {
   const saved = videoTab === "saved";
-  el("#historySearch").hidden = saved;
+  el("#historySearch").hidden = videoTab !== "history";
   el("#libraryEditBtn").hidden = !saved;
   el("#libraryEditBtn").textContent = libraryEditing ? "เสร็จ" : "เอาออก";
-  el("#libraryBody").innerHTML = saved ? savedLibraryHtml() : historyHtml();
+  el("#libraryBody").innerHTML = videoTab === "continue" ? continueLibraryHtml() : saved ? savedLibraryHtml() : historyHtml();
+}
+
+// ตัวเลขบนชิป (HTML เก่าที่แคชอยู่ก่อนรีสตาร์ทไม่มีช่องตัวเลข)
+function renderLibraryCounts() {
+  const cont = libraryContinueGroups().active.length;
+  const saved = (state.videoPlaylists || []).filter((p) => p.saved_at).length + state.videos.filter((v) => v.saved_at).length;
+  const set = (id, n) => { const n0 = el(id); if (n0) n0.textContent = n ? String(n) : ""; };
+  set("#libCntContinue", cont);
+  set("#libCntSaved", saved);
+}
+
+// แท็บ "ดูต่อ": เรื่องที่ค้างกลางตอน หรือดูจบตอนแล้วยังมีตอนถัดไป (รวมตอนใหม่ที่เพิ่งมา) เรียงตามที่ดูล่าสุด
+// + คลิปเดี่ยวที่ดูค้าง · เรื่องที่ดูครบแล้วแยกไว้ "ดูจบแล้ว"
+function libraryContinueGroups() {
+  const active = [];
+  const done = [];
+  for (const g of historyGroups(false)) {
+    if (g.kind === "clip") {
+      if (Number(g.v.position_seconds) > 0) active.push({ ...g, play: g.v });
+      continue;
+    }
+    const all = playlistEpisodes(g.p.id);
+    const pos = Number(g.last.position_seconds) || 0;
+    const next = pos > 0 ? g.last : all.slice(all.indexOf(g.last) + 1).find((v) => !episodeProgress(v).watched_at);
+    (next ? active : done).push({ ...g, play: next });
+  }
+  return { active, done };
+}
+
+function continueLibRowHtml(g) {
+  if (g.kind === "clip") {
+    const v = g.v;
+    const pos = Number(v.position_seconds) || 0;
+    const len = Number(v.duration_seconds) || 0;
+    return `<div class="lib-cont" data-history-video="${escapeHtml(v.id)}"><span class="lib-cthumb wide">${thumbHtml(v.thumbnail_url)}</span>
+      <span class="lib-cinfo"><b>${escapeHtml(v.title)}</b><small>คลิปเดี่ยว${len ? ` · เหลือ ${minutesText(len - pos)}` : ""}</small>${len ? `<span class="lib-bar"><span style="width:${Math.min(100, (pos / len) * 100).toFixed(1)}%"></span></span>` : ""}</span>
+      <button class="lib-cplay" data-history-play="${escapeHtml(v.id)}" aria-label="ดูต่อ">▶</button></div>`;
+  }
+  const { p, last, play } = g;
+  const all = playlistEpisodes(p.id);
+  const fresh = newEpisodes(p, all).length;
+  const watched = all.filter((v) => { const x = episodeProgress(v); return x.watched_at && !x.pos; }).length;
+  const lang = play?.lang && seriesLangs(p).length > 1 ? ` · ${LANG_LABEL[play.lang].replace("ไทย", "")}` : "";
+  let meta;
+  if (!play) meta = `ครบ ${all.length} ตอน · ${timeAgo(g.at, "เมื่อสักครู่")}`;
+  else if (play === last) {
+    const len = Number(last.duration_seconds) || 0;
+    meta = `${episodeLabel(last)} / ${all.length}${lang}${len ? ` · เหลือ ${minutesText(len - Number(last.position_seconds))}` : ""}`;
+  } else meta = newEpisodes(p, all).includes(play) // ตอนถัดไปเพิ่งออก (ดูทันตอนล่าสุดแล้ว)
+    ? `ดูจบ${episodeLabel(last)} · ${episodeLabel(play)} มาแล้ว` : `ดูจบ${episodeLabel(last)} · ต่อ${episodeLabel(play)} / ${all.length}${lang}`;
+  return `<div class="lib-cont${play ? "" : " done"}" data-history-playlist="${escapeHtml(p.id)}"><span class="lib-cthumb">${thumbHtml(p.thumbnail_url)}</span>
+    <span class="lib-cinfo"><b>${escapeHtml(p.name)}${fresh ? ` <span class="lib-new">ใหม่ ${fresh}</span>` : ""}</b><small>${escapeHtml(meta)}</small><span class="lib-bar"><span style="width:${((watched / Math.max(1, all.length)) * 100).toFixed(1)}%"></span></span></span>
+    ${play ? `<button class="lib-cplay" data-history-play="${escapeHtml(play.id)}" aria-label="ดูต่อ">▶</button>` : ""}</div>`;
+}
+
+function continueLibraryHtml() {
+  const { active, done } = libraryContinueGroups();
+  if (!active.length && !done.length) return '<div class="empty-state">ยังไม่มีเรื่องที่ดูค้าง — เริ่มดูสักเรื่อง แล้วจะขึ้นที่นี่</div>';
+  return `${active.length ? active.map(continueLibRowHtml).join("") : '<div class="empty-state">ดูครบทุกเรื่องที่เริ่มไว้แล้ว</div>'}
+    ${done.length ? `<div class="lib-done-head"><span>ดูจบแล้ว · ${done.length}</span><button class="link-btn" data-lib-done-toggle>${libDoneShown ? "ซ่อน" : "แสดง"}</button></div>${libDoneShown ? done.map(continueLibRowHtml).join("") : ""}` : ""}`;
 }
 
 function libraryCheck(key) {
@@ -988,7 +1058,7 @@ function savedLibraryHtml() {
     .sort((a, b) => (b.hasNew - a.hasNew) || b.p.saved_at.localeCompare(a.p.saved_at));
   const clips = state.videos.filter((v) => v.saved_at && (clipsOnly ? !v.playlist_id : !videoCategoryFilter || videoCategoryOf(v) === videoCategoryFilter))
     .sort((a, b) => b.saved_at.localeCompare(a.saved_at));
-  if (!lists.length && !clips.length) return '<div class="empty-state">ยังไม่มีอะไรในคลัง — กด "บันทึก" ใต้การ์ดเรื่องหรือคลิป</div>';
+  if (!lists.length && !clips.length) return '<div class="empty-state">ยังไม่มีอะไรในคลัง — กด "＋ คลัง" ในหน้าเรื่องหรือตอนดูคลิป</div>';
   const cards = lists.map(({ p, eps }) => {
     const watched = eps.filter((v) => v.watched_at && !(Number(v.position_seconds) > 0)).length;
     const started = eps.some((v) => v.watched_at);
@@ -996,7 +1066,7 @@ function savedLibraryHtml() {
     const key = `p:${p.id}`;
     return `<button class="lib-card${librarySelected.has(key) ? " selected" : ""}" data-lib-key="${key}"><span class="mm-thumb">${thumbHtml(p.thumbnail_url)}${playlistBadge(p, eps)}${libraryCheck(key)}</span>
       <span class="mm-name">${escapeHtml(p.name)}</span><span class="lib-bar"><span style="width:${((watched / Math.max(1, eps.length)) * 100).toFixed(1)}%"></span></span>
-      <span class="mm-meta">${started ? `${shortEp(resume)}/${eps.length}` : "ยังไม่เริ่ม"}</span></button>`;
+      <span class="mm-meta">${started ? `${shortEp(resume)}/${eps.length}` : "ยังไม่เริ่ม"}${p.notify ? "" : " · ปิดเตือน"}</span></button>`;
   }).join("");
   const rows = clips.map((v) => {
     const pos = Number(v.position_seconds) || 0;
@@ -1023,7 +1093,7 @@ function historyDayLabel(iso) {
   return "เก่ากว่านั้น";
 }
 
-function historyGroups() {
+function historyGroups(useSearch = true) {
   const groups = new Map();
   for (const v of state.videos) {
     if (!v.watched_at) continue;
@@ -1038,7 +1108,7 @@ function historyGroups() {
       groups.set(v.id, { kind: "clip", v, at: v.watched_at });
     }
   }
-  const q = el("#historySearch").value.trim().toLowerCase();
+  const q = useSearch ? el("#historySearch").value.trim().toLowerCase() : "";
   return [...groups.values()]
     .filter((g) => !q || (g.kind === "pl" ? [g.p.name, ...g.eps.map((v) => v.title)] : [g.v.title]).some((t) => t.toLowerCase().includes(q)))
     .sort((a, b) => b.at.localeCompare(a.at));
@@ -1124,6 +1194,7 @@ function initLibrary() {
   el("#historySearch").addEventListener("input", debounce(() => { if (videoTab === "history") renderLibrary(); }, 150));
   el("#libraryBody").addEventListener("click", (event) => {
     if (event.target.closest("[data-lib-remove]")) return removeLibrarySelection();
+    if (event.target.closest("[data-lib-done-toggle]")) { libDoneShown = !libDoneShown; return renderLibrary(); }
     const keyEl = event.target.closest("[data-lib-key]");
     if (keyEl) {
       const key = keyEl.dataset.libKey;
@@ -1179,7 +1250,8 @@ async function togglePlaylistSave(id, btn) {
     const data = await sendJSON("POST", `/api/video-playlists/${encodeURIComponent(id)}/save`, { saved: !p.saved_at });
     p.saved_at = data.saved_at || null;
     p.notify = !!data.notify;
-    if (p.saved_at) toast("เพิ่มเข้าคลังแล้ว · ตอนใหม่มาจะแจ้งเตือน (ปิดได้ที่ 🔔)");
+    const undo = { label: "เลิกทำ", run: () => togglePlaylistSave(id, document.createElement("button")) };
+    toast(p.saved_at ? "เพิ่มเข้าคลังแล้ว · ตอนใหม่มาจะแจ้งเตือน" : "เอาออกจากคลังแล้ว", { action: undo });
     renderVideos();
   } catch (e) { toast(e.message || "บันทึกไม่สำเร็จ", { error: true }); btn.disabled = false; }
 }
@@ -1864,7 +1936,7 @@ function onYouTubeError(event) {
   const why = event.data === 100 ? "คลิปนี้ถูกลบหรือเป็นส่วนตัว" : event.data === 101 || event.data === 150
     ? "เจ้าของคลิปไม่ให้เล่นนอก YouTube" : "เล่นคลิปนี้ไม่ได้";
   el("#ytError").hidden = false;
-  el("#ytError").innerHTML = `${why} <a class="btn small" href="${escapeHtml(video.facebook_url)}" target="_blank" rel="noopener">เปิดใน YouTube ↗</a>`;
+  el("#ytError").innerHTML = `${why} ${altSourceButtons(video)}<a class="btn small" href="${escapeHtml(video.facebook_url)}" target="_blank" rel="noopener">เปิดใน YouTube ↗</a>`;
 }
 
 async function mountYouTubeVideo(video, position, autoplay) {
@@ -1916,13 +1988,33 @@ function sourceLink(video, label = `เปิดใน ${providerName(video)} �
   return video.source_url ? `<a class="btn small" href="${escapeHtml(video.source_url)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>` : "";
 }
 
+// ตอนเดียวกัน (ซีซั่น + เลขตอนตรงกัน) จากแหล่ง/ภาษาอื่นในเรื่องเดียวกัน — ภาษาเดียวกันก่อน
+function altSources(video) {
+  if (!video.playlist_id) return [];
+  return allPlaylistEpisodes(video.playlist_id).filter((x) => x.id !== video.id && !x.external
+    && Number(x.episode) === Number(video.episode) && (x.season || 1) === (video.season || 1))
+    .sort((a, b) => (a.lang === video.lang ? 0 : 1) - (b.lang === video.lang ? 0 : 1));
+}
+
+function altSourceLabel(video, alt) {
+  return `${providerName(alt)}${alt.lang && alt.lang !== video.lang ? ` · ${LANG_LABEL[alt.lang]}` : ""}`;
+}
+
+// ปุ่มทางออกเมื่อเล่นไม่ได้: แหล่งอื่นของตอนนี้ (ปุ่มหลัก = แหล่งแรก)
+function altSourceButtons(video) {
+  return altSources(video).slice(0, 3).map((alt, i) =>
+    `<button class="btn small${i === 0 ? " primary" : ""}" data-alt-play="${escapeHtml(alt.id)}">▶ เล่นจาก ${escapeHtml(altSourceLabel(video, alt))}</button>`).join("");
+}
+
 function showPlaybackError(video, err, gen = playGen) {
   if (gen !== playGen || activeVideo?.id !== video.id) return;
   activeFramePlayback = false;
   renderAutoNext();
   const retry = err?.retryable && resolveTries < MAX_RESOLVE_TRIES ? '<button class="btn small" data-playback-retry>ลองใหม่</button>' : "";
-  el("#videoPlayerBody").innerHTML = `<div class="reader-msg playback-error"><div>${escapeHtml(err?.error || "เล่นตอนนี้ไม่ได้")}</div>
-    <div class="playback-code">${escapeHtml(err?.code || "")}</div><div class="pl-controls">${retry}${sourceLink(video)}</div></div>`;
+  const alts = altSourceButtons(video);
+  el("#videoPlayerBody").innerHTML = `<div class="reader-msg playback-error"><div class="pe-icon" aria-hidden="true">⚠</div><b>${providerName(video)} เล่นตอนนี้ไม่ได้</b>
+    <small>${escapeHtml(err?.error || "แหล่งไม่ตอบ หรือไฟล์หมดอายุ")}${alts ? " · ลองแหล่งอื่นของตอนนี้ได้" : ""}</small>
+    <div class="pl-controls">${alts}${retry}${sourceLink(video)}</div><div class="playback-code">${escapeHtml(err?.code || "")}</div></div>`;
   el("#videoPlayerBody [data-playback-retry]")?.addEventListener("click", () => { if (gen === playGen) mountResolvedVideo(video, 0, true, true); });
 }
 
@@ -2769,6 +2861,12 @@ function initVideos() {
     if (saveBtn) {
       return toggleVideoSave(saveBtn.closest(".video-item")?.dataset.videoId, saveBtn);
     }
+    const srClip = event.target.closest("[data-sr-video]")?.dataset.srVideo;
+    if (srClip) {
+      const v = state.videos.find((x) => x.id === srClip);
+      if (v) openVideo(v);
+      return;
+    }
     const card = event.target.closest(".video-card");
     // คลิปแบบเปิดใน Facebook ไม่มีหน้าตัวเล่น (ที่มีปุ่มลบ) จึงลบจากปุ่มบนการ์ดแทน
     if (event.target.closest("[data-delete-video]")) {
@@ -2861,8 +2959,14 @@ function initVideos() {
     if (card) openPlaylist(card.dataset.playlistId);
   });
   initPlayerMenu();
+  // เล่นไม่ได้ → เล่นจากแหล่งอื่นของตอนเดียวกัน
+  el("#videoPlayerBody").addEventListener("click", (event) => {
+    const alt = event.target.closest("[data-alt-play]")?.dataset.altPlay;
+    const v = alt && state.videos.find((x) => x.id === alt);
+    if (v) playEpisode(v);
+  });
   // ค้นหาจากหน้าวิดีโอ (ใช้แท็บค้นหาเดิม — HTML เก่าที่แคชอยู่ก่อนรีสตาร์ทไม่มีปุ่มนี้)
-  el("#videoSearchBtn")?.addEventListener("click", () => { showTab("search"); el("#searchInput").focus(); });
+  el("#videoSearchBtn")?.addEventListener("click", () => { searchScope = "video"; showTab("search"); renderSearch(); el("#searchInput").focus(); });
   el("#playlistClose").addEventListener("click", closePlaylist);
   el("#playlistBody").addEventListener("scroll", () => {
     el("#playlistTop")?.classList.toggle("solid", el("#playlistBody").scrollTop > 150);
@@ -3296,6 +3400,8 @@ function searchMatches(q) {
   );
 }
 
+let searchScope = "all"; // all | manga | video — ปุ่ม 🔍 ในหน้าวิดีโอเปิดมาที่ "วิดีโอ"
+
 function renderSearch() {
   const q = el("#searchInput").value.trim();
   el("#searchHome").hidden = Boolean(q);
@@ -3303,6 +3409,14 @@ function renderSearch() {
   if (q) {
     const items = sortCatalog(searchMatches(q));
     const videos = renderSearchVideos(q);
+    const scopeBox = el("#searchScope");
+    if (scopeBox) {
+      scopeBox.innerHTML = [["all", "ทั้งหมด", items.length + videos], ["manga", "มังงะ", items.length], ["video", "วิดีโอ", videos]]
+        .map(([k, label, n]) => `<button class="${searchScope === k ? "active" : ""}" data-search-scope="${k}">${label} <b>${n}</b></button>`).join("");
+      el("#searchCount").hidden = el("#searchGrid").hidden = searchScope === "video";
+      el("#searchVideoTitle").hidden ||= searchScope === "manga";
+      el("#searchVideoGrid").hidden = searchScope === "manga";
+    }
     el("#searchCount").textContent = items.length
       ? `พบ ${items.length} เรื่อง`
       : videos ? `ไม่พบมังงะที่ตรงกับ "${q}"` : `ไม่พบเรื่องหรือคลิปที่ตรงกับ "${q}"`;
@@ -3318,10 +3432,16 @@ function renderSearch() {
   el("#recentRow").innerHTML = recent.slice(0, 12).map(coverTileHtml).join("");
 }
 
-// คลิป MeeMovie ที่ชื่อตรงกับคำค้น — ใช้การ์ด/ปุ่มบันทึกชุดเดียวกับหน้าวิดีโอ คืนจำนวนที่เจอ
+// เน้นคำค้นในชื่อ (ไม่สนตัวพิมพ์เล็กใหญ่)
+function highlightHtml(text, q) {
+  const i = text.toLowerCase().indexOf(q.toLowerCase());
+  if (!q || i < 0) return escapeHtml(text);
+  return `${escapeHtml(text.slice(0, i))}<mark>${escapeHtml(text.slice(i, i + q.length))}</mark>${escapeHtml(text.slice(i + q.length))}`;
+}
+
+// ผลวิดีโอ: เรื่องก่อน (ตอนที่ชื่อตรงรวมเป็นแถวเรื่องเดียว) แล้วคลิปเดี่ยว — คืนจำนวนที่เจอ
 function renderSearchVideos(q) {
   const needle = q.toLowerCase();
-  // ตอนของ playlist รวมเป็นการ์ดเรื่องเดียว (ค้น "ep" เดิมได้การ์ดตอนเป็นพันใบ)
   const hitPlaylists = new Set();
   const videos = state.videos.filter((v) => {
     if (!v.title.toLowerCase().includes(needle)) return false;
@@ -3332,7 +3452,27 @@ function renderSearchVideos(q) {
   const total = videos.length + playlists.length;
   el("#searchVideoTitle").hidden = !total;
   el("#searchVideoTitle").textContent = `🎬 วิดีโอ (${playlists.length ? `${playlists.length} เรื่อง · ` : ""}${videos.length} คลิป)`;
-  el("#searchVideoGrid").innerHTML = playlists.map(playlistCardHtml).join("") + videos.map(videoCardHtml).join("");
+  const listRows = playlists.map((p) => {
+    const eps = playlistEpisodes(p.id);
+    const started = eps.some((v) => episodeProgress(v).watched_at);
+    const seasons = new Set(allPlaylistEpisodes(p.id).map((v) => v.season || 1)).size;
+    const langs = seriesLangs(p).map((l) => LANG_LABEL[l].replace("ไทย", "")).join("/");
+    const cat = p.category_id ? videoCategoryName(p.category_id) : "";
+    const meta = [cat, seasons > 1 ? `${seasons} ซีซั่น` : `${eps.length} ตอน`, langs].filter(Boolean).join(" · ");
+    const resume = started ? playlistResume(eps) : null;
+    const pill = resume ? `<span class="sr-pill">ดูถึง ${(resume.season || 1) > 1 || seasons > 1 ? `S${resume.season || 1} ` : ""}EP${Number(resume.episode)}</span>`
+      : playlistBadge(p, eps) ? '<span class="sr-pill new">EP ใหม่</span>' : "";
+    return `<button class="sr-row" data-playlist-id="${escapeHtml(p.id)}"><span class="sr-poster">${thumbHtml(p.thumbnail_url)}</span>
+      <span class="sr-info"><b>${highlightHtml(p.name, q)}</b><small>${escapeHtml(meta)}</small>${pill}</span></button>`;
+  }).join("");
+  const clipRows = videos.map((v) => {
+    const len = Number(v.duration_seconds) || 0;
+    const inner = `<span class="sr-wide">${thumbHtml(v.thumbnail_url)}</span><span class="sr-info"><b>${highlightHtml(v.title, q)}</b><small>คลิปเดี่ยว${len ? ` · ${formatVideoTime(len)}` : ""}${v.external ? ` · เปิดใน ${providerName(v)}` : ""}</small></span>`;
+    return v.external
+      ? `<a class="sr-row" href="${escapeHtml(v.source_url || "#")}" target="_blank" rel="noopener">${inner}</a>`
+      : `<button class="sr-row" data-sr-video="${escapeHtml(v.id)}">${inner}</button>`;
+  }).join("");
+  el("#searchVideoGrid").innerHTML = listRows + clipRows;
   return total;
 }
 
@@ -3365,7 +3505,9 @@ function initSearch() {
   });
   // แตะผลลัพธ์ = คำนี้ใช้ได้จริง จำไว้ด้วย (ส่วนใหญ่พิมพ์แล้วแตะผลเลย ไม่ได้กด Enter)
   el("#searchResults").addEventListener("click", (e) => {
-    if (e.target.closest("[data-id], .video-card, .playlist-card")) recordSearch(el("#searchInput").value);
+    if (e.target.closest("[data-id], .video-card, .playlist-card, .sr-row")) recordSearch(el("#searchInput").value);
+    const scope = e.target.closest("[data-search-scope]")?.dataset.searchScope;
+    if (scope) { searchScope = scope; renderSearch(); }
   }, true);
   el("#searchHistoryChips").addEventListener("click", (e) => {
     const remove = e.target.closest("[data-remove]");
@@ -7681,7 +7823,7 @@ function recentVideoCats() {
 
 function renderVideoCatPicker() {
   const box = el("#videoCatPicker");
-  box.hidden = videoTab === "history";
+  box.hidden = videoTab === "history" || videoTab === "continue"; // ดูต่อ/ประวัติ ไม่กรองตามหมวด
   if (videoCategoryFilter && !videoCatOptions().some((c) => c.id === videoCategoryFilter)) videoCategoryFilter = null;
   const name = videoCategoryName(videoCategoryFilter) || "ทั้งหมด";
   box.innerHTML = `<button class="vcat-btn" data-cat-sheet-open aria-haspopup="dialog">${escapeHtml(name)}<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
