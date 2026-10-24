@@ -4779,6 +4779,12 @@ function initLongPressSelect() {
     toggleSelected(`${row.dataset.kind}:${row.dataset.id}`, row);
   }, true);
   el("#contentSelectBtn").addEventListener("click", () => setSelectMode(true));
+  // แตะที่ว่าง = ออกจากโหมดเลือก (แถว / ปุ่ม / ตัวกรอง / ช่องค้นหา / แถบเลือก / แผ่นที่เปิดอยู่ ไม่นับ)
+  document.addEventListener("click", (e) => {
+    if (!selectMode || Date.now() < suppressUntil) return;
+    if (e.target.closest(".settings-row, #contentSelectBar, .sheet-backdrop, button, a, input, select, textarea, label")) return;
+    setSelectMode(false);
+  });
   el("#contentSelectBar").addEventListener("click", selectBarClick);
 }
 
