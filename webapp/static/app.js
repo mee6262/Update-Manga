@@ -4458,7 +4458,7 @@ function openSeriesSheet(id) {
       <div class="ms-row"><span class="set-ic">📼</span><span class="grow">${Object.entries(providers).map(([k, n]) => `${escapeHtml(k)} ${n} ตอน`).join(" · ") || "ยังไม่มีตอน"}<small>${tracks ? "สวิตช์ = ติดตามตอนใหม่อัตโนมัติ (เช็คทุก 1 ชม.)" : "เพิ่มตอนใหม่: ปุ่ม ＋ เพิ่ม → วางลิงก์ / ติดตามเพจ"}</small></span></div>
     </div>
     <div class="ms-title">ตอน <button class="link-btn" data-vs-advanced="episodes">เรียง / แก้เลขตอน ›</button></div>
-    <div class="ep-grid">${cells.join("") || '<span class="hint">ยังไม่มีตอน</span>'}</div>
+    <div class="ms-ep-grid">${cells.join("") || '<span class="hint">ยังไม่มีตอน</span>'}</div>
     ${sheetCatsHtml(p)}
     <div class="ms-title">จัดการ</div>
     <div class="ms-group">

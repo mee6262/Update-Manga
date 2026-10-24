@@ -1742,10 +1742,10 @@ button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%
 .ms-thumb-ph { width: 96px; height: 54px; border-radius: 8px; background: var(--img-bg); display: grid; place-items: center; font-size: 1.4rem; flex: none; }
 .ms-alert.warn { background: rgba(212, 160, 23, 0.14); color: #b7841a; }
 .ms-alert.info { background: rgba(59, 130, 246, 0.12); color: #3b82f6; }
-.ep-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(38px, 1fr)); gap: 4px; }
-.ep-grid span { font-size: 0.72rem; text-align: center; padding: 5px 0; border-radius: 6px; background: var(--bg-elevated); border: 1px solid var(--border); }
-.ep-grid span.miss { background: rgba(229, 72, 77, 0.14); border-color: rgba(229, 72, 77, 0.4); color: var(--danger); font-weight: 700; }
-.ep-grid .ep-season { grid-column: 1 / -1; text-align: left; background: none; border: 0; font-weight: 700; color: var(--text-dim); padding: 4px 2px 0; }
+.ms-ep-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(38px, 1fr)); gap: 4px; }
+.ms-ep-grid span { font-size: 0.72rem; text-align: center; padding: 5px 0; border-radius: 6px; background: var(--bg-elevated); border: 1px solid var(--border); }
+.ms-ep-grid span.miss { background: rgba(229, 72, 77, 0.14); border-color: rgba(229, 72, 77, 0.4); color: var(--danger); font-weight: 700; }
+.ms-ep-grid .ep-season { grid-column: 1 / -1; text-align: left; background: none; border: 0; font-weight: 700; color: var(--text-dim); padding: 4px 2px 0; }
 .ms-cats .video-chip.auto { border-style: dashed; }
 .ms-rename { margin: 0; padding: 0 13px 11px; }
 .ms-row .switch { flex: none; }
