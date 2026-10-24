@@ -9,11 +9,19 @@
 - ตัวเล่น: POST /api/get.php (action=halim_ajax_player, nonce ว่างได้, episode, server=1, postid, lang) ตอบ
   <iframe src="https://main.108player.com/index_th.php?id=..."> — postid ของหน้าตอนใน data-post-id, เลขตอนใน halim_cfg.episode
   ตัวเล่นเช็ค Referer: ส่งชื่อเว็บอื่น = หน้าว่าง 17 ไบต์, ไม่ส่ง = ได้ตัวเล่น → แอปฝังแบบ referrerpolicy=no-referrer
-  ไฟล์จริงเป็น HLS ที่ท่อนวิดีโอปลอมเป็น .webp (มีหัวไฟล์รูปนำหน้า) — <video>/iPhone เล่นตรงไม่ได้ จึงฝังตัวเล่นเขา
+  ไฟล์จริงเป็น HLS: main.108player.com/newplaylist/<id>/<id>.m3u8 (master 360p+1080p, CORS *, ไม่ต้อง Referer;
+  User-Agent iPhone ได้ไฟล์รายการย่อยว่าง) ท่อนอยู่โดเมนที่มีวันที่ในชื่อ (www.data26092026.online) ปลอมเป็น .webp
+  (รูป WebP 42 ไบต์นำหน้า MPEG-TS — hls.js ข้ามเอง) และเปิด CORS ให้แค่ main.108player.com
+  → ตั้ง Worker ส่งต่อท่อน (tools/video-proxy-worker.js + VIDEO_PROXY_URL/VIDEO_PROXY_KEY ใน .env) = เล่นในตัวเล่นแอป
+    (ไฟล์รายการผ่านเซิร์ฟเวอร์เรา ลิงก์ท่อนเซ็นให้ Worker) ไม่ตั้ง = ฝังตัวเล่นเขาเหมือนเดิม
 ตอนเดียวกันสองภาษาใช้หน้าเดียวกัน → แยกด้วย fragment ของลิงก์ (#dub / #sub) เป็นคนละตอนในคลัง
 """
+import hashlib
+import hmac
+import os
 import re
-from urllib.parse import urljoin, urlsplit
+import time
+from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
 import requests
 from bs4 import BeautifulSoup
@@ -28,6 +36,11 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 TIMEOUT = (5, 15)
 MAX_PAGE_BYTES = 3 * 1024 * 1024
 PLAYER_HOSTS = {"main.108player.com"}
+PLAYER_ORIGIN = "https://main.108player.com"
+_PLAYER_ID = re.compile(r"[0-9a-f]{16,40}")
+STREAM_CACHE_SECONDS = 10 * 60
+SIGN_SECONDS = 8 * 3600                     # ลิงก์ท่อนใช้ได้ 8 ชม. (ดูยาว/หยุดพักได้ ไม่ต้องขอใหม่)
+_streams: dict[str, tuple[float, str]] = {}  # video id → (หมดอายุ, id ตัวเล่น)
 _SLUG = r"[a-z0-9][a-z0-9-]{0,150}"
 LANGS = {"dub": ("sequel_select_th", "Thai"), "sub": ("sequel_select_en", "Sound Track")}
 LANG_TAG = {"dub": "[พากย์ไทย]", "sub": "[ซับไทย]"}
@@ -210,6 +223,89 @@ def player_url(url: str) -> str:
     return src
 
 
+def _proxy() -> tuple[str, str] | None:
+    """(ลิงก์ Worker, รหัสลับ) จาก .env — อ่านตอนใช้ (load_dotenv ทำใน app หลัง import โมดูลนี้)"""
+    url = os.environ.get("VIDEO_PROXY_URL", "").strip().rstrip("/")
+    key = os.environ.get("VIDEO_PROXY_KEY", "").strip()
+    if not key or not (url.startswith("https://") or url.startswith("http://127.0.0.1:")):
+        return None
+    return url, key
+
+
+def sign_segment(seg: str, proxy: tuple[str, str], now: float | None = None) -> str:
+    """ลิงก์ท่อนผ่าน Worker — ลายเซ็น = HMAC-SHA256(รหัสลับ, "<หมดอายุ>\\n<ลิงก์>") 32 hex แรก (ตรงกับ Worker)"""
+    url, key = proxy
+    exp = int((now or time.time()) + SIGN_SECONDS)
+    sig = hmac.new(key.encode(), f"{exp}\n{seg}".encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{url}/s?u={quote(seg, safe='')}&e={exp}&k={sig}"
+
+
+def _player_id(src: str) -> str:
+    pid = (parse_qs(urlsplit(src).query).get("id") or [""])[0]
+    if not _PLAYER_ID.fullmatch(pid):
+        raise ValueError("ไม่พบรหัสวิดีโอในลิงก์ตัวเล่น")
+    return pid
+
+
+def _variants(pid: str) -> list[tuple[str, str]]:
+    """[(บรรทัด #EXT-X-STREAM-INF, ลิงก์ไฟล์รายการย่อย)] จาก master — รับเฉพาะไฟล์บน main.108player.com"""
+    master = f"{PLAYER_ORIGIN}/newplaylist/{pid}/{pid}.m3u8"
+    text = _request("GET", master).text
+    if not text.lstrip().startswith("#EXTM3U"):
+        raise ValueError("ไฟล์รายการวิดีโอไม่ใช่ HLS")
+    out, inf = [], None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("#EXT-X-STREAM-INF"):
+            inf = line
+        elif line and not line.startswith("#") and inf:
+            url = urljoin(master, line)
+            if url.startswith(PLAYER_ORIGIN + "/"):
+                out.append((inf, url))
+            inf = None
+    if not out:
+        raise ValueError("ไฟล์รายการวิดีโอไม่มีความละเอียดให้เลือก")
+    return out
+
+
+def stream_playlist(video: dict, variant: str | None) -> str:
+    """/api/videos/<id>/stream.m3u8 — ไม่มี ?v = master (ความละเอียดชี้กลับมาที่นี่ ?v=<ลำดับ>), มี ?v = ไฟล์รายการย่อย
+    ที่ลิงก์ท่อนเปลี่ยนเป็นลิงก์ Worker ที่เซ็นแล้ว (ท่อนวิดีโอไม่ผ่านเซิร์ฟเวอร์เรา)"""
+    proxy = _proxy()
+    if not proxy:
+        raise ValueError("ยังไม่ได้ตั้ง Worker ส่งต่อวิดีโอ (VIDEO_PROXY_URL/VIDEO_PROXY_KEY)")
+    entry = _streams.get(video["id"])
+    if entry and entry[0] > time.time():
+        pid = entry[1]
+    else:
+        pid = _player_id(player_url(video.get("source_url") or ""))
+        _streams[video["id"]] = (time.time() + STREAM_CACHE_SECONDS, pid)
+    variants = _variants(pid)
+    if variant is None:
+        lines = ["#EXTM3U"]
+        for i, (inf, _) in enumerate(variants):
+            lines += [inf, f"/api/videos/{video['id']}/stream.m3u8?v={i}"]
+        return "\n".join(lines) + "\n"
+    if not variant.isdigit() or int(variant) >= len(variants):
+        raise ValueError("ไม่มีความละเอียดนี้")
+    url = variants[int(variant)][1]
+    text = _request("GET", url).text
+    if not text.lstrip().startswith("#EXTM3U") or "#EXTINF" not in text:
+        raise ValueError("ไฟล์รายการวิดีโอว่าง (เว็บอาจเปลี่ยนวิธี)")
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("#EXT-X-KEY") or line.startswith("#EXT-X-MAP"):
+            raise ValueError("ไฟล์วิดีโอแบบเข้ารหัส/แยกหัวไฟล์ — ยังไม่รองรับ")
+        if line and not line.startswith("#"):
+            seg = urljoin(url, line)
+            if not seg.startswith("https://"):
+                raise ValueError("ลิงก์ท่อนวิดีโอไม่ใช่ https")
+            line = sign_segment(seg, proxy)
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
 class Provider:
     """adapter ของ streams — ข้อมูลเรื่อง/ตอนจากฟังก์ชันข้างบน, เล่นด้วยการฝังตัวเล่นของเว็บ (ไม่ส่ง Referer)"""
     name = "anime108"
@@ -252,7 +348,16 @@ class Provider:
             src = player_url(url)
         except ValueError as e:
             raise streams.StreamError(streams.STREAM_RESOLUTION_FAILED, str(e), retryable=True) from None
-        return {"kind": "embed", "url": src, "expires_at": None, "frame": None, "referrer": "none"}
+        embed = {"kind": "embed", "url": src, "expires_at": None, "frame": None, "referrer": "none"}
+        if not _proxy():
+            return embed
+        try:
+            _streams[video["id"]] = (time.time() + STREAM_CACHE_SECONDS, _player_id(src))
+        except ValueError:
+            return embed
+        # ตั้ง Worker แล้ว: เล่นในตัวเล่นแอป (hls.js) — เล่นไม่ได้ หน้าเว็บสลับไปตัวฝังของเขาเอง (alt)
+        return {"kind": "hls", "url": f"/api/videos/{video['id']}/stream.m3u8", "expires_at": None, "frame": None,
+                "alt": embed}
 
 
 streams.register(Provider())

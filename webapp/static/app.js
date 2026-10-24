@@ -2394,6 +2394,15 @@ async function pickAutoQuality(sources) {
 function renderQualityButtons() {
   const box = el("#videoQuality");
   if (!box || !nativeSources) return;
+  if (nativeHls?.levels?.length > 1) {
+    // HLS หลายความละเอียด (Anime108): อัตโนมัติ = hls.js เลือกตามเน็ต, กดความละเอียด = ล็อกตัวนั้น
+    const auto = nativeHls.autoLevelEnabled;
+    const cur = nativeHls.levels[nativeHls.currentLevel]?.height;
+    const levels = nativeHls.levels.map((l, i) => ({ i, h: l.height })).sort((a, b) => b.h - a.h);
+    box.innerHTML = `<button class="video-quality-btn${auto ? " active" : ""}" data-hls-level="-1">อัตโนมัติ${auto && cur ? ` (${cur}p)` : ""}</button>`
+      + levels.map(({ i, h }) => `<button class="video-quality-btn${!auto && nativeHls.currentLevel === i ? " active" : ""}" data-hls-level="${i}">${h}p</button>`).join("");
+    return;
+  }
   const options = ["auto", ...["hd", "sd"].filter((q) => nativeSources[q])];
   if (options.length === 2) {
     // ไฟล์เดียว (HLS ของ AnimeRuka, แหล่งที่ให้ไฟล์เดียว) ไม่มีให้เลือก — บอกความละเอียดจริงของวิดีโอ ไม่ใช่ป้าย 360p
@@ -2425,6 +2434,9 @@ function setNativeQuality(quality, startAt, autoplay = false) {
       destroyNativeHls();
       v.dispatchEvent(new Event("error"));
     });
+    const relabel = () => { if (nativeHls === hls) renderQualityButtons(); };
+    hls.on(window.Hls.Events.MANIFEST_PARSED, relabel);
+    hls.on(window.Hls.Events.LEVEL_SWITCHED, relabel);
     v.disableRemotePlayback = true; // iPhone (ManagedMediaSource) ไม่เปิดสตรีมถ้าไม่ปิด AirPlay หรือมีแหล่ง AirPlay สำรอง
     hls.loadSource(new URL(nativeSources[quality], location.href).href);
     hls.attachMedia(v);
@@ -2490,6 +2502,12 @@ function mountNativeVideo(video, position, sources) {
       if (nativeStalls.length >= 2) setNativeQuality("sd");
     });
     el("#videoQuality").addEventListener("click", async (event) => {
+      const level = event.target.closest("[data-hls-level]")?.dataset.hlsLevel;
+      if (level !== undefined && nativeHls) {
+        nativeHls.currentLevel = Number(level); // -1 = กลับไปอัตโนมัติ
+        renderQualityButtons();
+        return;
+      }
       const q = event.target.closest("[data-quality]")?.dataset.quality;
       if (!q || q === nativeQualityPref) return;
       nativeQualityPref = q;

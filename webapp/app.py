@@ -2084,13 +2084,16 @@ def get_video_sources(video_id):
 
 @app.route("/api/videos/<video_id>/stream.m3u8", methods=["GET"])
 def video_stream_playlist(video_id):
-    """ไฟล์รายการ HLS ของแหล่งที่ต้องส่ง Referer ของเขาเอง (AnimeRuka ตัวหลัก) — ดึงแค่ไฟล์รายการ (~15 KB)
+    """ไฟล์รายการ HLS ของแหล่งที่ต้องส่ง Referer ของเขาเอง (AnimeRuka ตัวหลัก, Anime108) — ดึงแค่ไฟล์รายการ (~15-40 KB)
     ท่อนวิดีโอในนั้นเป็นลิงก์เต็มของ CDN <video> โหลดตรง ไม่ผ่านเซิร์ฟเวอร์นี้"""
     video = next((v for v in storage.load_videos() if v.get("id") == video_id), None)
-    if not video or video.get("provider") != "animeruka":
+    if not video or video.get("provider") not in ("animeruka", "anime108"):
         return Response("not found", status=404, mimetype="text/plain")
     try:
-        text = animeruka.stream_playlist(video)
+        if video["provider"] == "anime108":  # ท่อนวิดีโอผ่าน Worker (VIDEO_PROXY_URL) ?v = ความละเอียด
+            text = anime108.stream_playlist(video, request.args.get("v"))
+        else:
+            text = animeruka.stream_playlist(video)
     except ValueError as e:
         return Response(str(e), status=502, mimetype="text/plain")
     return Response(text, mimetype="application/vnd.apple.mpegurl", headers={"Cache-Control": "no-store"})
