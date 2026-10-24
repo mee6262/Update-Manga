@@ -2030,3 +2030,15 @@ button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%
 /* แถบแจ้งมีปุ่ม */
 .toast-act { margin-left: 12px; background: none; border: 0; color: #6ee7b0; font: inherit; font-weight: 700; cursor: pointer; padding: 2px 0; }
 .toast.error .toast-act { color: #fff; text-decoration: underline; }
+
+/* กล่องเทาระหว่างโหลด (แทนข้อความ "กำลังโหลด...") */
+.skel { display: block; background: linear-gradient(90deg, var(--img-bg) 0%, color-mix(in srgb, var(--img-bg) 55%, var(--bg-elevated)) 50%, var(--img-bg) 100%); background-size: 200% 100%; animation: skel-shine 1.3s ease-in-out infinite; border-radius: 10px; }
+@keyframes skel-shine { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+.skel-home { display: flex; flex-direction: column; gap: 12px; }
+.skel-hero { aspect-ratio: 16 / 9; max-height: 340px; border-radius: 14px; margin-bottom: 6px; }
+.skel-title { width: 42%; height: 18px; border-radius: 6px; margin-top: 8px; }
+.skel-row { display: flex; gap: 10px; overflow: hidden; }
+.skel-poster { flex: 0 0 112px; aspect-ratio: 5 / 7; border-radius: 12px; }
+.skel-player { width: 100%; max-width: 900px; aspect-ratio: 16 / 9; border-radius: 0; justify-self: center; background: linear-gradient(90deg, #15171c 0%, #23262e 50%, #15171c 100%); background-size: 200% 100%; }
+.video-player.mini .skel-player { width: 128px; height: 72px; aspect-ratio: auto; }

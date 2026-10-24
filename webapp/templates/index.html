@@ -568,7 +568,7 @@
   <div id="videoPlayer" class="reader video-player" hidden>
     <div class="reader-topbar player-top"><button id="videoMinBtn" class="icon-btn plain" aria-label="ย่อจอ" title="ย่อจอ: เล่นต่อขณะเลือกเรื่องอื่น"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button id="videoPlayerTitleBtn" class="reader-title player-title-btn" type="button" title="ไปหน้าเรื่อง (คลิปย่อเล่นต่อด้านล่าง)"><span id="videoPlayerTitle"></span><span id="videoPlayerSub" class="player-title-sub" hidden></span></button><button id="videoMoreBtn" class="icon-btn plain" aria-label="ตัวเลือกเพิ่มเติม" title="ความคิดเห็น · ภาษา · คุณภาพ · ตั้งเวลาปิด · ลบ"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg></button></div>
     <div class="player-stage">
-      <div id="videoPlayerBody" class="video-player-body"><div class="reader-msg">กำลังโหลด...</div></div>
+      <div id="videoPlayerBody" class="video-player-body"><div class="skel skel-player" aria-label="กำลังโหลด"></div></div>
       <div id="nextOverlay" class="next-overlay" hidden><span class="next-thumb"><span id="nextThumb"></span><span id="nextCount" class="next-count"></span></span><div class="next-info"><small>ถัดไป</small><b id="nextOverlayText"></b><div class="next-overlay-actions"><button id="nextNowBtn" class="btn primary">▶ เล่นเลย</button><button id="nextCancelBtn" class="btn">ยกเลิก</button></div></div></div>
     </div>
     <div id="playerPanel" class="player-panel">

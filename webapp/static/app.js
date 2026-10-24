@@ -479,9 +479,20 @@ function renderVideos() {
   if (activeVideo && !el("#videoPlayer").hidden) renderEpisodeNav(activeVideo);
 }
 
+// โครงหน้าระหว่างโหลดคลังครั้งแรก (กล่องเทาตามรูปการ์ดจริง แทนจอว่าง/ข้อความ "กำลังโหลด")
+function videoHomeSkeletonHtml() {
+  const posters = '<span class="skel skel-poster"></span>'.repeat(4);
+  const row = `<div class="skel skel-title"></div><div class="skel-row">${posters}</div>`;
+  return `<div class="skel-home" aria-label="กำลังโหลด"><div class="skel skel-hero"></div>${row}${row}</div>`;
+}
+
 async function loadVideos() {
   if (videoLoading) return;
   videoLoading = true;
+  if (!state.videos?.length && videoTab === "home") {
+    el("#videoHome").hidden = false;
+    el("#videoHome").innerHTML = videoHomeSkeletonHtml();
+  }
   try {
     // เซิร์ฟเวอร์ส่งทั้งคลัง หน้าเว็บแบ่งแสดงเอง
     const data = await getJSON("/api/videos");
@@ -2656,7 +2667,7 @@ async function openVideo(video, { autoplay = false } = {}) {
   activeFramePlayback = false;
   resolveTries = 0;
   // แผง error ของตอนก่อน (แหล่งใน streams) ห้ามค้างใต้ชื่อตอนใหม่ระหว่างรอโหลด
-  if (el("#videoPlayerBody .playback-error")) el("#videoPlayerBody").innerHTML = '<div class="reader-msg">กำลังโหลด...</div>';
+  if (el("#videoPlayerBody .playback-error")) el("#videoPlayerBody").innerHTML = '<div class="skel skel-player" aria-label="กำลังโหลด"></div>';
   activeFbPlayer = null;
   activeVideoDuration = Number(video.duration_seconds) || null;
   lastSavedVideoPosition = null;
@@ -2819,7 +2830,7 @@ function closeVideo() {
   el("#videoPlayer").hidden = true;
   el("#videoDeleteBtn").hidden = true;
   el("#playerEpisodes").hidden = true;
-  el("#videoPlayerBody").innerHTML = '<div class="reader-msg">กำลังโหลด...</div>';
+  el("#videoPlayerBody").innerHTML = '<div class="skel skel-player" aria-label="กำลังโหลด"></div>';
   if (el("#playlistView").hidden) document.body.style.overflow = "";
   renderVideos();
   reloadIfPending();
