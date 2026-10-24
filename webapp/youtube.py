@@ -196,6 +196,47 @@ def video_meta(video_id: str) -> dict:
     return {"title": data.get("title") or "", "channel": data.get("author_name") or "", "embeddable": True}
 
 
+def video_length(video_id: str) -> int | None:
+    """ความยาวคลิป (วินาที) จากหน้าดู — oEmbed ไม่บอก; อ่านไม่ได้ = None (ไม่ถือเป็น error)"""
+    try:
+        resp = scraper.session().get(watch_url(video_id), headers=HEADERS, timeout=TIMEOUT)
+        match = re.search(r'"lengthSeconds":"(\d+)"', resp.text)
+        return int(match.group(1)) if match else None
+    except requests.RequestException:
+        return None
+
+
+# ฉบับมัดรวม (ทั้งซีซั่นในคลิปเดียว): ชื่อมีคำเหล่านี้ หรือยาว ≥ 2 ชม.
+BUNDLE_WORDS = re.compile(r"มัดรวม|รวมทุกตอน|รวมตอน|full\s*season|compilation", re.I)
+BUNDLE_MIN_SECONDS = 2 * 3600
+
+
+def parse_time(text: str) -> int | None:
+    """"1:02:03" / "23:41" → วินาที"""
+    parts = [int(p) for p in text.split(":")]
+    if len(parts) == 2:
+        return parts[0] * 60 + parts[1] if parts[1] < 60 else None
+    if len(parts) == 3:
+        return parts[0] * 3600 + parts[1] * 60 + parts[2] if parts[1] < 60 and parts[2] < 60 else None
+    return None
+
+
+def parse_marks(text: str) -> list[list]:
+    """เวลาเริ่มแต่ละตอนที่วางเอง ทีละบรรทัด: "0:00 ตอน 25", "ตอนที่ 26 23:41", "27 | 47:20" → [[ตอน, วินาที], ...]
+    เรียงตามเวลา — บรรทัดที่อ่านไม่ออกข้าม"""
+    marks = []
+    for line in (text or "").splitlines():
+        time_m = re.search(r"\b(\d{1,2}:\d{2}(?::\d{2})?)\b", line)
+        if not time_m:
+            continue
+        rest = line[:time_m.start()] + " " + line[time_m.end():]
+        ep_m = _EPISODE.search(rest) or re.search(r"(\d+(?:\.\d+)?)", rest)
+        sec = parse_time(time_m.group(1))
+        if ep_m and sec is not None:
+            marks.append([float(ep_m.group(1)), sec])
+    return sorted(marks, key=lambda m: m[1])
+
+
 # ---------- แยกชื่อเรื่อง / ภาษา / ซีซั่น / ตอน จากชื่อ ----------
 _LANG_PATTERNS = (
     ("dub", re.compile(r"[\[\(【]?\s*(?:พากย์ไทย|พากษ์ไทย|thai\s*dub(?:bed)?)\s*[\]\)】]?", re.I)),

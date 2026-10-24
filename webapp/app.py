@@ -1842,6 +1842,11 @@ def _public_video(video: dict, progress: dict | None = None, saved: dict | None 
         "provider": video.get("provider") or "facebook",
         "youtube_id": video.get("youtube_id"),
         "bulk": bool(video.get("bulk")),
+        # ฉบับมัดรวม: คลิปเดียวทั้งซีซั่น ผูกกับเรื่อง (ไม่ใช่ตอน — ไม่มี playlist_id) + จุดเริ่มแต่ละตอน [[ตอน, วินาที]]
+        "bundle_of": video.get("bundle_of"),
+        "bundle_season": video.get("bundle_season"),
+        "bundle_marks": video.get("bundle_marks") or [],
+        "bundle_approx": bool(video.get("bundle_approx")),
         "added_by": video["added_by"],
         "created_at": video["created_at"],
         "can_delete": _can_delete_video(video),
@@ -3094,6 +3099,12 @@ def merge_video_playlist(playlist_id):
                                                    if t["list_id"] not in {x["list_id"] for x in target.get("tracks", [])})
         storage.save_videos(videos)
         storage.save_video_playlists([p for p in playlists if p["id"] != playlist_id])
+        for v in videos:
+            if v.get("bundle_of") == playlist_id:
+                v["bundle_of"] = target_id
+                if season:
+                    v["bundle_season"] = season
+        storage.save_videos(videos)
         src_key, dst_key = f"playlist:{playlist_id}", f"playlist:{target_id}"
         for u in [*storage.all_usernames(), "local"]:
             saved = storage.load_video_saved(u, fresh=True)
@@ -3275,6 +3286,68 @@ def _create_youtube_clip(video_id: str, username: str, category_id: str | None =
         videos.append(video)
         storage.save_videos(videos)
     return _public_video(video), 201
+
+
+def _season_episode_numbers(playlist_id: str, season: int) -> list[int]:
+    """เลขตอน (จำนวนเต็ม) ของซีซั่นนี้จากทุกภาษา เติมช่องว่างระหว่างตอนแรก–ตอนสุดท้าย — ไว้ประมาณจุดแบ่งตอนในฉบับรวม"""
+    nums = {int(v["episode"]) for v in storage.load_videos() if v.get("playlist_id") == playlist_id
+            and (v.get("season") or 1) == season and v.get("episode") is not None and float(v["episode"]).is_integer()}
+    return list(range(min(nums), max(nums) + 1)) if nums else []
+
+
+def _create_youtube_bundle(video_id: str, username: str, spec: dict) -> tuple[dict, int]:
+    """ฉบับมัดรวม (ทั้งซีซั่นในคลิปเดียว) ผูกกับเรื่อง — ไม่นับเป็นตอน
+    spec: {"playlist_id", "season", "lang", "split": approx|manual|none, "marks_text", "first", "last"}
+    approx = หารความยาวเท่า ๆ กันตามเลขตอนของซีซั่นนั้น (หรือ first–last ที่ระบุ) / manual = เวลาที่วางเอง
+    เพิ่มซ้ำ (ลิงก์เดิม) = แก้ค่าของฉบับรวมเดิม (ใช้แก้เวลาแบ่งตอนทีหลัง)"""
+    playlist = next((p for p in storage.load_video_playlists() if p["id"] == str(spec.get("playlist_id") or "")), None)
+    if not playlist:
+        return {"error": "เลือกเรื่องที่จะผูกฉบับรวม"}, 400
+    try:
+        season = int(spec.get("season") or 1)
+    except (TypeError, ValueError):
+        return {"error": "ซีซั่นต้องเป็นตัวเลข"}, 400
+    if not 1 <= season <= 99:
+        return {"error": "ซีซั่นเกินช่วง"}, 400
+    lang = spec.get("lang") if spec.get("lang") in ("dub", "sub") else None
+    split = spec.get("split") if spec.get("split") in ("approx", "manual", "none") else "approx"
+    try:
+        meta = youtube.video_meta(video_id)  # ยิงเน็ตก่อนเข้า lock
+    except ValueError as e:
+        return {"error": str(e)}, 400
+    except requests.RequestException as e:
+        return {"error": f"เชื่อมต่อ YouTube ไม่ได้: {e}"}, 502
+    length = youtube.video_length(video_id)
+    marks: list[list] = []
+    if split == "manual":
+        marks = youtube.parse_marks(str(spec.get("marks_text") or "")[:20000])
+        if len(marks) < 2:
+            return {"error": 'ใส่เวลาเริ่มอย่างน้อย 2 ตอน เช่น "0:00 ตอน 25" ทีละบรรทัด'}, 400
+    elif split == "approx":
+        try:
+            first, last = int(spec.get("first") or 0), int(spec.get("last") or 0)
+        except (TypeError, ValueError):
+            first = last = 0
+        nums = list(range(first, last + 1)) if 0 < first <= last <= first + 500 else _season_episode_numbers(playlist["id"], season)
+        if not nums:
+            return {"error": "ซีซั่นนี้ยังไม่มีตอนให้นับ — ระบุตอนแรก/ตอนสุดท้าย หรือใส่เวลาเอง"}, 400
+        if not length:
+            return {"error": "อ่านความยาวคลิปไม่ได้ — ใช้แบบใส่เวลาเอง"}, 400
+        marks = [[float(n), round(k * length / len(nums))] for k, n in enumerate(nums)]
+    with storage.state_lock:
+        videos = storage.load_videos(fresh=True)
+        video = next((v for v in videos if v.get("canonical_key") == _yt_key(video_id)), None)
+        if video and video.get("playlist_id"):
+            return {"error": "คลิปนี้เป็นตอนของเรื่องอยู่แล้ว"}, 409
+        if not video:
+            video = _yt_record(video_id, meta["title"], length, username, datetime.now(timezone.utc).isoformat())
+            video["external"] = not meta["embeddable"]
+            videos.append(video)
+        video.update(bundle_of=playlist["id"], bundle_season=season, lang=lang, bundle_marks=marks,
+                     bundle_approx=split == "approx", duration_seconds=video.get("duration_seconds") or length)
+        video.pop("category_id", None)  # อยู่ในหน้าเรื่อง ไม่ขึ้นแถวคลิปเดี่ยวของหมวด
+        storage.save_videos(videos)
+    return {**_public_video(video), "playlist_name": playlist["name"]}, 201
 
 
 # ---------- เว็บอนิเมะที่มีหน้าแยกรายตอน: Anifume (ฝังหน้าตอน) / FairyAnime (ฝังตัวเล่น) — ดู anifume.py, fairyanime.py
@@ -3561,7 +3634,17 @@ def youtube_preview():
     try:
         if kind == "video":
             meta = youtube.video_meta(ident)
-            return jsonify({"kind": "video", "id": ident, "thumbnail_url": youtube.thumb_url(ident), **meta})
+            length = youtube.video_length(ident)
+            # ฉบับมัดรวม? เดาเรื่อง/ซีซั่น/ภาษาจากชื่อ แบบเดียวกับ playlist
+            match = _match_series(youtube.series_name(meta["title"])) if meta["title"] else None
+            existing = next((v for v in storage.load_videos() if v.get("canonical_key") == _yt_key(ident)), None)
+            return jsonify({"kind": "video", "id": ident, "thumbnail_url": youtube.thumb_url(ident), **meta,
+                            "duration": length,
+                            "bundle_guess": bool(youtube.BUNDLE_WORDS.search(meta["title"]) or (length or 0) >= youtube.BUNDLE_MIN_SECONDS),
+                            "season": youtube.detect_season(meta["title"]), "lang": youtube.detect_lang(meta["title"]),
+                            "match": {"id": match["id"], "name": match["name"]} if match else None,
+                            "existing_bundle": {k: existing.get(k) for k in ("bundle_of", "bundle_season", "lang", "bundle_marks", "bundle_approx")}
+                            if existing and existing.get("bundle_of") else None})
         info = youtube.fetch_playlist(ident)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -3664,6 +3747,9 @@ def youtube_add():
         return jsonify({"error": "ไม่พบหมวดนี้"}), 400
     username = current_username() or "local"
     if parsed[0] == "video":
+        if isinstance(body.get("bundle"), dict):
+            payload, status = _create_youtube_bundle(parsed[1], username, body["bundle"])
+            return jsonify(payload), status
         payload, status = _create_youtube_clip(parsed[1], username, category_id)
         return jsonify(payload), status
     try:

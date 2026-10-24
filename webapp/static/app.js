@@ -797,7 +797,7 @@ function renderVideoHome() {
   const followedIds = new Set(state.videos.filter((v) => followed.some((g) => g.v.playlist_id === v.playlist_id)).map((v) => v.id));
   parts.push(followedRowHtml(followed), continueRowHtml(() => true), latestRowHtml("ตอนใหม่ล่าสุด", () => true, followedIds));
   // แถวละหมวด: เรื่องก่อน ตามด้วยคลิปเดี่ยวของหมวด (หมวดที่มีแต่คลิป เช่น ภาพยนตร์ ก็ได้แถวของตัวเอง)
-  const clips = state.videos.filter((v) => !v.playlist_id);
+  const clips = state.videos.filter((v) => !v.playlist_id && !v.bundle_of);
   const clipTile = (v) => videoTileHtml(v, { name: v.title, meta: clipTileMeta(v), badge: !v.watched_at && isRecent(v.created_at) ? '<span class="new-badge">NEW</span>' : "" });
   for (const cat of (state.videoCategories || []).filter((c) => !c.hidden && (!c.special || showSpecial()))) {
     const inCat = playlists.filter((p) => p.category_id === cat.id);
@@ -872,7 +872,7 @@ function categoryContent() {
   return {
     clipsOnly: !lists.length,
     lists,
-    clips: state.videos.filter((v) => !v.playlist_id && (cat === CLIPS_FILTER || v.category_id === cat)),
+    clips: state.videos.filter((v) => !v.playlist_id && !v.bundle_of && (cat === CLIPS_FILTER || v.category_id === cat)),
   };
 }
 
@@ -1329,6 +1329,25 @@ function allPlaylistEpisodes(playlistId) {
   return episodeIndex.map.get(playlistId) || [];
 }
 
+// ---------- ฉบับมัดรวม: คลิปเดียวทั้งซีซั่น ผูกกับเรื่อง (bundle_of) ไม่ใช่ตอน ----------
+// bundle_marks = [[ตอน, วินาทีที่เริ่ม], ...] เรียงตามเวลา (ว่าง = ไม่แบ่งตอน) · bundle_approx = หารเท่า ๆ กัน (ประมาณ)
+function playlistBundles(playlistId, season = null, lang = null) {
+  return state.videos.filter((v) => v.bundle_of === playlistId && (season == null || (v.bundle_season || 1) === season)
+    && (!lang || !v.lang || v.lang === lang));
+}
+
+function bundleMarkIndex(v, sec) {
+  const marks = v.bundle_marks || [];
+  let at = -1;
+  for (let i = 0; i < marks.length; i += 1) if (marks[i][1] <= sec + 1) at = i;
+  return at;
+}
+
+function bundleEpText(v, sec) {
+  const at = bundleMarkIndex(v, sec);
+  return at < 0 ? "" : `${v.bundle_approx ? "≈ " : ""}ตอนที่ ${Number(v.bundle_marks[at][0])}`;
+}
+
 // ตอนเดียวกัน = ซีซั่น + เลขตอนตรงกัน (ภาษา/แหล่งใดก็ได้)
 function sameEpisode(a, b) {
   return Number(a.episode) === Number(b.episode) && (a.season || 1) === (b.season || 1);
@@ -1558,6 +1577,30 @@ function episodeRowHtml(v, playlist, { fresh = false, na = false } = {}) {
     ${done ? '<span class="sp-row-check" aria-label="ดูแล้ว">✓</span>' : ""}</button>`;
 }
 
+// การ์ดฉบับรวมหัวแท็บซีซั่น: ดูรวดเดียว + ดูถึงไหน (≈ ตอนที่)
+function bundleCardHtml(b, playlist) {
+  const pos = Number(b.position_seconds) || 0;
+  const len = Number(b.duration_seconds) || 0;
+  const where = pos > 0 ? `ดูถึง ${formatVideoTime(pos)}${bundleEpText(b, pos) ? ` · ${bundleEpText(b, pos)}` : ""}` : `${(b.bundle_marks || []).length ? `${b.bundle_marks.length} ตอน · ` : ""}ยังไม่ได้ดู`;
+  return `<button class="sp-bundle" data-bundle-play="${escapeHtml(b.id)}"><span class="sp-bundle-thumb">${thumbHtml(b.thumbnail_url || playlist.thumbnail_url)}${len ? `<span class="sp-bundle-len">${formatVideoTime(len)}</span>` : ""}</span>
+    <span class="sp-bundle-info"><span class="sp-bundle-pill">ฉบับมัดรวม${b.lang ? ` · ${LANG_LABEL[b.lang]}` : ""}</span><b>ดูรวดเดียวทั้ง${escapeHtml(seasonLabel(playlist, b.bundle_season || 1))}</b><small>${escapeHtml(where)}</small>
+    ${pos > 0 && len ? `<span class="sp-bundle-bar"><span style="width:${Math.min(100, (pos / len) * 100).toFixed(1)}%"></span></span>` : ""}</span><span class="sp-bundle-go">▶</span></button>`;
+}
+
+// ช่องตอนที่เล่นจากฉบับรวม (ไม่มีคลิปแยกในภาษานี้) — ดูผ่านจุดเริ่มตอนถัดไปแล้ว = ✓
+function bundleFillHtml(fill, view) {
+  const { bundle: b, start, ep } = fill;
+  const marks = b.bundle_marks || [];
+  const next = marks[marks.findIndex((m) => Number(m[0]) === ep) + 1];
+  const done = next && (Number(b.position_seconds) || 0) >= next[1];
+  const attrs = `data-bundle-play="${escapeHtml(b.id)}" data-bundle-at="${start}"`;
+  if (view === "list") {
+    return `<button class="sp-row fill" ${attrs}><span class="sp-row-thumb">${thumbHtml(b.thumbnail_url)}<span class="sp-row-pill">รวม ${formatVideoTime(start)}</span></span>
+      <span class="sp-row-info"><b>ตอนที่ ${ep}</b><small>จากฉบับมัดรวม${b.bundle_approx ? " · เวลาโดยประมาณ" : ""}</small></span>${done ? '<span class="sp-row-check">✓</span>' : ""}</button>`;
+  }
+  return `<button class="ep-tile fill${done ? " done" : ""}" ${attrs} title="เล่นจากฉบับมัดรวม เริ่ม ${formatVideoTime(start)}"><span class="ep-num">${ep}</span><span class="ep-fill">รวม</span>${done ? '<span class="ep-check">✓</span>' : ""}</button>`;
+}
+
 // ไอคอนกระดิ่ง (เปิด = ทึบ)
 function bellIcon(on, size = 20) {
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true" fill="${on ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M6 10a6 6 0 0 1 12 0v4l2 3H4l2-3z"/><path d="M10 20a2 2 0 0 0 4 0" fill="none"/>${on ? "" : '<path d="M4 4l16 16" />'}</svg>`;
@@ -1586,8 +1629,22 @@ function renderPlaylistView() {
     seen.add(key);
     slots.push(mine.has(key) ? { v: mine.get(key) } : { v, na: true });
   }
+  // ฉบับรวมที่แบ่งตอนไว้ เติมตอนที่ภาษานี้ไม่มีคลิปแยก (ช่องเหลือง "รวม" — แตะ = เปิดฉบับรวมที่จุดเริ่มตอนนั้น)
+  const bundles = playlistBundles(openPlaylistId, null, lang);
+  for (const b of bundles) {
+    for (const [ep, start] of b.bundle_marks || []) {
+      const key = `${b.bundle_season || 1}|${Number(ep)}`;
+      if (mine.has(key)) continue;
+      const fill = { bundle: b, start, ep: Number(ep) };
+      const slot = slots.find((x) => `${x.v.season || 1}|${Number(x.v.episode)}` === key);
+      if (slot) slot.fill = fill;
+      else if (!slots.some((x) => x.fill && `${x.v.season || 1}|${x.fill.ep}` === key)) {
+        slots.push({ v: { id: `${b.id}@${ep}`, season: b.bundle_season || 1, episode: Number(ep), lang: b.lang }, fill });
+      }
+    }
+  }
   slots.sort((a, b) => (a.v.season || 1) - (b.v.season || 1) || a.v.episode - b.v.episode);
-  const seasons = [...new Set(slots.map((x) => x.v.season || 1))];
+  const seasons = [...new Set([...slots.map((x) => x.v.season || 1), ...bundles.map((b) => b.bundle_season || 1)])].sort((a, b) => a - b);
   let tabs = "";
   let shown;
   if (seasons.length > 1) {
@@ -1606,10 +1663,12 @@ function renderPlaylistView() {
     shown = ordered.slice(playlistRange * EP_RANGE, (playlistRange + 1) * EP_RANGE);
   }
   const view = epViewMode();
-  const items = shown.map((x) => view === "list"
-    ? episodeRowHtml(x.v, playlist, { fresh: fresh.has(x.v.id), na: x.na })
-    : episodeTileHtml(x.v, playlist, { fresh: fresh.has(x.v.id), na: x.na })).join("");
-  const naCount = shown.filter((x) => x.na).length;
+  const items = shown.map((x) => x.fill ? bundleFillHtml(x.fill, view)
+    : view === "list" ? episodeRowHtml(x.v, playlist, { fresh: fresh.has(x.v.id), na: x.na })
+      : episodeTileHtml(x.v, playlist, { fresh: fresh.has(x.v.id), na: x.na })).join("");
+  const tabSeason = seasons.length > 1 ? playlistSeason : (seasons[0] || 1);
+  const bundleCards = bundles.filter((b) => (b.bundle_season || 1) === tabSeason).map((b) => bundleCardHtml(b, playlist)).join("");
+  const naCount = shown.filter((x) => x.na && !x.fill).length;
   const langs = seriesLangs(playlist);
   const langSeg = !lang && langs.length === 1
     ? `<div class="pl-lang-one">${langs.map((l) => `<span class="series-lang">${LANG_LABEL[l]}</span>`).join("")}<span>มีภาษาเดียว</span></div>`
@@ -1635,9 +1694,11 @@ function renderPlaylistView() {
     <div class="sp-progress"><small>ดูไป ${watched}/${episodes.length} ตอน</small><div class="lib-bar"><span style="width:${((watched / episodes.length) * 100).toFixed(1)}%"></span></div></div>
     ${FRAME_SITES.has(playlist.provider) ? `<div class="hint pl-hint">⚠️ ${frameLimits(playlist.provider)}</div>` : ""}
     <div class="sp-tabs">${tabs}<span class="grow"></span><button class="sp-sort" data-ep-sort>${playlistDesc ? "ล่าสุดก่อน" : "ตอนแรกก่อน"} ⇅</button></div>
+    ${bundleCards}
     <div class="sp-viewbar"><small>${shown.length} ตอน${naCount ? ` · ยังไม่มี${(LANG_LABEL[lang] || "").replace("ไทย", "")} ${naCount} ตอน` : ""}</small>
       <div class="sp-switch" role="tablist"><button class="${view === "grid" ? "active" : ""}" data-ep-view="grid">▦ เลข</button><button class="${view === "list" ? "active" : ""}" data-ep-view="list">☰ ภาพ</button></div></div>
     <div class="${view === "list" ? "sp-list" : "ep-grid sp-grid"}">${items}</div>
+    ${shown.some((x) => x.fill) ? '<div class="hint pl-hint">ช่องเหลือง "รวม" = ไม่มีคลิปแยก เล่นจากฉบับมัดรวมที่จุดเริ่มตอนนั้น</div>' : ""}
     ${naCount ? `<div class="hint pl-hint">${view === "list" ? "แถวจาง" : "กรอบประ"} = ยังไม่มีในภาษาที่เลือก (แตะแล้วถามว่าดูภาษาอื่นไปก่อนไหม) · ดูถึงไหนนับรวมทั้งพากย์และซับ</div>` : ""}`;
 }
 
@@ -1656,12 +1717,13 @@ function libraryIcon(saved, size = 17) {
 
 // บันทึกในตัวเล่น: ตอนของเรื่อง = บันทึกทั้งเรื่อง (ตอนใหม่มาแล้วแจ้งเตือน), คลิปเดี่ยว = บันทึกคลิป
 function playerSaveTarget(video) {
-  const playlist = video.playlist_id && playlistById(video.playlist_id);
+  const playlist = (video.playlist_id || video.bundle_of) && playlistById(video.playlist_id || video.bundle_of);
   return playlist ? { saved: !!playlist.saved_at, playlist } : { saved: !!video.saved_at, playlist: null };
 }
 
 // แผงใต้คลิป: แถวปุ่ม · หัวซีซั่น + ทุกตอน › · แถบเลขตอน · การ์ดตอนถัดไป · ความคิดเห็นล่าสุด
 function renderEpisodeNav(video) {
+  if (video.bundle_of) return renderBundleNav(video);
   const playlist = video.playlist_id && playlistById(video.playlist_id);
   renderPlayerEpisodes(video);
   ["#episodePrev", "#episodeNext", "#autoNextBtn", "#playerEpHead"].forEach((sel) => { el(sel).hidden = !playlist; });
@@ -1679,6 +1741,66 @@ function renderEpisodeNav(video) {
   renderAutoNext();
   el("#episodePrev").disabled = !neighborEpisode(video, -1);
   el("#episodeNext").disabled = !neighborEpisode(video, 1);
+}
+
+// ฉบับรวมในตัวเล่น: ก่อน/ถัดไป = กระโดดไปจุดเริ่มตอนในคลิปเดียวกัน · แถบเลขตอนบอกเวลาเริ่ม (แตะ = กระโดด)
+function bundleSubText(video, sec) {
+  const p = playlistById(video.bundle_of);
+  const ep = bundleEpText(video, sec);
+  return `ฉบับรวม ${p ? seasonLabel(p, video.bundle_season || 1) : ""}${ep ? ` · ${ep}` : ""} · ดูทุกตอน ›`;
+}
+
+let bundleTimer = null;
+let bundleShownAt = null;
+let bundleStartHint = null; // เวลาที่สั่งเริ่ม/กระโดด — ตัวเล่นยังไม่ถึงจุดนั้น (ตอบ 0) ใช้ค่านี้บอกตอนไปก่อน
+function bundlePosition() {
+  const live = activeVideoPosition();
+  return live > 1 ? live : (bundleStartHint ?? live ?? 0);
+}
+function renderBundleNav(video) {
+  const playlist = playlistById(video.bundle_of);
+  const marks = video.bundle_marks || [];
+  const sec = bundlePosition();
+  const at = bundleMarkIndex(video, sec);
+  bundleShownAt = at;
+  ["#episodePrev", "#episodeNext"].forEach((sel) => { el(sel).hidden = !marks.length; });
+  el("#autoNextBtn").hidden = true;
+  el("#playerEpHead").hidden = !playlist;
+  el("#playerNext").hidden = true;
+  el("#episodePrev").disabled = at <= 0;
+  el("#episodeNext").disabled = at >= marks.length - 1;
+  const { saved } = playerSaveTarget(video);
+  const saveBtn = el("#videoSaveBtn");
+  saveBtn.innerHTML = `${libraryIcon(saved)}${saved ? "ในคลัง" : "คลัง"}`;
+  saveBtn.classList.toggle("on", saved);
+  saveBtn.disabled = false;
+  if (playlist) el("#episodeLabel").innerHTML = `${escapeHtml(seasonLabel(playlist, video.bundle_season || 1))} · ฉบับรวม${marks.length ? ` <span>· ${marks.length} ตอน${video.bundle_approx ? " (เวลาโดยประมาณ)" : ""}</span>` : ""}`;
+  const box = el("#playerEpisodes");
+  box.hidden = !marks.length;
+  box.innerHTML = marks.map(([ep, start], i) => `<button class="ep-tile has-sub${i === at ? " playing" : ""}" data-bundle-seek="${start}"><span class="ep-num">${Number(ep)}</span><span class="ep-sub">${formatVideoTime(start)}</span></button>`).join("");
+  const playing = box.querySelector(".playing");
+  if (playing) box.scrollLeft += playing.getBoundingClientRect().left - box.getBoundingClientRect().left - box.clientWidth / 2 + playing.offsetWidth / 2;
+  if (el("#videoPlayerSub")) el("#videoPlayerSub").textContent = bundleSubText(video, sec);
+  clearInterval(bundleTimer);
+  bundleTimer = setInterval(() => {
+    if (activeVideo?.id !== video.id) { clearInterval(bundleTimer); return; }
+    if (bundleMarkIndex(video, bundlePosition()) !== bundleShownAt) renderBundleNav(video);
+  }, 4000);
+}
+
+function bundleSeek(sec) {
+  bundleStartHint = sec;
+  if (ytPlayer) try { ytPlayer.seekTo(sec, true); ytPlayer.playVideo(); } catch (e) { /* ยังไม่พร้อม */ }
+  else if (nativeVideo) { nativeVideo.currentTime = sec; nativeVideo.play().catch(() => {}); }
+  setTimeout(() => { if (activeVideo?.bundle_of) renderBundleNav(activeVideo); }, 600);
+}
+
+function bundleStep(step) {
+  const v = activeVideo;
+  const marks = v.bundle_marks || [];
+  const at = bundleMarkIndex(v, bundlePosition());
+  const target = marks[Math.max(0, Math.min(marks.length - 1, at + step))];
+  if (target) bundleSeek(target[1]);
 }
 
 // การ์ด "ถัดไป": ตอนถัดไป (แตะเล่น) หรือบอกว่ายังไม่ออก + บันทึกไว้แล้วจะแจ้งเตือนไหม
@@ -1728,7 +1850,7 @@ function pmIcon(name) {
 
 // สลับพากย์ ↔ ซับของตอนเดียวกัน (ในแผ่น ⋯) — จำภาษาของเรื่องไว้ด้วย หน้าเรื่อง/ดูต่อจะได้ตรงกัน
 function renderPlayerLangs(video) {
-  const playlist = video.playlist_id && playlistById(video.playlist_id);
+  const playlist = !video.bundle_of && video.playlist_id && playlistById(video.playlist_id);
   const langs = playlist ? seriesLangs(playlist) : [];
   el("#pmLang").hidden = !video.lang || langs.length < 2;
   if (el("#pmLang").hidden) return;
@@ -2687,7 +2809,8 @@ function unmountNativeVideo() {
   el("#pmNative").innerHTML = "";
 }
 
-async function openVideo(video, { autoplay = false } = {}) {
+async function openVideo(video, { autoplay = false, startAt } = {}) {
+  bundleStartHint = startAt ?? null;
   cancelNextCountdown();
   if (isVideoMini()) setVideoMini(false);
   activeVideo = video;
@@ -2703,13 +2826,13 @@ async function openVideo(video, { autoplay = false } = {}) {
   videoApiWorks = false;
   videoClockBase = 0;
   videoClockStartedAt = null;
-  const playlist = video.playlist_id && (state.videoPlaylists || []).find((p) => p.id === video.playlist_id);
+  const playlist = (video.playlist_id || video.bundle_of) && playlistById(video.playlist_id || video.bundle_of);
   // มีเรื่อง: ชื่อเรื่องบรรทัดบน + ตอนบรรทัดล่าง แตะแล้วไปหน้าเรื่อง (เปิดตอนจากหน้าแรกก็กลับไปเลือกตอนได้)
   // (HTML เก่าที่เซิร์ฟเวอร์ยังแคชอยู่ก่อนรีสตาร์ทไม่มีบรรทัดล่าง → ชื่อ · ตอน บรรทัดเดียวแบบเดิม)
   const sub = el("#videoPlayerSub");
   el("#videoPlayerTitle").textContent = playlist ? (sub ? playlist.name : `${playlist.name} · ${episodeLabel(video)}`) : video.title;
   if (sub) {
-    sub.textContent = playlist ? `${episodeLabel(video)} · ดูทุกตอน ›` : "";
+    sub.textContent = !playlist ? "" : video.bundle_of ? bundleSubText(video, startAt || 0) : `${episodeLabel(video)} · ดูทุกตอน ›`;
     sub.hidden = !playlist;
     el("#videoPlayerTitleBtn").disabled = !playlist;
   }
@@ -2733,7 +2856,8 @@ async function openVideo(video, { autoplay = false } = {}) {
     // ตอนนี้ยังไม่เคยดูในภาษานี้ แต่ดูค้างในอีกภาษา (สลับพากย์ ↔ ซับ) → ต่อจากจุดเดิม
     const sibling = episodeProgress(video);
     const own = isGuest() ? guestLoad().videos[video.id] : null; // ผู้เยี่ยมชม: จุดดูค้างอยู่ในเครื่อง
-    const position = (own ? (own.watched ? 0 : own.pos) : Number(progress.position_seconds)) || (sibling.watched_at && sibling.pos) || 0;
+    const position = startAt ?? ((own ? (own.watched ? 0 : own.pos) : Number(progress.position_seconds)) || (sibling.watched_at && sibling.pos) || 0);
+    if (video.bundle_of) { bundleStartHint = position; renderBundleNav(video); } // ฉบับรวม: ดูค้างถึงไหน = ตอนไหน
     if (video.resolver) {
       await mountResolvedVideo(video, position, autoplay);
       return;
@@ -2837,6 +2961,7 @@ function clearActiveVideoProgress() {
 }
 
 function closeVideo() {
+  clearInterval(bundleTimer);
   closeComments();
   closePlayerMenu();
   clearSleepTimer();
@@ -3031,6 +3156,13 @@ function initVideos() {
     if (epView) { try { localStorage.setItem(EP_VIEW_KEY, epView); } catch (e) { /* ไม่จำก็ได้ */ } return renderPlaylistView(); }
     const bell = event.target.closest("[data-pl-notify]");
     if (bell) return togglePlaylistNotify(bell.dataset.plNotify, bell);
+    const bundleBtn = event.target.closest("[data-bundle-play]");
+    if (bundleBtn) {
+      const b = state.videos.find((x) => x.id === bundleBtn.dataset.bundlePlay);
+      const at = bundleBtn.dataset.bundleAt;
+      if (b) openVideo(b, { autoplay: true, startAt: at != null ? Number(at) : undefined });
+      return;
+    }
     const saveBtn = event.target.closest("[data-save-playlist]");
     if (saveBtn) return togglePlaylistSave(saveBtn.dataset.savePlaylist, saveBtn);
     const id = event.target.closest("[data-episode-id]")?.dataset.episodeId;
@@ -3039,12 +3171,14 @@ function initVideos() {
     if (video) openVideo(video);
   });
   el("#videoPlayerTitleBtn")?.addEventListener("click", () => {
-    const id = activeVideo?.playlist_id;
+    const id = activeVideo?.playlist_id || activeVideo?.bundle_of;
     if (!id || !playlistById(id)) return;
     setVideoMini(true);
     openPlaylist(id);
   });
   el("#playerEpisodes").addEventListener("click", (event) => {
+    const seek = event.target.closest("[data-bundle-seek]")?.dataset.bundleSeek;
+    if (seek != null) return bundleSeek(Number(seek));
     const id = event.target.closest("[data-episode-id]")?.dataset.episodeId;
     const v = id && state.videos.find((x) => x.id === id);
     if (v && v.id !== activeVideo?.id) playEpisode(v);
@@ -3066,8 +3200,8 @@ function initVideos() {
     } catch (e) { /* ตัวเล่น Facebook บางรุ่นไม่รับคำสั่ง */ }
     setTimeout(renderMiniPlay, 100);
   });
-  el("#episodePrev").addEventListener("click", () => playEpisode(neighborEpisode(activeVideo, -1)));
-  el("#episodeNext").addEventListener("click", () => playEpisode(neighborEpisode(activeVideo, 1)));
+  el("#episodePrev").addEventListener("click", () => activeVideo?.bundle_of ? bundleStep(-1) : playEpisode(neighborEpisode(activeVideo, -1)));
+  el("#episodeNext").addEventListener("click", () => activeVideo?.bundle_of ? bundleStep(1) : playEpisode(neighborEpisode(activeVideo, 1)));
   el("#autoNextBtn").addEventListener("click", () => setAutoNextPref(!autoNextOn()));
   window.addEventListener("pagehide", () => { stopVideoClock(); saveActiveVideoProgress(true); });
   window.addEventListener("orientationchange", nudgeViewport);
@@ -3484,8 +3618,8 @@ function renderSearchVideos(q) {
   const hitPlaylists = new Set();
   const videos = state.videos.filter((v) => {
     if (!v.title.toLowerCase().includes(needle)) return false;
-    if (v.playlist_id) hitPlaylists.add(v.playlist_id);
-    return !v.playlist_id;
+    if (v.playlist_id || v.bundle_of) hitPlaylists.add(v.playlist_id || v.bundle_of);
+    return !v.playlist_id && !v.bundle_of;
   });
   const playlists = (state.videoPlaylists || []).filter((p) => hitPlaylists.has(p.id) || p.name.toLowerCase().includes(needle));
   const total = videos.length + playlists.length;
@@ -8648,8 +8782,12 @@ function renderYtPreview() {
   const catSelect = (selected) => `<label class="vm-field">หมวด <select id="ytCategory" class="form-select"><option value="">— ไม่มีหมวด —</option>${cats.map((c) =>
     `<option value="${escapeHtml(c.id)}"${c.id === selected ? " selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}</select></label>`;
   if (d.kind === "video") {
-    box.innerHTML = `<div class="yt-preview">${vmThumb(d.thumbnail_url)}<div><div class="name">${escapeHtml(d.title)}</div><div class="meta">${escapeHtml(d.channel)}${d.embeddable ? "" : " · ⚠️ ปิดการฝัง จะเปิดในแอป YouTube"}</div></div></div>
-      ${catSelect("")}<button type="button" class="btn primary" data-yt-add>เพิ่มเป็นคลิปเดี่ยว</button>`;
+    if (d.mode == null) d.mode = d.bundle_guess || d.existing_bundle ? "bundle" : "clip";
+    const head = `<div class="yt-preview">${vmThumb(d.thumbnail_url)}<div><div class="name">${escapeHtml(d.title)}</div><div class="meta">${escapeHtml(d.channel)}${d.duration ? ` · ${formatVideoTime(d.duration)}` : ""}${d.embeddable ? "" : " · ⚠️ ปิดการฝัง จะเปิดในแอป YouTube"}</div></div></div>
+      ${d.bundle_guess ? '<div class="hint">✓ คลิปยาว/ชื่อบอกว่ามัดรวม — น่าจะเป็นฉบับมัดรวมทั้งซีซั่น</div>' : ""}
+      <div class="vm-field">เพิ่มเป็น<div class="pl-controls">${ytChoice("mode", "clip", "คลิปเดี่ยว", d.mode === "clip")}${ytChoice("mode", "bundle", "ฉบับรวมของเรื่อง", d.mode === "bundle")}</div></div>`;
+    box.innerHTML = head + (d.mode === "bundle" ? ytBundleFormHtml(d) : `${catSelect("")}<button type="button" class="btn primary" data-yt-add>เพิ่มเป็นคลิปเดี่ยว</button>`);
+    if (d.mode === "bundle") ytBundleHint();
     return;
   }
   const into = d.target === "new" ? null : d.match;
@@ -8666,8 +8804,60 @@ function renderYtPreview() {
     <button type="button" class="btn primary" data-yt-add>${into ? `เพิ่มเข้า "${escapeHtml(into.name)}"` : "เพิ่มเป็นเรื่องใหม่"} (${d.count} ตอน)</button>`;
 }
 
+// ฉบับรวม: เรื่อง · ซีซั่น · ภาษา · วิธีแบ่งตอน (ประมาณ/ใส่เวลาเอง/ไม่แบ่ง) — ค่าเริ่มเดาจากชื่อ หรือของเดิมถ้าเพิ่มไว้แล้ว
+function ytBundleFormHtml(d) {
+  const ex = d.existing_bundle;
+  if (d.bpid == null) {
+    d.bpid = ex?.bundle_of || d.match?.id || "";
+    d.bseason = ex?.bundle_season || d.season || 1;
+    d.blang = ex ? ex.lang || "" : d.lang || "";
+    d.split = ex ? (ex.bundle_marks?.length ? (ex.bundle_approx ? "approx" : "manual") : "none") : "approx";
+    d.marksText = ex && !ex.bundle_approx ? (ex.bundle_marks || []).map(([ep, t]) => `${formatVideoTime(t)} ตอน ${Number(ep)}`).join("\n") : "";
+  }
+  const lists = [...(state.videoPlaylists || [])].sort((a, b) => a.name.localeCompare(b.name, "th"));
+  const guess = d.match && playlistById(d.match.id);
+  return `<label class="vm-field">เรื่อง <select id="ytBundlePl" class="form-select"><option value="">— เลือกเรื่อง —</option>
+      ${guess ? `<option value="${escapeHtml(guess.id)}"${d.bpid === guess.id ? " selected" : ""}>⭐ ${escapeHtml(guess.name)}</option>` : ""}
+      ${lists.filter((p) => p !== guess).map((p) => `<option value="${escapeHtml(p.id)}"${d.bpid === p.id ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("")}</select></label>
+    <div class="af-into-opts"><label class="vm-field">ซีซั่น <input id="ytBundleSeason" type="number" min="1" max="99" inputmode="numeric" value="${escapeHtml(String(d.bseason))}" /></label>
+      <div class="vm-field">ภาษา<div class="pl-controls">${ytChoice("blang", "dub", "พากย์", d.blang === "dub")}${ytChoice("blang", "sub", "ซับ", d.blang === "sub")}</div></div></div>
+    <div class="vm-field">แบ่งตอน<div class="pl-controls">${ytChoice("split", "approx", "ประมาณให้", d.split === "approx")}${ytChoice("split", "manual", "ใส่เวลาเอง", d.split === "manual")}${ytChoice("split", "none", "ไม่แบ่ง", d.split === "none")}</div></div>
+    ${d.split === "manual" ? `<label class="vm-field">เวลาเริ่มแต่ละตอน (ทีละบรรทัด)<textarea id="ytBundleMarks" rows="6" placeholder="0:00 ตอน 25&#10;23:41 ตอน 26&#10;47:20 ตอน 27">${escapeHtml(d.marksText)}</textarea></label>` : ""}
+    <p id="ytBundleHint" class="hint"></p>
+    <button type="button" class="btn primary" data-yt-add>${d.existing_bundle ? "บันทึกฉบับรวม (แก้ของเดิม)" : "เพิ่มเป็นฉบับรวม"}</button>`;
+}
+
+// ตอนของซีซั่นที่เลือก → ตอนละกี่นาที และตอนที่ภาษานี้ยังไม่มีคลิปแยก (ฉบับรวมจะเติมให้)
+function ytBundleHint() {
+  const d = ytPreviewData;
+  const box = el("#ytBundleHint");
+  if (!box || !d) return;
+  d.bpid = el("#ytBundlePl").value;
+  d.bseason = Number(el("#ytBundleSeason").value) || 1;
+  if (el("#ytBundleMarks")) d.marksText = el("#ytBundleMarks").value;
+  if (!d.bpid) { box.textContent = "เลือกเรื่องที่ฉบับรวมนี้เป็นของ"; return; }
+  const eps = allPlaylistEpisodes(d.bpid).filter((v) => (v.season || 1) === d.bseason);
+  const ints = [...new Set(eps.map((v) => Number(v.episode)).filter(Number.isInteger))].sort((a, b) => a - b);
+  let nums = [];
+  if (d.split === "approx" && ints.length) for (let n = ints[0]; n <= ints[ints.length - 1]; n += 1) nums.push(n);
+  if (d.split === "manual") nums = (d.marksText.match(/(?:ตอน(?:ที่)?\s*)(\d+)/g) || []).map((x) => Number(x.replace(/\D+/g, "")));
+  const have = new Set(eps.filter((v) => !d.blang || v.lang === d.blang).map((v) => Number(v.episode)));
+  const missing = nums.filter((n) => !have.has(n));
+  const per = d.split === "approx" && nums.length && d.duration ? ` → ตอนละ ~${formatVideoTime(d.duration / nums.length)}` : "";
+  box.textContent = d.split === "none" ? "ไม่แบ่งตอน — ดูรวดเดียว จำจุดดูค้างได้"
+    : !nums.length ? (d.split === "approx" ? "ซีซั่นนี้ยังไม่มีตอนให้นับ — ใช้แบบใส่เวลาเอง" : 'วางเวลา เช่น "0:00 ตอน 25" ทีละบรรทัด')
+      : `ตอน ${nums[0]}–${nums[nums.length - 1]} (${nums.length} ตอน)${per}`
+        + (missing.length ? ` · เติมตอนที่ขาดได้ ${missing.length} ตอน: ${missing.slice(0, 8).join(", ")}${missing.length > 8 ? "…" : ""}` : " · ตอนครบแล้ว ฉบับรวมเป็นตัวเลือกดูรวดเดียว");
+}
+
 function initYouTubeAdmin() {
   const msg = (text, error = false) => { el("#ytAddMsg").textContent = text; el("#ytAddMsg").classList.toggle("error", error); };
+  el("#ytPreview").addEventListener("input", (event) => {
+    if (["ytBundleSeason", "ytBundleMarks"].includes(event.target.id)) ytBundleHint();
+  });
+  el("#ytPreview").addEventListener("change", (event) => {
+    if (event.target.id === "ytBundlePl") ytBundleHint();
+  });
   el("#ytAddForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const btn = event.submitter || el("#ytAddForm button");
@@ -8688,11 +8878,29 @@ function initYouTubeAdmin() {
     if (target) { d.target = target; return renderYtPreview(); }
     const lang = event.target.closest("[data-yt-lang]");
     if (lang) { d.lang = lang.dataset.ytLang || null; return renderYtPreview(); }
+    const mode = event.target.closest("[data-yt-mode]");
+    if (mode) { d.mode = mode.dataset.ytMode; return renderYtPreview(); }
+    const blang = event.target.closest("[data-yt-blang]");
+    if (blang) { ytBundleHint(); d.blang = d.blang === blang.dataset.ytBlang ? "" : blang.dataset.ytBlang; return renderYtPreview(); }
+    const split = event.target.closest("[data-yt-split]");
+    if (split) { ytBundleHint(); d.split = split.dataset.ytSplit; return renderYtPreview(); }
     const add = event.target.closest("[data-yt-add]");
     if (!add) return;
     add.disabled = true;
     msg("กำลังเพิ่ม...");
     try {
+      if (d.kind === "video" && d.mode === "bundle") {
+        ytBundleHint();
+        const res = await sendJSON("POST", "/api/youtube/add", { url: el("#ytAddUrl").value.trim(), bundle: {
+          playlist_id: d.bpid, season: d.bseason, lang: d.blang || null, split: d.split, marks_text: d.marksText || "" } });
+        msg(`${d.existing_bundle ? "แก้" : "เพิ่ม"}ฉบับรวมของ "${res.playlist_name}" แล้ว${res.bundle_marks.length ? ` · แบ่ง ${res.bundle_marks.length} ตอน${res.bundle_approx ? " (ประมาณ)" : ""}` : ""}`);
+        ytPreviewData = null;
+        el("#ytAddUrl").value = "";
+        renderYtPreview();
+        await loadVideos();
+        renderVideoManage();
+        return;
+      }
       const into = d.kind === "playlist" && d.target !== "new" ? d.match : null;
       const res = await sendJSON("POST", "/api/youtube/add", {
         url: el("#ytAddUrl").value.trim(), playlist_id: into?.id || null, name: el("#ytName")?.value.trim() || "",

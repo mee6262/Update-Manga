@@ -2045,3 +2045,19 @@ button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%
 .ms-added { flex: none; color: var(--accent); font-size: 0.82rem; font-weight: 700; white-space: nowrap; }
 .af-langs { display: flex; gap: 6px; margin: 10px 0 2px; flex-wrap: wrap; }
 .af-into { margin-top: 10px; } .af-into-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; } .af-into-opts .hint { grid-column: 1 / -1; margin: 0; } .af-into-opts[hidden], #afNewOnly[hidden] { display: none; }
+
+/* ===== ฉบับมัดรวม ===== */
+.sp-bundle { display: flex; align-items: center; gap: 10px; width: 100%; margin: 12px 0 2px; padding: 10px; background: var(--bg-card); border: 1px solid #e3c878; border-radius: 14px; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.sp-bundle-thumb { position: relative; width: 112px; aspect-ratio: 16 / 9; flex: none; border-radius: 9px; overflow: hidden; background: var(--img-bg); }
+.sp-bundle-thumb img, .sp-bundle-thumb .video-placeholder { width: 100%; height: 100%; object-fit: cover; font-size: 1rem; }
+.sp-bundle-len { position: absolute; right: 5px; bottom: 5px; font-size: 0.64rem; font-weight: 700; background: rgba(0, 0, 0, 0.72); color: #fff; border-radius: 5px; padding: 1px 6px; }
+.sp-bundle-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+.sp-bundle-pill { font-size: 0.64rem; font-weight: 800; color: #b7841a; background: rgba(212, 160, 23, 0.14); border: 1px solid rgba(212, 160, 23, 0.4); border-radius: 5px; padding: 0 6px; }
+.sp-bundle-info b { font-size: 0.86rem; }
+.sp-bundle-info small { font-size: 0.74rem; color: var(--text-dim); }
+.sp-bundle-bar { align-self: stretch; height: 4px; border-radius: 2px; background: var(--img-bg); overflow: hidden; margin-top: 2px; }
+.sp-bundle-bar span { display: block; height: 100%; background: #d4a017; }
+.sp-bundle-go { width: 40px; height: 40px; flex: none; border-radius: 12px; background: #d4a017; color: #fff; display: grid; place-items: center; }
+.ep-tile.fill { border: 1.5px dashed #d4a017; background: rgba(212, 160, 23, 0.12); color: #b7841a; }
+.ep-fill { position: absolute; bottom: 1px; left: 0; right: 0; text-align: center; font-size: 0.5rem; font-weight: 800; color: #b7841a; }
+.sp-row.fill .sp-row-pill { background: #d4a017; }
