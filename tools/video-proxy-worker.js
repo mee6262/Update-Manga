@@ -6,7 +6,8 @@
 // กันใช้เป็นพร็อกซีสาธารณะ: รับเฉพาะลิงก์ที่เซิร์ฟเวอร์แอปเซ็นไว้ (HMAC-SHA256 ด้วยรหัสลับ KEY ที่ตรงกับ
 // VIDEO_PROXY_KEY ใน .env) และยังไม่หมดอายุ — ลิงก์: /s?u=<ลิงก์ท่อน>&e=<หมดอายุ unix>&k=<ลายเซ็น 32 hex>
 //
-// วาง: Cloudflare → Workers & Pages → สร้าง Worker → วางไฟล์นี้ทั้งไฟล์ → Deploy
+// deploy: cd tools; npx wrangler@4 deploy (ตั้งอยู่ที่ https://mee-video.mee6262.workers.dev)
+// หรือวางเอง: Cloudflare → Workers & Pages → สร้าง Worker → วางไฟล์นี้ทั้งไฟล์ → Deploy
 //      Settings → Variables and Secrets → เพิ่ม Secret ชื่อ KEY = ค่าเดียวกับ VIDEO_PROXY_KEY
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";

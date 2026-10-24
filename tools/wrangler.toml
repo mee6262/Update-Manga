@@ -1,0 +1,7 @@
+# Cloudflare Worker ส่งต่อท่อนวิดีโอ (Anime108) — deploy ซ้ำ: cd tools; npx wrangler@4 deploy
+# รหัสลับ KEY ตั้งด้วย wrangler secret put KEY (ค่าเดียวกับ VIDEO_PROXY_KEY ใน .env)
+name = "mee-video"
+main = "video-proxy-worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+preview_urls = false
