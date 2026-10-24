@@ -2194,6 +2194,7 @@ async function mountResolvedVideo(video, position, autoplay, refresh = false) {
   if (stale()) return;
   if (pb.kind === "file" || pb.kind === "hls") {
     if (pb.kind === "hls" && !document.createElement("video").canPlayType("application/vnd.apple.mpegurl")) {
+      if (pb.alt) return mountFrameVideo(video, pb.alt); // เบราว์เซอร์เล่น HLS เองไม่ได้ (Chrome คอม) → ตัวฝังสำรอง
       return showPlaybackError(video, { code: "PLAYBACK_UNSUPPORTED", error: "เบราว์เซอร์นี้เล่น HLS (.m3u8) เองไม่ได้ — ลองบน iPhone/Safari" }, gen);
     }
     activeFramePlayback = false;
@@ -2205,6 +2206,7 @@ async function mountResolvedVideo(video, position, autoplay, refresh = false) {
     } catch (e) {
       if (stale()) return;
       unmountNativeVideo();
+      if (pb.alt) return mountFrameVideo(video, pb.alt); // ตัวหลักเปิดไม่ขึ้น → ตัวฝังสำรองทันที (ไม่ต้องรอขอใหม่)
       if (resolveTries < MAX_RESOLVE_TRIES) return mountResolvedVideo(video, position, autoplay, true);
       return showPlaybackError(video, { code: "STREAM_EXPIRED", error: "ลิงก์วิดีโอเปิดไม่ได้ (ขอใหม่แล้วก็ยังไม่ได้)" }, gen);
     }

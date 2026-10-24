@@ -9,10 +9,17 @@
   ทดสอบ Rakudai Kenja พากย์ ตอน 2: หลัก = animemami.xyz (CSP frame-ancestors เฉพาะ animeruka → ฝังที่อื่นไม่ได้),
   สำรอง1 = abyssplayer.com (ฝังได้ เล่นได้ 23:40), สำรอง2 = ok.ru (หน้าบอก "Видео не найдено" = ถูกลบ)
   → เลือกตัวแรกที่ฝังได้: ข้ามโฮสต์ที่ห้ามฝัง, ok.ru เช็คก่อนว่ายังมีวิดีโอ
+ตัวหลัก animemami เล่นในตัวเล่นของแอปได้ (ตรวจ 25 ต.ค.): หน้า /v/<slug> ต้องส่ง Referer animeruka (ไม่ส่ง = 403)
+  ใน data-page (Inertia) มี video.url = https://cdn2.maimeorder.com/hls/<…>.txt = HLS m3u8 (ไฟล์รายการต้องส่ง
+  Referer animemami ไม่งั้น 404) ท่อนวิดีโอเป็น MPEG-TS ธรรมดาที่ตั้งชื่อ .webp, CORS *, ไม่ต้องมี Referer
+  → เซิร์ฟเวอร์เราดึงเฉพาะไฟล์รายการ (~15 KB) แก้ลิงก์ท่อนเป็นลิงก์เต็มของ CDN ส่งให้ <video> (/api/videos/<id>/stream.m3u8)
+  ตัววิดีโอโหลดตรงจาก CDN ไม่ผ่าน VPS; เล่นไม่ได้ (เช่น iPhone ไม่รับ) หน้าเว็บสลับไปตัวฝังสำรองเอง
 ลิงก์หน้าเรื่องเลือกภาค/ภาษาด้วย fragment: #dub / #sub / #sub-2 (ภาค 2) — ไม่ระบุ = ภาคล่าสุด พากย์ก่อน
 """
+import base64
 import json
 import re
+import time
 from urllib.parse import urljoin, urlsplit
 
 import requests
@@ -28,7 +35,11 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 TIMEOUT = (5, 15)
 MAX_PAGE_BYTES = 3 * 1024 * 1024
 _SLUG = r"[a-z0-9][a-z0-9-]{0,200}"
-NO_EMBED_HOSTS = {"animemami.xyz"}          # ห้ามฝังนอก animeruka (CSP frame-ancestors)
+NO_EMBED_HOSTS = {"animemami.xyz"}          # ห้ามฝังนอก animeruka (CSP frame-ancestors) — ใช้ทาง HLS แทน
+MAMI_HOSTS = {"animemami.xyz"}
+CDN_SUFFIX = ".maimeorder.com"
+STREAM_CACHE_SECONDS = 10 * 60
+_streams: dict[str, tuple[float, str]] = {}  # video id → (หมดเวลา, ลิงก์ไฟล์รายการจริง)
 PREFERRED_HOSTS = ("abyssplayer.com", "ok.ru")  # ฝังได้ เรียงตามที่ลองแล้วเล่นได้
 LANG_TAG = {"dub": "[พากย์ไทย]", "sub": "[ซับไทย]"}
 _VARIANT = re.compile(r"^(dub|sub)(?:-(\d+))?$")
@@ -223,8 +234,109 @@ def _ok_ru_alive(url: str) -> bool:
     return resp.status_code == 200 and "не найдено" not in resp.text
 
 
+def _fetch_ext(url: str, referer: str) -> requests.Response:
+    """ยิงเฉพาะ animemami (หน้าตัวเล่น) และ CDN *.maimeorder.com (ไฟล์รายการ) — ส่ง Referer ที่เว็บนั้นต้องการ"""
+    host = (urlsplit(url).hostname or "").lower()
+    if not url.startswith("https://") or not (host in MAMI_HOSTS or host.endswith(CDN_SUFFIX)):
+        raise ValueError("ลิงก์ตัวเล่นหลักอยู่นอกโฮสต์ที่รู้จัก")
+    if scraper.host_is_down(url) or scraper.host_is_stalled(url):
+        raise ValueError("ตัวเล่นหลักไม่ตอบช่วงนี้")
+    try:
+        with scraper.awaiting_response(url):
+            resp = scraper.session().get(url, headers={"User-Agent": UA, "Referer": referer}, timeout=TIMEOUT,
+                                         allow_redirects=False)
+    except requests.RequestException as e:
+        if scraper.is_outage(e):
+            scraper.mark_host_down(url)
+        raise ValueError(f"เชื่อมต่อตัวเล่นหลักไม่ได้: {e.__class__.__name__}") from None
+    if resp.status_code != 200 or len(resp.content) > MAX_PAGE_BYTES:
+        raise ValueError(f"ตัวเล่นหลักตอบ HTTP {resp.status_code}")
+    return resp
+
+
+def mami_playlist_url(embed: str) -> str:
+    """หน้า animemami /v/<slug> → ลิงก์ไฟล์รายการ HLS บน CDN (video.url ใน data-page)"""
+    soup = BeautifulSoup(_fetch_ext(embed, f"https://{HOST}/").text, "html.parser")
+    app_div = soup.select_one("#app[data-page]")
+    try:
+        video = json.loads(app_div["data-page"])["props"]["video"] if app_div else {}
+    except (ValueError, KeyError, TypeError):
+        video = {}
+    url = str((video or {}).get("url") or "")
+    host = (urlsplit(url).hostname or "").lower()
+    if not url.startswith("https://") or not host.endswith(CDN_SUFFIX):
+        raise ValueError("ไม่พบลิงก์วิดีโอในตัวเล่นหลัก")
+    return url
+
+
+def _m3u8(text: str) -> str:
+    """CDN ตอบ User-Agent คอมเป็น {"p": "<m3u8 แบบ base64>"} (มือถือได้ m3u8 ตรง) — รับได้ทั้งสองแบบ"""
+    if text.lstrip().startswith("{"):
+        try:
+            return base64.b64decode(json.loads(text)["p"]).decode("utf-8", "replace")
+        except (ValueError, KeyError, TypeError):
+            return ""
+    return text
+
+
+def playlist_text(playlist_url: str) -> str:
+    """ไฟล์รายการ HLS ที่ <video> เล่นได้ตรง: ลิงก์ท่อนเป็นลิงก์เต็มบน CDN (ท่อนโหลดตรง ไม่ผ่านเซิร์ฟเวอร์เรา)
+    ไฟล์หลายความละเอียด (master) → เลือกตัวสูงสุดแล้วดึงไฟล์รายการของตัวนั้น"""
+    referer = "https://animemami.xyz/"
+    text = _m3u8(_fetch_ext(playlist_url, referer).text)
+    if not text.lstrip().startswith("#EXTM3U"):
+        raise ValueError("ไฟล์รายการวิดีโอไม่ใช่ HLS")
+    if "#EXT-X-STREAM-INF" in text:
+        best, best_bw, bw = None, -1, 0
+        for line in text.splitlines():
+            if line.startswith("#EXT-X-STREAM-INF"):
+                m = re.search(r"BANDWIDTH=(\d+)", line)
+                bw = int(m.group(1)) if m else 0
+            elif line.strip() and not line.startswith("#") and bw > best_bw:
+                best, best_bw = urljoin(playlist_url, line.strip()), bw
+        if not best:
+            raise ValueError("ไฟล์รายการวิดีโอไม่มีความละเอียดให้เลือก")
+        playlist_url, text = best, _m3u8(_fetch_ext(best, referer).text)
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            seg = urljoin(playlist_url, line)
+            host = (urlsplit(seg).hostname or "").lower()
+            if not seg.startswith("https://") or not host.endswith(CDN_SUFFIX):
+                raise ValueError("ท่อนวิดีโออยู่นอก CDN ที่รู้จัก")
+            line = seg
+        elif line.startswith("#EXT-X-KEY") and 'URI="' in line:
+            line = re.sub(r'URI="([^"]+)"', lambda m: f'URI="{urljoin(playlist_url, m.group(1))}"', line)
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def stream_playlist(video: dict) -> str:
+    """ไฟล์รายการของตอนนี้สำหรับ /api/videos/<id>/stream.m3u8 — จำลิงก์จริงไว้ 10 นาที หมดแล้วหาใหม่"""
+    entry = _streams.get(video["id"])
+    if entry and entry[0] > time.time():
+        url = entry[1]
+    else:
+        kind, url, _ = _choose_player(canonical_episode_url(video.get("source_url") or "") or "")
+        if kind != "hls":
+            raise ValueError("ตอนนี้ไม่มีตัวเล่นหลัก")
+    return playlist_text(url)
+
+
 def player_url(url: str) -> str:
-    """ลิงก์ตัวเล่นที่ฝังในแอปได้ของตอนนี้ — ถามทุกตัวเลือก (หลัก/สำรอง) แล้วเลือกตามโฮสต์ที่ฝังได้"""
+    """ลิงก์ตัวเล่นแบบฝังของตอนนี้ (ไม่รวมตัวหลัก) — ใช้เมื่อเล่น HLS ไม่ได้"""
+    kind, src, alt = _choose_player(url)
+    if kind == "embed":
+        return src
+    if alt:
+        return alt
+    raise ValueError("ตอนนี้ไม่มีตัวเล่นที่ฝังในแอปได้ (มีแต่ตัวหลัก)")
+
+
+def _choose_player(url: str) -> tuple[str, str, str | None]:
+    """("hls", ลิงก์ไฟล์รายการจริง, ตัวฝังสำรอง|None) หรือ ("embed", ลิงก์ตัวฝัง, None)
+    ถามทุกตัวเลือก (หลัก/สำรอง) — ตัวหลัก (animemami) เล่นในแอปได้ดีสุด (จำจุดดูค้าง/เล่นต่อเอง) จึงใช้ก่อน"""
     canonical = canonical_episode_url(url)
     if not canonical:
         raise ValueError("ลิงก์ตอนของ AnimeRuka ไม่ถูกต้อง")
@@ -240,14 +352,27 @@ def player_url(url: str) -> str:
             continue
         embed = str(data.get("embed_url") or "")
         host = (urlsplit(embed).hostname or "").lower() if embed.startswith("https://") else ""
-        if host and host not in NO_EMBED_HOSTS:
+        if host:
             found.append((host, embed))
+    hls = None
+    for host, embed in found:
+        if host in MAMI_HOSTS and not hls:
+            try:
+                hls = mami_playlist_url(embed)
+            except ValueError:
+                pass
     rank = {h: i for i, h in enumerate(PREFERRED_HOSTS)}
+    alt = None
     for host, embed in sorted(found, key=lambda x: rank.get(x[0].removeprefix("www."), len(rank))):
-        if host.removeprefix("www.") == "ok.ru" and not _ok_ru_alive(embed):
+        if host in NO_EMBED_HOSTS or (host.removeprefix("www.") == "ok.ru" and not _ok_ru_alive(embed)):
             continue
-        return embed
-    raise ValueError("ตอนนี้ไม่มีตัวเล่นที่ฝังในแอปได้ (ตัวหลักของเว็บห้ามฝัง ตัวสำรองไม่มีวิดีโอ)")
+        alt = embed
+        break
+    if hls:
+        return "hls", hls, alt
+    if alt:
+        return "embed", alt, None
+    raise ValueError("ตอนนี้ไม่มีตัวเล่นที่ใช้ได้ (ตัวหลักเปิดไม่ได้ ตัวสำรองไม่มีวิดีโอ)")
 
 
 class Provider:
@@ -289,9 +414,14 @@ class Provider:
         if not url:
             raise streams.StreamError(streams.PLAYER_INFO_MISSING, "ลิงก์ตอนของ AnimeRuka ไม่ถูกต้อง")
         try:
-            src = player_url(url)
+            kind, src, alt = _choose_player(url)
         except ValueError as e:
             raise streams.StreamError(streams.STREAM_RESOLUTION_FAILED, str(e), retryable=True) from None
+        if kind == "hls":
+            _streams[video["id"]] = (time.time() + STREAM_CACHE_SECONDS, src)
+            # ไฟล์รายการผ่านเซิร์ฟเวอร์เรา (ต้องส่ง Referer ของเขา) — alt = ตัวฝังสำรองถ้า <video> เล่นไม่ได้
+            return {"kind": "hls", "url": f"/api/videos/{video['id']}/stream.m3u8", "expires_at": None, "frame": None,
+                    "alt": {"kind": "embed", "url": alt, "referrer": "none"} if alt else None}
         return {"kind": "embed", "url": src, "expires_at": None, "frame": None, "referrer": "none"}
 
 

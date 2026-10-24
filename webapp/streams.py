@@ -76,13 +76,21 @@ def _normalize(playback: dict, provider_name: str) -> dict:
         parts = urlsplit(url)
     except ValueError:
         parts = None
-    if not parts or parts.scheme != "https" or not parts.hostname:
+    own = kind == "hls" and url.startswith("/api/videos/") and ".." not in url  # ไฟล์รายการที่เซิร์ฟเวอร์เราส่งต่อให้
+    if not own and (not parts or parts.scheme != "https" or not parts.hostname):
         raise StreamError(PLAYER_INFO_MISSING, f"{provider_name}: ไม่ได้ลิงก์ตัวเล่นที่ใช้ได้")
+    alt = playback.get("alt")
+    if alt:
+        try:
+            alt = _normalize(alt, provider_name)
+            alt.pop("alt", None)
+        except StreamError:
+            alt = None
     expires = playback.get("expires_at")
     return {"kind": kind, "url": url, "expires_at": float(expires) if expires else None,
             "frame": playback.get("frame"), "provider": provider_name,
             # "none" = ฝังโดยไม่ส่ง Referer (ตัวเล่นที่ปฏิเสธเมื่อเห็นชื่อเว็บอื่น เช่น 108player)
-            "referrer": "none" if playback.get("referrer") == "none" else None}
+            "referrer": "none" if playback.get("referrer") == "none" else None, "alt": alt}
 
 
 def _expired(playback: dict, now: float) -> bool:

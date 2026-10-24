@@ -2080,6 +2080,20 @@ def get_video_sources(video_id):
     return jsonify(_facebook_video_sources(video["facebook_url"]))
 
 
+@app.route("/api/videos/<video_id>/stream.m3u8", methods=["GET"])
+def video_stream_playlist(video_id):
+    """ไฟล์รายการ HLS ของแหล่งที่ต้องส่ง Referer ของเขาเอง (AnimeRuka ตัวหลัก) — ดึงแค่ไฟล์รายการ (~15 KB)
+    ท่อนวิดีโอในนั้นเป็นลิงก์เต็มของ CDN <video> โหลดตรง ไม่ผ่านเซิร์ฟเวอร์นี้"""
+    video = next((v for v in storage.load_videos() if v.get("id") == video_id), None)
+    if not video or video.get("provider") != "animeruka":
+        return Response("not found", status=404, mimetype="text/plain")
+    try:
+        text = animeruka.stream_playlist(video)
+    except ValueError as e:
+        return Response(str(e), status=502, mimetype="text/plain")
+    return Response(text, mimetype="application/vnd.apple.mpegurl", headers={"Cache-Control": "no-store"})
+
+
 @app.route("/api/videos/<video_id>/playback", methods=["GET"])
 def get_video_playback(video_id):
     """วิธีเล่นตอนจากแหล่งใน streams (ถามแหล่งตอนกดเล่น ไม่เก็บไฟล์) — ?refresh=1 = ลิงก์เดิมเล่นไม่ได้/หมดอายุ ขอใหม่
@@ -2101,7 +2115,7 @@ def get_video_playback(video_id):
         print(f"[playback] {video.get('provider')} {video_id}: {e.code}", flush=True)
         status = 422 if e.code in (streams.PROVIDER_RESTRICTION, streams.PLAYBACK_UNSUPPORTED) else 502
         return jsonify({**e.to_dict(), "fallback_url": fallback}), status
-    return jsonify({k: playback[k] for k in ("kind", "url", "expires_at", "frame", "provider", "referrer")} | {"fallback_url": fallback})
+    return jsonify({k: playback.get(k) for k in ("kind", "url", "expires_at", "frame", "provider", "referrer", "alt")} | {"fallback_url": fallback})
 
 
 @app.route("/api/videos/<video_id>/progress", methods=["GET"])

@@ -58,7 +58,7 @@ class AnimeRukaTest(unittest.TestCase):
             if "/wp-json/" in url:
                 return Resp(json.dumps({"embed_url": api[url.rstrip("/").rsplit("/", 1)[1]], "type": "iframe"}))
             return Resp(EP)
-        with mock.patch.object(self.a, "_get", side_effect=get):
+        with mock.patch.object(self.a, "_get", side_effect=get),                 mock.patch.object(self.a, "mami_playlist_url", side_effect=ValueError("ปิด")):
             self.assertEqual(self.a.player_url("https://animeruka.com/ep/rk-ep-1/"), "https://abyssplayer.com/b")
             api["3"] = "https://animemami.xyz/v/c"
             with mock.patch.object(self.a, "_ok_ru_alive", return_value=False):
@@ -66,6 +66,32 @@ class AnimeRukaTest(unittest.TestCase):
                     self.a.player_url("https://animeruka.com/ep/rk-ep-1/")
             with mock.patch.object(self.a, "_ok_ru_alive", return_value=True):
                 self.assertEqual(self.a.player_url("https://animeruka.com/ep/rk-ep-1/"), "https://ok.ru/videoembed/1")
+
+
+    def test_primary_hls_and_playlist_rewrite(self):
+        api = {"1": "https://animemami.xyz/v/a", "2": "https://abyssplayer.com/b", "3": "https://abyssplayer.com/c"}
+
+        def get(url, host_check=True):
+            if "/wp-json/" in url:
+                return Resp(json.dumps({"embed_url": api[url.rstrip("/").rsplit("/", 1)[1]], "type": "iframe"}))
+            return Resp(EP)
+        page = Resp('<div id="app" data-page="{&quot;props&quot;:{&quot;video&quot;:{&quot;url&quot;:'
+                    '&quot;https://cdn2.maimeorder.com/hls/abc.txt&quot;}}}"></div>')
+        with mock.patch.object(self.a, "_get", side_effect=get), mock.patch.object(self.a, "_fetch_ext", return_value=page):
+            self.assertEqual(self.a._choose_player("https://animeruka.com/ep/rk-ep-1/"),
+                             ("hls", "https://cdn2.maimeorder.com/hls/abc.txt", "https://abyssplayer.com/b"))
+            pb = self.a.Provider.resolve_playback({"id": "v1", "source_url": "https://animeruka.com/ep/rk-ep-1/"}, {})
+        self.assertEqual((pb["kind"], pb["url"], pb["alt"]["url"]), ("hls", "/api/videos/v1/stream.m3u8", "https://abyssplayer.com/b"))
+        self.assertEqual(self.app.streams._normalize(pb, "animeruka")["alt"]["referrer"], "none")
+        master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500000\nlow.txt\n#EXT-X-STREAM-INF:BANDWIDTH=3000000\nhigh.txt\n"
+        media = "#EXTM3U\n#EXTINF:10,\nblob/x-000.webp\n#EXT-X-ENDLIST\n"
+        with mock.patch.object(self.a, "_fetch_ext", side_effect=[Resp(master), Resp(media)]) as fx:
+            out = self.a.playlist_text("https://cdn2.maimeorder.com/hls/abc.txt")
+        self.assertEqual(fx.call_args_list[1].args[0], "https://cdn2.maimeorder.com/hls/high.txt")  # ความละเอียดสูงสุด
+        self.assertIn("https://cdn2.maimeorder.com/hls/blob/x-000.webp", out)
+        with mock.patch.object(self.a, "_fetch_ext", return_value=Resp("#EXTM3U\n#EXTINF:10,\nhttps://evil.example/x.ts\n")):
+            with self.assertRaises(ValueError):
+                self.a.playlist_text("https://cdn2.maimeorder.com/hls/abc.txt")
 
 
 if __name__ == "__main__":
