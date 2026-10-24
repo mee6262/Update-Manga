@@ -1418,11 +1418,11 @@ function playlistResume(episodes) {
 }
 
 function providerName(item) {
-  return { youtube: "YouTube", anifume: "Anifume", fairyanime: "FairyAnime", a037: "037-anime" }[item?.provider] || "Facebook";
+  return { youtube: "YouTube", anifume: "Anifume", fairyanime: "FairyAnime", anime108: "Anime108", a037: "037-anime" }[item?.provider] || "Facebook";
 }
 
 function ytBadge(item) {
-  if (item?.provider === "anifume" || item?.provider === "fairyanime") return `<span class="yt-badge af-badge">${providerName(item)}</span>`;
+  if (FRAME_SITES.has(item?.provider)) return `<span class="yt-badge af-badge">${providerName(item)}</span>`;
   return item && item.provider === "youtube" ? '<span class="yt-badge">YouTube</span>' : "";
 }
 
@@ -1609,7 +1609,7 @@ function renderPlaylistView() {
       <button class="sp-act${saved ? " on" : ""}" data-save-playlist="${escapeHtml(playlist.id)}" title="${saved ? "อยู่ในคลังของฉันแล้ว — กดเพื่อเอาออก" : "เพิ่มเข้าคลังของฉัน"}">${libraryIcon(saved, 20)}<span>${saved ? "ในคลัง" : "คลัง"}</span></button>
       ${saved ? `<button class="sp-act${playlist.notify ? " on" : ""}" data-pl-notify="${escapeHtml(playlist.id)}" title="${playlist.notify ? "แจ้งเตือนเมื่อมีตอนใหม่ — กดเพื่อปิด" : "ปิดแจ้งเตือนอยู่ — กดเพื่อเปิด"}">${bellIcon(playlist.notify)}<span>${playlist.notify ? "แจ้งเตือน" : "ปิดเตือน"}</span></button>` : ""}</div>
     <div class="sp-progress"><small>ดูไป ${watched}/${episodes.length} ตอน</small><div class="lib-bar"><span style="width:${((watched / episodes.length) * 100).toFixed(1)}%"></span></div></div>
-    ${playlist.provider === "anifume" || playlist.provider === "fairyanime" ? `<div class="hint pl-hint">⚠️ ${frameLimits(playlist.provider)}</div>` : ""}
+    ${FRAME_SITES.has(playlist.provider) ? `<div class="hint pl-hint">⚠️ ${frameLimits(playlist.provider)}</div>` : ""}
     <div class="sp-tabs">${tabs}<span class="grow"></span><button class="sp-sort" data-ep-sort>${playlistDesc ? "ล่าสุดก่อน" : "ตอนแรกก่อน"} ⇅</button></div>
     <div class="sp-viewbar"><small>${shown.length} ตอน${naCount ? ` · ยังไม่มี${(LANG_LABEL[lang] || "").replace("ไทย", "")} ${naCount} ตอน` : ""}</small>
       <div class="sp-switch" role="tablist"><button class="${view === "grid" ? "active" : ""}" data-ep-view="grid">▦ เลข</button><button class="${view === "list" ? "active" : ""}" data-ep-view="list">☰ ภาพ</button></div></div>
@@ -1985,6 +1985,8 @@ async function mountYouTubeVideo(video, position, autoplay) {
 const AF_LIMITS = "ตัวเล่นของ Anifume: ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
 const FRAME_LIMITS = "ตัวเล่นของแหล่งนี้: ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
 const FA_LIMITS = "ตัวเล่นของ FairyAnime: ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
+// เว็บที่เล่นด้วยการฝังตัวเล่นของเขา (ไม่จำจุดดูค้าง/ไม่เล่นต่อเอง)
+const FRAME_SITES = new Set(["anifume", "fairyanime", "anime108"]);
 function frameLimits(provider) {
   return provider === "anifume" ? AF_LIMITS : provider === "fairyanime" ? FA_LIMITS : FRAME_LIMITS;
 }
@@ -2117,6 +2119,7 @@ function mountFrameVideo(video, pb) {
   const observer = new ResizeObserver(fit);
   observer.observe(wrap);
   fit();
+  if (pb.referrer === "none") frame.referrerPolicy = "no-referrer"; // ตัวเล่นที่ปฏิเสธเมื่อเห็นชื่อเว็บอื่น (Anime108)
   frame.src = pb.url;
 }
 
@@ -4578,7 +4581,7 @@ function contentRowHtml(x, hosts) {
     const p = x.item;
     const eps = allPlaylistEpisodes(p.id);
     const range = eps.length ? ` (${Number(eps[0].episode)}–${Number(eps[eps.length - 1].episode)})` : "";
-    const tracks = (p.tracks || []).map((t) => `<span class="src-pill ${t.error ? "bad" : "ok"}">${t.kind === "anifume" || t.kind === "fairyanime" ? "🎬" : "▶"} ${escapeHtml(LANG_LABEL[t.lang] || providerName({ provider: t.kind || "youtube" }))}${t.follow ? " ✓ติดตาม" : ""}${t.error ? " · มีปัญหา" : ""}</span>`).join("");
+    const tracks = (p.tracks || []).map((t) => `<span class="src-pill ${t.error ? "bad" : "ok"}">${FRAME_SITES.has(t.kind) ? "🎬" : "▶"} ${escapeHtml(LANG_LABEL[t.lang] || providerName({ provider: t.kind || "youtube" }))}${t.follow ? " ✓ติดตาม" : ""}${t.error ? " · มีปัญหา" : ""}</span>`).join("");
     const twin = x.twins ? (state.videoPlaylists || []).find((o) => o.id === x.twins[0]) : null;
     return `<li class="settings-row tappable" data-id="${escapeHtml(p.id)}" data-kind="series">
         <span class="cr-cover wide">${p.thumbnail_url ? `<img src="${escapeHtml(p.thumbnail_url)}" alt="" loading="lazy" />` : ""}<i>🎬</i></span>
@@ -5519,13 +5522,13 @@ function initMergeAndFollow() {
 // เดิม 6 ฟอร์มกระจาย 3 ที่ (เพิ่มเรื่อง, YouTube, Anifume, วางลิงก์ FB, ติดตามเพจ, หมวด)
 const ADD_KINDS = {
   manga: ["📚", "เรื่องมังงะ"], fb: ["🔗", "คลิป Facebook"], watch: ["📡", "ติดตามเพจ"],
-  yt: ["▶", "YouTube"], af: ["🎬", "Anifume"], category: ["🏷", "หมวดมังงะใหม่"],
+  yt: ["▶", "YouTube"], af: ["🎬", "เว็บอนิเมะ"], category: ["🏷", "หมวดมังงะใหม่"],
 };
 const ADD_KIND_HINT = {
   fb: "วางได้หลายลิงก์ (บรรทัดละลิงก์) — ไปที่ฟอร์มวางลิงก์ Facebook เลือกหมวดแล้วกดเพิ่ม",
   watch: "ไปที่ฟอร์มติดตามเพจ เลือกหมวดที่จะใส่คลิปใหม่แล้วกดติดตาม",
   yt: "ไปที่ฟอร์ม YouTube และดึงข้อมูลให้เลย",
-  af: "ไปที่ฟอร์ม Anifume / FairyAnime และดึงข้อมูลให้เลย",
+  af: "ไปที่ฟอร์ม Anifume / FairyAnime / Anime108 และดึงข้อมูลให้เลย",
   category: "สร้างหมวดมังงะใหม่ชื่อนี้",
 };
 let addKind = "";
@@ -5537,7 +5540,7 @@ function detectAddKind(text) {
   if (!urls.length) return text.trim() ? "category" : "";
   const u = urls[0].toLowerCase();
   if (/(^|\.)(youtube\.com|youtu\.be)\//.test(u.replace(/^https?:\/\//, ""))) return "yt";
-  if (/anifume\.|fairyanime\./.test(u)) return "af";
+  if (/anifume\.|fairyanime\.|anime108\./.test(u)) return "af";
   if (/facebook\.com|fb\.watch|fb\.com/.test(u)) {
     const pageReels = /\/reels\/?(\?|#|$)|sk=reels_tab/.test(u) && !/\/reel\/\d/.test(u);
     return urls.length === 1 && pageReels ? "watch" : "fb";
@@ -8713,8 +8716,12 @@ function afParseLines() {
 
 function renderAfSeriesPreview(data) {
   const fresh = data.items.filter((item) => !item.exists).length;
+  const langs = Object.entries(afState.langs || {}).filter(([, n]) => n > 0);
+  const langSwitch = langs.length > 1 ? `<div class="af-langs">${langs.map(([l, n]) =>
+    `<button type="button" class="video-chip${l === afState.lang ? " active" : ""}" data-af-lang="${l}">${LANG_LABEL[l]} ${n} ตอน</button>`).join("")}</div>
+    <p class="hint">เพิ่มทีละภาษา — เพิ่มภาษาแรกแล้วกดอีกภาษา ใช้ชื่อเรื่องเดิม = รวมเป็นเรื่องเดียว (สลับพากย์/ซับในหน้าเรื่องได้)</p>` : "";
   el("#afPreview").innerHTML = `<div class="yt-preview">${vmThumb(afState.image)}<div><div class="name">${escapeHtml(data.name)}</div>
-      <div class="meta">${data.items.length} ตอน${fresh < data.items.length ? ` · มีในคลังแล้ว ${data.items.length - fresh}` : ""}</div></div></div>
+      <div class="meta">${data.items.length} ตอน${afState.lang ? ` · ${LANG_LABEL[afState.lang]}` : ""}${fresh < data.items.length ? ` · มีในคลังแล้ว ${data.items.length - fresh}` : ""}</div></div></div>${langSwitch}
     <ul class="af-list">${data.items.map((item) => `<li${item.exists ? ' class="exists"' : ""}><span class="ep">ตอน ${escapeHtml(String(item.episode))}</span><span>${escapeHtml(item.title)}${item.exists ? " (มีแล้ว)" : ""}</span></li>`).join("")}</ul>
     ${afCategorySelect()}
     ${afState.seriesUrl ? '<label class="switch-label">ติดตามตอนใหม่อัตโนมัติ (เช็คทุก 1 ชม.) <input type="checkbox" class="switch" id="afFollow" checked /></label>' : ""}
@@ -8728,6 +8735,8 @@ async function afFillSeries(url) {
   afState.seriesUrl = d.url;
   afState.image = d.image || "";
   afState.lang = d.lang || null;
+  afState.langs = d.langs || null;
+  afState.langUrls = d.lang_urls || null;
   el("#afName").value = d.name;
   el("#afItems").value = d.items.map((item) => `${item.url} | ${item.episode ?? ""} | ${item.title}`).join("\n");
   el("#afUrl").value = d.url;
@@ -8775,6 +8784,19 @@ function initAnifumeAdmin() {
     } catch (e) { afState.preview = null; el("#afPreview").innerHTML = ""; afMsg(e.message, true); }
   });
   el("#afPreview").addEventListener("click", async (event) => {
+    const langBtn = event.target.closest("[data-af-lang]")?.dataset.afLang;
+    if (langBtn && afState.langUrls?.[langBtn] && langBtn !== afState.lang) {
+      const name = el("#afName").value; // ชื่อที่แก้ไว้ใช้ต่อ (ภาษาที่สองต้องชื่อเดียวกันถึงจะรวมเรื่อง)
+      afMsg("กำลังดึงรายชื่อตอน...");
+      try {
+        await afFillSeries(afState.langUrls[langBtn]);
+        el("#afName").value = name;
+        afState.preview = await sendJSON("POST", "/api/anifume/add", { name, items: afParseLines(), dry_run: true });
+        renderAfSeriesPreview(afState.preview);
+        afMsg("");
+      } catch (e) { afMsg(e.message, true); }
+      return;
+    }
     const series = event.target.closest("[data-af-series]");
     if (series) {
       afMsg("กำลังดึงรายชื่อตอน...");

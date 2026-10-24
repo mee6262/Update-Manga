@@ -26,6 +26,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 import a037
 import anifume
+import anime108
 import fairyanime
 import playlist_parse
 import scraper
@@ -1940,7 +1941,7 @@ def add_video():
         payload, status = _create_anifume_clip(url, username or "local")
         return jsonify(payload), status
     if af or any(m.HOST in url.lower() for m in EP_SITES.values()):
-        return jsonify({"error": "ลิงก์ Anifume/FairyAnime ต้องเป็นหน้าตอน — ทั้งเรื่องเพิ่มที่หน้าจัดการคลิป"}), 400
+        return jsonify({"error": "ลิงก์ Anifume/FairyAnime/Anime108 ต้องเป็นหน้าตอน — ทั้งเรื่องเพิ่มที่หน้าจัดการคลิป"}), 400
     payload, status = _create_clip(
         url, username or "local",
         title=" ".join(str(body.get("title") or "").split()),
@@ -2094,7 +2095,7 @@ def get_video_playback(video_id):
         print(f"[playback] {video.get('provider')} {video_id}: {e.code}", flush=True)
         status = 422 if e.code in (streams.PROVIDER_RESTRICTION, streams.PLAYBACK_UNSUPPORTED) else 502
         return jsonify({**e.to_dict(), "fallback_url": fallback}), status
-    return jsonify({k: playback[k] for k in ("kind", "url", "expires_at", "frame", "provider")} | {"fallback_url": fallback})
+    return jsonify({k: playback[k] for k in ("kind", "url", "expires_at", "frame", "provider", "referrer")} | {"fallback_url": fallback})
 
 
 @app.route("/api/videos/<video_id>/progress", methods=["GET"])
@@ -3279,7 +3280,7 @@ def _create_youtube_clip(video_id: str, username: str, category_id: str | None =
 # ---------- เว็บอนิเมะที่มีหน้าแยกรายตอน: Anifume (ฝังหน้าตอน) / FairyAnime (ฝังตัวเล่น) — ดู anifume.py, fairyanime.py
 # ใช้ระบบเพิ่ม/ติดตามตอนใหม่ชุดเดียวกัน (ฟังก์ชัน/route ยังชื่อ anifume) เลือกโมดูลจากโดเมนของลิงก์
 # เก็บลิงก์ตอนที่ source_url ไม่ใช้ facebook_url, provider = ชื่อเว็บ ----------
-EP_SITES = {"anifume": anifume, "fairyanime": fairyanime}
+EP_SITES = {"anifume": anifume, "fairyanime": fairyanime, "anime108": anime108}
 
 
 def _ep_site(url: str):
@@ -3309,7 +3310,7 @@ def _create_anifume_clip(url: str, username: str, category_id: str | None = None
     site_name, site, _ = _ep_site(url)
     canonical = site and site.canonical_episode_url(url)
     if not canonical:
-        return {"error": "ไม่ใช่ลิงก์ตอนของ Anifume/FairyAnime"}, 400
+        return {"error": "ไม่ใช่ลิงก์ตอนของ Anifume/FairyAnime/Anime108"}, 400
     key = _anifume_key(canonical)
     existing = next((v for v in storage.load_videos() if v.get("canonical_key") == key), None)
     if existing:  # มีแล้วไม่ต้องยิงเน็ต
@@ -3356,7 +3357,7 @@ def _anifume_items(raw_items, name: str) -> tuple[list[dict], str | None, str | 
         name_here, site, _ = _ep_site(raw_url)
         url = site and site.canonical_episode_url(raw_url)
         if not url:
-            return [], f"บรรทัด {index}: ไม่ใช่ลิงก์ตอนของ Anifume/FairyAnime", None
+            return [], f"บรรทัด {index}: ไม่ใช่ลิงก์ตอนของ Anifume/FairyAnime/Anime108", None
         if site_name and name_here != site_name:
             return [], f"บรรทัด {index}: ลิงก์ต่างเว็บกัน — เรื่องเดียวต้องมาจากเว็บเดียว", None
         site_name = name_here
@@ -3427,10 +3428,11 @@ def anifume_preview():
     url = str((request.get_json(force=True, silent=True) or {}).get("url") or "")
     site_name, site, parsed = _ep_site(url)
     if not parsed:
-        return jsonify({"error": "ไม่ใช่ลิงก์ Anifume (anifume.com/<เลข>[/<รหัสตอน>]) หรือ FairyAnime "
-                                 "(fairyanime.net/<ชื่อเรื่อง>/ หรือ /watch/<รหัสตอน>.html)"}), 400
+        return jsonify({"error": "ไม่ใช่ลิงก์ Anifume (anifume.com/<เลข>[/<รหัสตอน>]), FairyAnime "
+                                 "(fairyanime.net/<ชื่อเรื่อง>/ หรือ /watch/<รหัสตอน>.html) หรือ Anime108 "
+                                 "(anime108.com/<ชื่อเรื่อง>/ หรือ /<ชื่อเรื่อง>-ep-<n>/)"}), 400
     try:
-        if parsed[0] == "episode":
+        if parsed[0] == "episode" and site_name != "anime108":
             meta = site.fetch_episode(url)
             key = _anifume_key(meta["url"])
             return jsonify({"kind": "episode", "site": site.LABEL, **meta,
@@ -3444,7 +3446,8 @@ def anifume_preview():
     items = [{**item, "episode": youtube.parse_episode(item["title"]), "exists": _anifume_key(item["url"]) in known}
              for item in info["items"]]
     return jsonify({"kind": "series", "site": site.LABEL, "url": info["url"], "name": info["name"], "title": info["title"],
-                    "image": info["image"], "lang": youtube.detect_lang(info["title"]), "items": items})
+                    "image": info["image"], "lang": info.get("lang") or youtube.detect_lang(info["title"]), "items": items,
+                    "langs": info.get("langs"), "lang_urls": info.get("lang_urls")})
 
 
 @app.route("/api/anifume/add", methods=["POST"])

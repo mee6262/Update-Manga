@@ -80,7 +80,9 @@ def _normalize(playback: dict, provider_name: str) -> dict:
         raise StreamError(PLAYER_INFO_MISSING, f"{provider_name}: ไม่ได้ลิงก์ตัวเล่นที่ใช้ได้")
     expires = playback.get("expires_at")
     return {"kind": kind, "url": url, "expires_at": float(expires) if expires else None,
-            "frame": playback.get("frame"), "provider": provider_name}
+            "frame": playback.get("frame"), "provider": provider_name,
+            # "none" = ฝังโดยไม่ส่ง Referer (ตัวเล่นที่ปฏิเสธเมื่อเห็นชื่อเว็บอื่น เช่น 108player)
+            "referrer": "none" if playback.get("referrer") == "none" else None}
 
 
 def _expired(playback: dict, now: float) -> bool:
