@@ -5449,8 +5449,8 @@ function initMangaCatRows() {
     const c = state.categories.find((x) => x.id === btn.dataset.mcatMenu);
     if (!c) return;
     openVcMenu(btn, [
-      [c.id === openCategoryId ? "ปิดรายการเรื่อง" : "เลือกเรื่องในหมวด", `mcat-members:${c.id}`],
       ["ดูในรายการเนื้อหา", `mcat-view:${c.id}`],
+      [c.id === openCategoryId ? "ปิดรายการเรื่อง" : "เลือกเรื่องในหมวด", `mcat-members:${c.id}`],
       ["เปลี่ยนชื่อ", `mcat-rename:${c.id}`],
       [c.special ? "เลิกเป็นหมวดพิเศษ" : "ตั้งเป็นหมวดพิเศษ (18+)", `mcat-special:${c.id}`],
       ["ลบหมวด", `mcat-delete:${c.id}`, true],
@@ -7692,7 +7692,7 @@ function initVideoCatAdmin() {
     if (!btn) return;
     const c = (state.videoCategories || []).find((x) => x.id === btn.dataset.vcMenu);
     if (!c) return;
-    openVcMenu(btn, [["เปลี่ยนชื่อ", `cat-rename:${c.id}`], ["ดูคลิป/เรื่องในหมวดนี้", `cat-view:${c.id}`],
+    openVcMenu(btn, [["ดูในรายการเนื้อหา", `cat-view:${c.id}`], ["เปลี่ยนชื่อ", `cat-rename:${c.id}`],
       [c.hidden ? "แสดงให้ผู้ใช้เห็น" : "ซ่อนจากผู้ใช้", `cat-hide:${c.id}`], [c.special ? "เลิกเป็นหมวดพิเศษ (18+)" : "ตั้งเป็นหมวดพิเศษ (18+)", `cat-special:${c.id}`], ["ย้ายทั้งหมดไปหมวดอื่น…", `cat-move:${c.id}`], ["ลบหมวด", `cat-del:${c.id}`, true]]);
   });
   el("#videoGenreList").addEventListener("click", async (event) => {
@@ -7749,10 +7749,9 @@ function initVideoCatAdmin() {
         const name = prompt("ชื่อหมวดใหม่", cat?.name || "");
         if (!name || !name.trim()) return;
         await sendJSON("PATCH", `/api/video-categories/${encodeURIComponent(id)}`, { name: name.trim() });
-      } else if (verb === "cat-view") {
-        showTab("videos");
-        videoTab = "home";
-        return pickVideoCategory(id);
+      } else if (verb === "cat-view") { // แบบเดียวกับหมวดมังงะ: รายการเนื้อหากรองหมวดนี้
+        contentCat = `v:${id}`; contentType = "all"; mangaAdminFilter = "all";
+        return openAdminPage("mangaManage");
       } else if (verb === "cat-hide") {
         await sendJSON("PATCH", `/api/video-categories/${encodeURIComponent(id)}`, { hidden: !cat?.hidden });
       } else if (verb === "cat-special") {
