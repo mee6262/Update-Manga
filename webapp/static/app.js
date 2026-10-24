@@ -2395,6 +2395,12 @@ function renderQualityButtons() {
   const box = el("#videoQuality");
   if (!box || !nativeSources) return;
   const options = ["auto", ...["hd", "sd"].filter((q) => nativeSources[q])];
+  if (options.length === 2) {
+    // ไฟล์เดียว (HLS ของ AnimeRuka, แหล่งที่ให้ไฟล์เดียว) ไม่มีให้เลือก — บอกความละเอียดจริงของวิดีโอ ไม่ใช่ป้าย 360p
+    const h = nativeVideo?.videoHeight;
+    box.innerHTML = `<button class="video-quality-btn active" disabled>${h ? `${h}p` : "ต้นฉบับ"}</button>`;
+    return;
+  }
   box.innerHTML = options.map((q) => {
     const label = q === "auto" && nativeCurrentQuality ? `อัตโนมัติ (${VIDEO_QUALITY_LABEL[nativeCurrentQuality]})` : VIDEO_QUALITY_LABEL[q];
     return `<button class="video-quality-btn${q === nativeQualityPref ? " active" : ""}" data-quality="${q}">${label}</button>`;
@@ -2429,6 +2435,7 @@ function setNativeQuality(quality, startAt, autoplay = false) {
   v.addEventListener("loadedmetadata", () => {
     // สั่งเล่นหลัง seek เสร็จ — สั่ง play ระหว่าง seek เบราว์เซอร์หยุดเองหลังกระโดดเสร็จ (เจอตอนสลับ 360p↔720p)
     const resume = () => { if (wasPlaying) v.play().catch(() => {}); };
+    renderQualityButtons(); // รู้ความละเอียดจริงแล้ว (ไฟล์เดียวโชว์ตามนี้)
     if (at > 0) {
       v.addEventListener("seeked", resume, { once: true });
       v.currentTime = at;
