@@ -1353,18 +1353,17 @@ function sameEpisode(a, b) {
   return Number(a.episode) === Number(b.episode) && (a.season || 1) === (b.season || 1);
 }
 
-// ตอนเดียวกันมีหลายแหล่ง (YouTube + เว็บฝังตัวเล่นที่เพิ่มเป็นแหล่งเสริม / คลิปซ้ำจากเพจ) → ตัวหลัก 1 ตัว
-// เล่นในแอปได้ (จำจุดดูค้าง/เล่นต่อเอง) ก่อนเว็บฝัง แล้วตัวที่เพิ่มก่อน — ตัวอื่นเป็น "เล่นจากแหล่งอื่น" (altSources)
+// ตอนเดียวกันมีหลายแหล่ง (YouTube + เว็บอนิเมะที่เพิ่มเป็นแหล่งเสริม / คลิปซ้ำจากเพจ) → ตัวหลัก 1 ตัว = ตัวที่เพิ่มก่อน
+// (ทุกแหล่งเล่นในตัวเล่นแอปแล้ว) — ตัวอื่นเป็น "เล่นจากแหล่งอื่น" (altSources)
 function primaryPlaylistEpisodes(playlistId) {
   const all = allPlaylistEpisodes(playlistId);
   let list = episodeIndex.primary.get(playlistId);
   if (list) return list;
-  const rank = (v) => (FRAME_SITES.has(v.provider) ? 1 : 0);
   const best = new Map();
   for (const v of all) {
     const key = `${v.season || 1}|${Number(v.episode)}|${v.lang || ""}`;
     const cur = best.get(key);
-    if (!cur || rank(v) < rank(cur) || (rank(v) === rank(cur) && String(v.created_at || "") < String(cur.created_at || ""))) best.set(key, v);
+    if (!cur || String(v.created_at || "") < String(cur.created_at || "")) best.set(key, v);
   }
   const keep = new Set(best.values());
   list = all.filter((v) => keep.has(v));
@@ -1465,7 +1464,7 @@ function providerName(item) {
 }
 
 function ytBadge(item) {
-  if (FRAME_SITES.has(item?.provider)) return `<span class="yt-badge af-badge">${providerName(item)}</span>`;
+  if (SITE_PROVIDERS.has(item?.provider)) return `<span class="yt-badge af-badge">${providerName(item)}</span>`;
   return item && item.provider === "youtube" ? '<span class="yt-badge">YouTube</span>' : "";
 }
 
@@ -1692,7 +1691,6 @@ function renderPlaylistView() {
       <button class="sp-act${saved ? " on" : ""}" data-save-playlist="${escapeHtml(playlist.id)}" title="${saved ? "อยู่ในคลังของฉันแล้ว — กดเพื่อเอาออก" : "เพิ่มเข้าคลังของฉัน"}">${libraryIcon(saved, 20)}<span>${saved ? "ในคลัง" : "คลัง"}</span></button>
       ${saved ? `<button class="sp-act${playlist.notify ? " on" : ""}" data-pl-notify="${escapeHtml(playlist.id)}" title="${playlist.notify ? "แจ้งเตือนเมื่อมีตอนใหม่ — กดเพื่อปิด" : "ปิดแจ้งเตือนอยู่ — กดเพื่อเปิด"}">${bellIcon(playlist.notify)}<span>${playlist.notify ? "แจ้งเตือน" : "ปิดเตือน"}</span></button>` : ""}</div>
     <div class="sp-progress"><small>ดูไป ${watched}/${episodes.length} ตอน</small><div class="lib-bar"><span style="width:${((watched / episodes.length) * 100).toFixed(1)}%"></span></div></div>
-    ${FRAME_SITES.has(playlist.provider) ? `<div class="hint pl-hint">⚠️ ${frameLimits(playlist.provider)}</div>` : ""}
     <div class="sp-tabs">${tabs}<span class="grow"></span><button class="sp-sort" data-ep-sort>${playlistDesc ? "ล่าสุดก่อน" : "ตอนแรกก่อน"} ⇅</button></div>
     ${bundleCards}
     <div class="sp-viewbar"><small>${shown.length} ตอน${naCount ? ` · ยังไม่มี${(LANG_LABEL[lang] || "").replace("ไทย", "")} ${naCount} ตอน` : ""}</small>
@@ -2128,15 +2126,10 @@ async function mountYouTubeVideo(video, position, autoplay) {
   videoApiWorks = true;
 }
 
-// ตัวเล่นใน iframe ข้ามโดเมน (JW Player ของ Anifume ไม่รับ/ส่ง postMessage) — อ่านเวลา/สั่งเล่นไม่ได้
-const AF_LIMITS = "ตัวเล่นของ Anifume: ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
-const FRAME_LIMITS = "ตัวเล่นของแหล่งนี้: ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
-const FA_LIMITS = "ตัวเล่นของ FairyAnime: ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
-// เว็บที่เล่นด้วยการฝังตัวเล่นของเขา (ไม่จำจุดดูค้าง/ไม่เล่นต่อเอง)
-const FRAME_SITES = new Set(["anifume", "fairyanime", "anime108", "animeruka"]);
-function frameLimits(provider) {
-  return provider === "anifume" ? AF_LIMITS : provider === "fairyanime" ? FA_LIMITS : FRAME_LIMITS;
-}
+// เว็บอนิเมะ (ป้ายชื่อแหล่งบนการ์ด/รายการ) — เล่นในตัวเล่นแอป, ฝังตัวเล่นของเขาเฉพาะตอนที่ตัวเล่นแอปเปิดไม่ได้
+const SITE_PROVIDERS = new Set(["anifume", "fairyanime", "anime108", "animeruka"]);
+// ตัวเล่นใน iframe ข้ามโดเมน — อ่านเวลา/สั่งเล่นไม่ได้ (บอกเฉพาะตอนที่เล่นแบบฝังจริง)
+const FRAME_LIMITS = "ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
 let activeFramePlayback = false; // ตอนที่เล่นอยู่เป็น iframe ของแหล่ง (ปุ่มเล่นต่อ/เล่น-หยุดใช้ไม่ได้)
 let resolveTries = 0;            // ขอลิงก์ใหม่ในการเปิดตอนนี้กี่ครั้งแล้ว (เซิร์ฟเวอร์จำกัดซ้ำอีกชั้น)
 // รอบการเปิดตัวเล่น — เพิ่มทุกครั้งที่ openVideo/closeVideo ผลของ request/event จากรอบเก่า (เช่น ปิดแล้วเปิดตอนเดิมซ้ำ
@@ -2197,7 +2190,7 @@ async function mountResolvedVideo(video, position, autoplay, refresh = false) {
     const useHlsJs = pb.kind === "hls" && (await loadHlsJs())?.isSupported();
     if (stale()) return;
     if (pb.kind === "hls" && !useHlsJs && !document.createElement("video").canPlayType("application/vnd.apple.mpegurl")) {
-      if (pb.alt) return mountFrameVideo(video, pb.alt); // เล่น HLS ไม่ได้เลย → ตัวฝังสำรอง
+      if (pb.alt) return mountFrameVideo(video, pb.alt, true); // เล่น HLS ไม่ได้เลย → ตัวฝังสำรอง
       return showPlaybackError(video, { code: "PLAYBACK_UNSUPPORTED", error: "เบราว์เซอร์นี้เล่น HLS (.m3u8) ไม่ได้" }, gen);
     }
     activeFramePlayback = false;
@@ -2209,7 +2202,7 @@ async function mountResolvedVideo(video, position, autoplay, refresh = false) {
     } catch (e) {
       if (stale()) return;
       unmountNativeVideo();
-      if (pb.alt) return mountFrameVideo(video, pb.alt); // ตัวหลักเปิดไม่ขึ้น → ตัวฝังสำรองทันที (ไม่ต้องรอขอใหม่)
+      if (pb.alt) return mountFrameVideo(video, pb.alt, true); // ตัวหลักเปิดไม่ขึ้น → ตัวฝังสำรองทันที (ไม่ต้องรอขอใหม่)
       if (resolveTries < MAX_RESOLVE_TRIES) return mountResolvedVideo(video, position, autoplay, true);
       return showPlaybackError(video, { code: "STREAM_EXPIRED", error: "ลิงก์วิดีโอเปิดไม่ได้ (ขอใหม่แล้วก็ยังไม่ได้)" }, gen);
     }
@@ -2238,13 +2231,15 @@ async function mountResolvedVideo(video, position, autoplay, refresh = false) {
 // border-box กว้างสุด max) — iframe สูงเท่าตัวเล่นแล้ว scale ให้เต็มกรอบ ขอบหน้าเว็บล้นออกนอกกรอบ
 // (ไม่ขยาย iframe จริง — หน้าในนั้นจะเลื่อนแนวนอน) กว้างเปลี่ยน (หมุนจอ/ย่อจอ): location.replace ไป #anchor ซ้ำ
 // = เลื่อนกลับโดยไม่โหลดใหม่ ไม่เพิ่มประวัติ
-function mountFrameVideo(video, pb) {
+function mountFrameVideo(video, pb, fallback = false) {
   activeFramePlayback = true;
   renderAutoNext();
   unmountYouTube();
   unmountNativeVideo();
   const body = el("#videoPlayerBody");
-  const limits = frameLimits(video.provider);
+  const name = escapeHtml(providerName(video));
+  const limits = fallback ? `ตัวเล่นในแอปเปิดตอนนี้ไม่ได้ — ใช้ตัวเล่นของ ${name} แทน (${FRAME_LIMITS})`
+    : `ตัวเล่นของ ${name}: ${FRAME_LIMITS}`;
   body.innerHTML = `<div class="af-wrap"><iframe title="${escapeHtml(video.title)}" allowfullscreen scrolling="no"
       allow="fullscreen; autoplay; encrypted-media; picture-in-picture"
       sandbox="allow-scripts allow-same-origin allow-presentation"></iframe></div>
@@ -4807,7 +4802,7 @@ function contentRowHtml(x, hosts) {
     const p = x.item;
     const eps = allPlaylistEpisodes(p.id);
     const range = eps.length ? ` (${Number(eps[0].episode)}–${Number(eps[eps.length - 1].episode)})` : "";
-    const tracks = (p.tracks || []).map((t) => `<span class="src-pill ${t.error ? "bad" : "ok"}">${FRAME_SITES.has(t.kind) ? "🎬" : "▶"} ${escapeHtml(LANG_LABEL[t.lang] || providerName({ provider: t.kind || "youtube" }))}${t.follow ? " ✓ติดตาม" : ""}${t.error ? " · มีปัญหา" : ""}</span>`).join("");
+    const tracks = (p.tracks || []).map((t) => `<span class="src-pill ${t.error ? "bad" : "ok"}">${SITE_PROVIDERS.has(t.kind) ? "🎬" : "▶"} ${escapeHtml(LANG_LABEL[t.lang] || providerName({ provider: t.kind || "youtube" }))}${t.follow ? " ✓ติดตาม" : ""}${t.error ? " · มีปัญหา" : ""}</span>`).join("");
     const twin = x.twins ? (state.videoPlaylists || []).find((o) => o.id === x.twins[0]) : null;
     return `<li class="settings-row tappable" data-id="${escapeHtml(p.id)}" data-kind="series">
         <span class="cr-cover wide">${p.thumbnail_url ? `<img src="${escapeHtml(p.thumbnail_url)}" alt="" loading="lazy" />` : ""}<i>🎬</i></span>
