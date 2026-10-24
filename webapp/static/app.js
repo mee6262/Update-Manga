@@ -2193,16 +2193,19 @@ async function mountResolvedVideo(video, position, autoplay, refresh = false) {
   }
   if (stale()) return;
   if (pb.kind === "file" || pb.kind === "hls") {
-    if (pb.kind === "hls" && !document.createElement("video").canPlayType("application/vnd.apple.mpegurl")) {
-      if (pb.alt) return mountFrameVideo(video, pb.alt); // เบราว์เซอร์เล่น HLS เองไม่ได้ (Chrome คอม) → ตัวฝังสำรอง
-      return showPlaybackError(video, { code: "PLAYBACK_UNSUPPORTED", error: "เบราว์เซอร์นี้เล่น HLS (.m3u8) เองไม่ได้ — ลองบน iPhone/Safari" }, gen);
+    // HLS: hls.js ก่อน (ทุกเบราว์เซอร์ที่มี MediaSource รวม iPhone iOS 17.1+) ไม่มีค่อยใช้ HLS ในตัวเบราว์เซอร์
+    const useHlsJs = pb.kind === "hls" && (await loadHlsJs())?.isSupported();
+    if (stale()) return;
+    if (pb.kind === "hls" && !useHlsJs && !document.createElement("video").canPlayType("application/vnd.apple.mpegurl")) {
+      if (pb.alt) return mountFrameVideo(video, pb.alt); // เล่น HLS ไม่ได้เลย → ตัวฝังสำรอง
+      return showPlaybackError(video, { code: "PLAYBACK_UNSUPPORTED", error: "เบราว์เซอร์นี้เล่น HLS (.m3u8) ไม่ได้" }, gen);
     }
     activeFramePlayback = false;
     renderAutoNext();
     unmountYouTube();
     unmountNativeVideo();
     try {
-      await mountNativeVideo(video, position, { sd: pb.url });
+      await mountNativeVideo(video, position, useHlsJs ? { sd: pb.url, hls: true } : { sd: pb.url });
     } catch (e) {
       if (stale()) return;
       unmountNativeVideo();
@@ -2336,6 +2339,26 @@ const VIDEO_QUALITY_KEY = "videoQuality"; // auto | hd | sd (จำต่อเ�
 const VIDEO_QUALITY_LABEL = { auto: "อัตโนมัติ", hd: "720p", sd: "360p" };
 let nativeVideo = null;
 let nativeSources = null;
+let nativeHls = null; // ตัวเล่น hls.js ที่ผูกกับ <video> อยู่ (sources.hls)
+
+// hls.js (เก็บในเว็บเอง โหลดตอนเปิดตอนแบบ HLS ครั้งแรก) — โหลดท่อนวิดีโอผ่าน JS เอง จึงเล่นได้บน Chrome/Android
+// ที่ไม่มี HLS ในตัว และไม่สน Content-Type ของท่อน (AnimeRuka ส่งท่อน MPEG-TS เป็น image/webp)
+let hlsJsLoading = null;
+function loadHlsJs() {
+  if (window.Hls) return Promise.resolve(window.Hls);
+  hlsJsLoading ||= new Promise((resolve) => {
+    const s = document.createElement("script");
+    s.src = "/static/vendor/hls.min.js?v=1.5.20";
+    s.onload = () => resolve(window.Hls || null);
+    s.onerror = () => { hlsJsLoading = null; resolve(null); };
+    document.head.appendChild(s);
+  });
+  return hlsJsLoading;
+}
+
+function destroyNativeHls() {
+  if (nativeHls) { nativeHls.destroy(); nativeHls = null; }
+}
 // รอบ (playGen) ที่ไฟล์ใน <video> ตอนนี้เป็นของ — ตั้งตอนสร้างตัวเล่น/เปลี่ยนไฟล์เป็นตอนถัดไป (reuse)
 // เปิดตอนใหม่แล้วตอนเดิมยังเล่นอยู่ (ย่อจอแล้วเลือกตอนจากคลัง) event ของไฟล์เดิมต้องไม่ไปทำกับตอนใหม่
 let nativeGen = 0;
@@ -2386,7 +2409,23 @@ function setNativeQuality(quality, startAt, autoplay = false) {
   const wasPlaying = autoplay || (startAt === undefined && !v.paused);
   nativeCurrentQuality = quality;
   nativeStalls = [];
-  v.src = nativeSources[quality];
+  destroyNativeHls();
+  if (nativeSources.hls && window.Hls) {
+    const hls = new window.Hls({ maxBufferLength: 60 });
+    nativeHls = hls;
+    // error ร้ายแรงของ hls.js ไม่ยิง error ของ <video> — ส่งต่อเป็น error ให้ทางเดิม (สลับตัวสำรอง/ขอลิงก์ใหม่) จัดการ
+    hls.on(window.Hls.Events.ERROR, (_e, data) => {
+      if (!data.fatal || nativeHls !== hls) return;
+      destroyNativeHls();
+      v.dispatchEvent(new Event("error"));
+    });
+    v.disableRemotePlayback = true; // iPhone (ManagedMediaSource) ไม่เปิดสตรีมถ้าไม่ปิด AirPlay หรือมีแหล่ง AirPlay สำรอง
+    hls.loadSource(new URL(nativeSources[quality], location.href).href);
+    hls.attachMedia(v);
+  } else {
+    v.disableRemotePlayback = false;
+    v.src = nativeSources[quality];
+  }
   v.addEventListener("loadedmetadata", () => {
     // สั่งเล่นหลัง seek เสร็จ — สั่ง play ระหว่าง seek เบราว์เซอร์หยุดเองหลังกระโดดเสร็จ (เจอตอนสลับ 360p↔720p)
     const resume = () => { if (wasPlaying) v.play().catch(() => {}); };
@@ -2803,6 +2842,7 @@ function unmountNativeVideo() {
   if (!nativeVideo) return;
   // หยุดโหลดทันที ไม่ให้เบราว์เซอร์โหลดคลิปต่อเบื้องหลังจนเปลืองเน็ต
   nativeVideo.pause();
+  destroyNativeHls();
   nativeVideo.removeAttribute("src");
   nativeVideo.load();
   nativeVideo = null;

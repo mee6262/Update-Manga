@@ -262,11 +262,13 @@ def is_guest() -> bool:
 GUEST_ENDPOINTS = {
     "index", "list_manga", "list_catalog", "list_categories", "list_chapters", "get_chapter", "reading_history",
     "proxy_image", "list_videos", "video_thumb", "video_speedtest", "get_video_sources", "get_video_playback",
+    "video_stream_playlist",
     "get_video_progress", "list_comments", "version", "logout", "get_donate", "donate_qr", "share_manga", "share_playlist",
 }
 # ผู้เยี่ยมชม = ใครก็ได้ (รวม bot): จำกัดคำขอที่ทำให้เซิร์ฟเวอร์ยิงเว็บต้นทาง/ใช้เน็ตมาก ต่อ IP (สมาชิกไม่จำกัด)
 GUEST_RATE_LIMITS = {  # endpoint → (ครั้ง, วินาที)
     "get_chapter": (120, 600), "proxy_image": (6000, 600), "get_video_playback": (120, 600), "get_video_sources": (120, 600),
+    "video_stream_playlist": (120, 600),
 }
 _guest_hits: dict[tuple[str, str], list[float]] = {}
 _guest_hits_lock = threading.Lock()
