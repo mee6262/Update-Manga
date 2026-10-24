@@ -985,9 +985,6 @@ button, .nav-item, .home-tab { -webkit-user-select: none; user-select: none; tou
 .episode-thumb img, .episode-thumb .video-placeholder { width: 100%; height: 100%; object-fit: cover; aspect-ratio: auto; font-size: 1.2rem; }
 .episode-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .episode-info small { color: var(--text-dim); font-size: 0.78rem; }
-.episode-nav { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); background: var(--bg-elevated); border-top: 1px solid var(--border); }
-.episode-nav[hidden] { display: none; }
-.episode-nav span { font-size: 0.9rem; font-weight: 600; }
 .episode-sub { font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .watch-status { white-space: pre-line; }
 .watch-url { font-size: 0.85rem; word-break: break-all; }
@@ -1007,8 +1004,6 @@ button, .nav-item, .home-tab { -webkit-user-select: none; user-select: none; tou
 .playlist-head-actions { display: flex; gap: 8px; align-items: center; }
 .playlist-head-actions .video-save-btn { align-self: auto; }
 .playlist-head { flex-wrap: wrap; }
-.episode-mid { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-.episode-nav .btn, #autoNextBtn { white-space: nowrap; }
 
 /* ===== MeeMovie แบบใหม่ ===== */
 /* คลังของฉัน: ปุ่มสลับ บันทึกไว้ / ประวัติการดู */
@@ -1112,21 +1107,32 @@ a.mm-tile { text-decoration: none; }
 .ep-tile.playing .ep-num, .ep-tile.playing .ep-sub, .ep-tile.playing .ep-check { color: #0a0f0c; }
 
 /* ตัวเล่น: แถบเลขตอน + นับถอยหลังตอนถัดไป */
-.player-episodes { display: flex; gap: 6px; overflow-x: auto; padding: 8px 16px; background: var(--bg-elevated); border-top: 1px solid var(--border); scrollbar-width: none; }
+.player-episodes { display: flex; gap: 6px; overflow-x: auto; padding: 2px 16px 4px; scrollbar-width: none; }
 .player-episodes[hidden] { display: none; }
 .player-episodes::-webkit-scrollbar { display: none; }
 .player-episodes .ep-tile { flex: 0 0 58px; min-height: 44px; }
 .player-episodes .ep-tile.has-sub { flex-basis: 96px; }
-.next-overlay { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 6; background: rgba(0, 0, 0, 0.85); color: #fff; border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; align-items: center; text-align: center; width: min(320px, calc(100% - 32px)); }
+/* จบตอน: การ์ดตอนถัดไป + ตัวนับถอยหลัง ทับคลิป */
+.next-overlay { position: absolute; inset: 0; z-index: 6; background: rgba(0, 0, 0, 0.8); color: #fff; display: flex; align-items: center; justify-content: center; gap: 14px; padding: 0 18px; }
 .next-overlay[hidden] { display: none; }
-.next-overlay-actions { display: flex; gap: 8px; }
+.next-thumb { position: relative; width: min(36vw, 160px); aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #222; flex: none; }
+#nextThumb, .next-thumb img, .next-thumb .video-placeholder { display: block; width: 100%; height: 100%; object-fit: cover; }
+.next-count { position: absolute; left: 50%; top: 50%; margin: -23px 0 0 -23px; width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; color: #fff; background: rgba(0, 0, 0, 0.5); }
+.next-count::before { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 3px solid rgba(255, 255, 255, 0.35); border-top-color: #fff; animation: next-spin 1s linear infinite; }
+.next-count:empty { display: none; }
+@keyframes next-spin { to { transform: rotate(360deg); } }
+.next-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.next-info small { opacity: 0.75; font-size: 0.75rem; }
+.next-info b { font-size: 1rem; }
+.next-overlay-actions { display: flex; gap: 8px; margin-top: 8px; }
+.next-overlay-actions .btn { min-height: 34px; padding: 6px 12px; font-size: 0.82rem; }
 
 /* ย่อจอ */
 .mini-bar { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; padding-right: 6px; }
 .mini-bar[hidden] { display: none; }
 .mini-title { flex: 1; min-width: 0; background: none; border: 0; color: var(--text); font: inherit; font-size: 0.85rem; font-weight: 600; text-align: left; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .video-player.mini { inset: auto 8px calc(var(--nav-h) + env(safe-area-inset-bottom) + 8px) 8px; height: 72px; flex-direction: row; align-items: center; border-radius: 12px; overflow: hidden; background: var(--bg-elevated); border: 1px solid var(--border); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45); z-index: 110; animation: none; }
-.video-player.mini > .reader-topbar, .video-player.mini > .episode-nav, .video-player.mini > .player-episodes, .video-player.mini .video-quality, .video-player.mini .tap-zone, .video-player.mini .video-resume-hint { display: none !important; }
+.video-player.mini > .reader-topbar, .video-player.mini > .player-panel, .video-player.mini .next-overlay, .video-player.mini .video-quality, .video-player.mini .tap-zone, .video-player.mini .video-resume-hint { display: none !important; }
 .video-player.mini .video-player-body { flex: 0 0 128px; height: 72px; padding: 0; display: block; overflow: hidden; background: #000; }
 .video-player.mini .native-wrap { height: 72px; }
 .video-player.mini .native-video { width: 128px; height: 72px; max-height: 72px; border-radius: 0; object-fit: cover; }
@@ -1808,3 +1814,60 @@ button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%
 .adv-num.dup { border-color: var(--danger); color: var(--danger); font-weight: 700; }
 .adv-input.saved, .adv-num.saved:not(.dup) { border-color: var(--accent); }
 .adv-tag { font-size: 0.72rem; color: var(--accent); }
+
+/* ===== หน้าเล่นวิดีโอ: หัว 3 ปุ่ม · คลิปติดบน · แผงใต้คลิปเลื่อนได้ · แผ่น ⋯ ===== */
+.video-player:not(.mini) { background: var(--bg); overflow-y: auto; overscroll-behavior: contain; }
+.video-player:not(.mini) > .reader-topbar { position: sticky; top: 0; z-index: 8; }
+.player-top { gap: 4px; padding: 6px 8px; flex-wrap: nowrap; }
+.icon-btn.plain { background: none; border-color: transparent; color: var(--text); width: 42px; height: 42px; }
+.player-title-btn { padding: 2px 4px; }
+.player-stage { position: relative; background: #000; }
+.video-player.mini > .player-stage { display: contents; }
+.video-player:not(.mini) .video-player-body { flex: none; padding: 0 0 8px; min-height: min(56.25vw, 52vh); overflow: visible; }
+.video-player:not(.mini) .native-video, .video-player:not(.mini) .yt-wrap, .video-player:not(.mini) .af-wrap { border-radius: 0; }
+.video-player:not(.mini) .native-video { max-height: 60vh; }
+.player-panel { padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
+.player-acts { display: flex; gap: 8px; padding: 10px 16px; overflow-x: auto; scrollbar-width: none; background: var(--bg-elevated); border-bottom: 1px solid var(--border); }
+.player-acts::-webkit-scrollbar { display: none; }
+.pa-btn { flex: none; display: inline-flex; align-items: center; gap: 5px; min-height: 36px; padding: 0 13px; border-radius: 999px; border: 0; background: var(--bg); color: var(--text); font: inherit; font-size: 0.82rem; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.pa-btn[hidden] { display: none; }
+.pa-btn:disabled { opacity: 0.4; cursor: default; }
+.pa-btn.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.pa-btn svg { flex: none; }
+#videoCommentCount:empty { display: none; }
+.player-ep-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 14px 16px 8px; }
+.player-ep-head[hidden] { display: none; }
+.player-ep-head b { font-size: 0.92rem; }
+.player-ep-head b span { color: var(--text-dim); font-weight: 500; }
+.player-ep-head .link-btn { color: var(--accent); text-decoration: none; font-weight: 600; font-size: 0.85rem; }
+.player-next, .player-cmt { display: flex; width: calc(100% - 32px); margin: 12px 16px 0; padding: 10px; gap: 10px; align-items: center; text-align: left; background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; color: var(--text); font: inherit; cursor: pointer; }
+.player-next[hidden] { display: none; }
+.player-next:disabled { cursor: default; }
+.pn-thumb { width: 104px; aspect-ratio: 16 / 9; border-radius: 9px; overflow: hidden; background: var(--img-bg); flex: none; }
+.pn-thumb img, .pn-thumb .video-placeholder { width: 100%; height: 100%; object-fit: cover; font-size: 1rem; }
+.pn-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.pn-info small { color: var(--text-dim); font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pn-info b { font-size: 0.88rem; }
+.pn-go { color: var(--accent); font-size: 1.1rem; padding-right: 6px; }
+.player-cmt { flex-direction: column; align-items: stretch; gap: 6px; font-size: 0.84rem; padding: 10px 12px; }
+.pc-head { display: flex; justify-content: space-between; }
+.pc-head span { color: var(--text-dim); font-size: 0.8rem; }
+.pc-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.pc-av { width: 26px; height: 26px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); display: grid; place-items: center; font-size: 0.72rem; font-weight: 700; flex: none; }
+.pc-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-empty { color: var(--text-dim); font-size: 0.8rem; }
+
+/* แผ่น ⋯ ของตัวเล่น */
+.pm-sheet { padding-left: 0; padding-right: 0; }
+.pm-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 20px; background: none; border: 0; color: var(--text); font: inherit; font-size: 0.92rem; text-align: left; text-decoration: none; cursor: pointer; }
+.pm-item[hidden], .pm-block[hidden] { display: none; }
+.pm-item.static { cursor: default; padding-bottom: 6px; }
+.pm-item.danger { color: var(--danger); }
+.pm-ic { flex: none; color: var(--text-dim); }
+.pm-item.danger .pm-ic { color: var(--danger); }
+.pm-r { margin-left: auto; color: var(--text-dim); font-size: 0.82rem; }
+.pm-opts { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 20px 8px 52px; }
+.pm-opts .video-quality-btn { background: var(--bg); color: var(--text); border: 1px solid var(--border); min-height: 34px; padding: 4px 12px; }
+.pm-opts .video-quality-btn.active { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 700; }
+.pm-opts .video-quality-btn:disabled { opacity: 0.45; }
+.pm-hr { height: 1px; background: var(--border); margin: 6px 20px; }
