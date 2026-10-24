@@ -45,6 +45,10 @@
 - เว็บจริงไว้ regression: go-manga, up-manga (URL จาก data/manga.json), niceoppai, manga-lc
 
 ## บน VPS (Windows Server, PowerShell)
+- เชลล์ของ Claude = **Git Bash** (`CLAUDE_CODE_USE_POWERSHELL_TOOL=0` ใน `~/.claude/settings.json` → RTK บีบทุกคำสั่ง) ใช้ path `/c/Project/Update-Manga`
+  - คำสั่ง Windows (`*-ScheduledTask`, `Start-Process -PassThru`/`Stop-Process -Id`, `Get-CimInstance`) → `powershell.exe -NoProfile -Command "..."`
+  - แก้ไฟล์ด้วย Edit/Write เท่านั้น (ไม่ใช้ `Set-Content`/`sed` กับไทย); python พิมพ์ไทยได้เพราะตั้ง `PYTHONIOENCODING=utf-8` ไว้
+  - คำสั่งที่บอกให้มี่รันเอง ยังเป็น PowerShell ตามเดิม
 - นี่คือเว็บที่มี่ใช้จริง: ทดสอบใน `$env:TEMP\manga-sandbox` + พอร์ตอื่น (เช่น 5099) เท่านั้น — ห้าม `import app` ในโฟลเดอร์จริง
   (รัน migration ใส่ data จริงขณะเซิร์ฟเวอร์ตัวจริงเขียนอยู่)
 - python = `.venv\Scripts\python.exe`; process ทดสอบเปิดด้วย `Start-Process -PassThru` แล้วฆ่าด้วย PID
