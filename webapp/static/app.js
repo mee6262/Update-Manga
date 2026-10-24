@@ -1483,7 +1483,8 @@ function setVideoMini(on) {
   if (nativeVideo) nativeVideo.controls = !on;
   if (on) {
     cancelNextCountdown();
-    el("#miniExpand").textContent = el("#videoPlayerTitle").textContent;
+    const playlist = activeVideo?.playlist_id && playlistById(activeVideo.playlist_id);
+    el("#miniExpand").textContent = playlist ? `${playlist.name} · ${episodeLabel(activeVideo)}` : el("#videoPlayerTitle").textContent;
     renderMiniPlay();
   }
   document.body.style.overflow = on && el("#playlistView").hidden ? "" : "hidden";
@@ -2261,7 +2262,11 @@ async function openVideo(video, { autoplay = false } = {}) {
   videoClockBase = 0;
   videoClockStartedAt = null;
   const playlist = video.playlist_id && (state.videoPlaylists || []).find((p) => p.id === video.playlist_id);
-  el("#videoPlayerTitle").textContent = playlist ? `${playlist.name} · ${episodeLabel(video)}` : video.title;
+  // มีเรื่อง: ชื่อเรื่องบรรทัดบน + ตอนบรรทัดล่าง แตะแล้วไปหน้าเรื่อง (เปิดตอนจากหน้าแรกก็กลับไปเลือกตอนได้)
+  el("#videoPlayerTitle").textContent = playlist ? playlist.name : video.title;
+  el("#videoPlayerSub").textContent = playlist ? `${episodeLabel(video)} · ดูทุกตอน ›` : "";
+  el("#videoPlayerSub").hidden = !playlist;
+  el("#videoPlayerTitleBtn").disabled = !playlist;
   el("#videoPlayer").hidden = false; // ก่อนวาดแถบเลขตอน — ซ่อนอยู่วัดตำแหน่งไม่ได้ เลื่อนไปตอนที่เล่นไม่ถึง
   renderEpisodeNav(video);
   refreshCommentCount({ kind: "video", id: video.id }, el("#videoCommentCount"));
@@ -2541,7 +2546,14 @@ function initVideos() {
     if (saveBtn) return togglePlaylistSave(saveBtn.dataset.savePlaylist, saveBtn);
     const id = event.target.closest("[data-episode-id]")?.dataset.episodeId;
     const video = id && state.videos.find((v) => v.id === id);
+    if (video && video.id === activeVideo?.id && isVideoMini()) return setVideoMini(false); // ตอนที่ย่อเล่นอยู่: ขยายกลับ ไม่โหลดใหม่
     if (video) openVideo(video);
+  });
+  el("#videoPlayerTitleBtn").addEventListener("click", () => {
+    const id = activeVideo?.playlist_id;
+    if (!id || !playlistById(id)) return;
+    setVideoMini(true);
+    openPlaylist(id);
   });
   el("#playerEpisodes").addEventListener("click", (event) => {
     const id = event.target.closest("[data-episode-id]")?.dataset.episodeId;
