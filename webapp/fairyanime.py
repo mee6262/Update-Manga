@@ -169,10 +169,20 @@ def player_url(episode_id: str) -> str:
     return f"{host.group(1)}playback/v/{slug.group(1)}/"
 
 
+_PLAYER_HOST = re.compile(r"(?:[a-z0-9-]+\.)*tonytonychopper\.(?:com|net)")
+
+
+def _player_host_ok(url: str) -> bool:
+    """เซิร์ฟเวอร์ยิงเฉพาะโฮสต์ตัวเล่นที่รู้จัก (ลิงก์อ่านจากหน้าของเขา) — เปลี่ยนโดเมน = ใช้ตัวฝังแทน"""
+    return url.startswith("https://") and bool(_PLAYER_HOST.fullmatch((urlsplit(url).hostname or "").lower()))
+
+
 def hls_master(player: str) -> str:
     """หน้าตัวเล่น playback/v → ลิงก์ master HLS (<โฮสต์ v2>/file2/<vid>/)"""
+    if not _player_host_ok(player):
+        raise ValueError("โฮสต์ตัวเล่นไม่รู้จัก")
     m = re.search(r"src=[\"'](https://[A-Za-z0-9.-]+)/v2/([A-Za-z0-9]{4,40})/?[\"']", _get(player).text)
-    if not m:
+    if not m or not _player_host_ok(m.group(1)):
         raise ValueError("ไม่พบไฟล์วิดีโอในหน้าตัวเล่น (เว็บอาจเปลี่ยนวิธี)")
     return f"{m.group(1)}/file2/{m.group(2)}/"
 

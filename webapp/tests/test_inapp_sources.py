@@ -112,6 +112,25 @@ class InAppSourcesTest(unittest.TestCase):
         with mock.patch.object(self.fa, "_get", side_effect=[Resp(FA_BASE_NEW), Resp("<html>no iframe</html>")]):
             self.assertEqual(self.fa.Provider.resolve_playback(video, {})["kind"], "embed")
 
+    def test_fairyanime_unknown_player_host_not_fetched(self):
+        video = {"id": "fa3", "provider": "fairyanime", "source_url": "https://fairyanime.net/watch/JsTY0pczKZ.html"}
+        moved = FA_BASE_NEW.replace("streaming.tonytonychopper.com", "evil.example")
+        with mock.patch.object(self.fa, "_get", side_effect=[Resp(moved)]) as get:
+            self.assertEqual(self.fa.Provider.resolve_playback(video, {})["kind"], "embed")
+        self.assertEqual(get.call_count, 1)  # ไม่ยิงหน้าตัวเล่นบนโฮสต์แปลก
+        evil_v2 = '<iframe src="https://evil.example/v2/jsAbeDWv"></iframe>'
+        with mock.patch.object(self.fa, "_get", side_effect=[Resp(FA_BASE_NEW), Resp(evil_v2)]):
+            self.assertEqual(self.fa.Provider.resolve_playback(video, {})["kind"], "embed")
+
+    def test_anifume_external_plays_file_without_embed(self):
+        video = {"id": "afx", "provider": "anifume", "source_url": AF_EP, "external": True}
+        with mock.patch.object(self.af, "file_sources", return_value={"hd": None, "sd": "https://a.example/x.mp4", "expires_at": None}):
+            pb = self.af.Provider.resolve_playback(video, {})
+        self.assertEqual((pb["kind"], pb["alt"]), ("file", None))
+        with mock.patch.object(self.af, "file_sources", side_effect=ValueError("x")), \
+             self.assertRaises(self.m.streams.StreamError):
+            self.af.Provider.resolve_playback(video, {})
+
     # ---------- streams.hls_playlist ----------
     def test_hls_playlist_single_variant_and_rejects(self):
         hls = self.m.streams.hls_playlist

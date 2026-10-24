@@ -3865,8 +3865,10 @@ def _newest_page_reels(page_url: str) -> list[str]:
     try:
         proc = subprocess.run(
             [sys.executable, str(Path(__file__).with_name("fb_reels_watch.py")), page_url],
-            capture_output=True, text=True, encoding="utf-8", timeout=PLAYLIST_WATCH_TIMEOUT,
-            stdin=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=PLAYLIST_WATCH_TIMEOUT,
+            # ลูกพิมพ์ไทย: ไม่ตั้ง = cp874 → อ่านเป็น utf-8 แล้ว thread อ่าน stderr ล้ม (traceback เต็ม log)
+            stdin=subprocess.DEVNULL, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.TimeoutExpired as e:
         err = e.stderr.decode("utf-8", "replace") if isinstance(e.stderr, bytes) else (e.stderr or "")

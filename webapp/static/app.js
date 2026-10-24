@@ -2190,7 +2190,7 @@ async function mountResolvedVideo(video, position, autoplay, refresh = false) {
     const useHlsJs = pb.kind === "hls" && (await loadHlsJs())?.isSupported();
     if (stale()) return;
     if (pb.kind === "hls" && !useHlsJs && !document.createElement("video").canPlayType("application/vnd.apple.mpegurl")) {
-      if (pb.alt) return mountFrameVideo(video, pb.alt, true); // เล่น HLS ไม่ได้เลย → ตัวฝังสำรอง
+      if (pb.alt) return mountFallbackFrame(video, pb.alt, position); // เล่น HLS ไม่ได้เลย → ตัวฝังสำรอง
       return showPlaybackError(video, { code: "PLAYBACK_UNSUPPORTED", error: "เบราว์เซอร์นี้เล่น HLS (.m3u8) ไม่ได้" }, gen);
     }
     activeFramePlayback = false;
@@ -2202,7 +2202,7 @@ async function mountResolvedVideo(video, position, autoplay, refresh = false) {
     } catch (e) {
       if (stale()) return;
       unmountNativeVideo();
-      if (pb.alt) return mountFrameVideo(video, pb.alt, true); // ตัวหลักเปิดไม่ขึ้น → ตัวฝังสำรองทันที (ไม่ต้องรอขอใหม่)
+      if (pb.alt) return mountFallbackFrame(video, pb.alt, position); // ตัวหลักเปิดไม่ขึ้น → ตัวฝังสำรองทันที (ไม่ต้องรอขอใหม่)
       if (resolveTries < MAX_RESOLVE_TRIES) return mountResolvedVideo(video, position, autoplay, true);
       return showPlaybackError(video, { code: "STREAM_EXPIRED", error: "ลิงก์วิดีโอเปิดไม่ได้ (ขอใหม่แล้วก็ยังไม่ได้)" }, gen);
     }
@@ -2224,6 +2224,13 @@ async function mountResolvedVideo(video, position, autoplay, refresh = false) {
   }
   mountFrameVideo(video, pb);
   clearActiveVideoProgress(); // อ่านเวลาใน iframe ข้ามโดเมนไม่ได้: เปิดแล้วนับว่าดูแล้ว (ประวัติ/ป้ายดูแล้ว) ไม่มีจุดดูค้าง
+}
+
+// ตัวเล่นแอปเปิดไม่ได้ → ตัวฝังของแหล่ง: นับว่าดูแล้วเหมือนเล่นแบบฝัง แต่ถ้ามีจุดดูค้างอยู่ไม่ลบทิ้ง
+// (ครั้งหน้าตัวเล่นแอปกลับมาได้ยังดูต่อได้)
+function mountFallbackFrame(video, alt, position) {
+  mountFrameVideo(video, alt, true);
+  if (!(position > 5)) clearActiveVideoProgress();
 }
 
 // iframe ของแหล่ง — sandbox ไม่มี allow-popups กันโฆษณาเด้งหน้าใหม่, ปุ่มเปิดหน้าต้นฉบับอยู่ใต้ตัวเล่นเสมอ

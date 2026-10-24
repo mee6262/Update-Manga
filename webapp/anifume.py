@@ -220,13 +220,17 @@ class Provider:
         url = canonical_episode_url(video.get("source_url") or "")
         if not url:
             raise streams.StreamError(streams.PLAYER_INFO_MISSING, "ลิงก์ตอนของ Anifume ไม่ถูกต้อง")
-        if video.get("external"):
-            raise streams.StreamError(streams.PROVIDER_RESTRICTION, "หน้าตอนนี้ห้ามฝังในเว็บอื่น (X-Frame-Options/CSP)")
         # กล่องตัวเล่น #vpfi อยู่ใน .content (padding ซ้ายขวา 12px, border-box กว้างสุด 854px) — ตัวเล่นใช้ crop ตัดขอบ
         embed = {"kind": "page_embed", "url": url + "#vpfi", "expires_at": None, "frame": {"pad": 12, "max": 854}}
         try:
             src = file_sources(url)
         except ValueError:
+            src = None
+        if video.get("external"):  # หน้าตอนห้ามฝัง — เล่นได้เฉพาะไฟล์ตรง ไม่มีตัวสำรอง
+            if not src:
+                raise streams.StreamError(streams.PROVIDER_RESTRICTION, "หน้าตอนนี้ห้ามฝังในเว็บอื่น (X-Frame-Options/CSP)")
+            embed = None
+        elif not src:
             return embed
         # MP4 ตรง → <video> ของแอป (จำจุดดูค้าง/เลือก 720p-360p) เปิดไม่ขึ้น หน้าเว็บสลับไปฝังหน้าตอนเอง (alt)
         return {"kind": "file", "url": src["sd"], "sources": {k: src[k] for k in ("hd", "sd") if src[k]},
