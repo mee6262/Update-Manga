@@ -1461,7 +1461,7 @@ function playlistResume(episodes) {
 }
 
 function providerName(item) {
-  return { youtube: "YouTube", anifume: "Anifume", fairyanime: "FairyAnime", anime108: "Anime108", a037: "037-anime" }[item?.provider] || "Facebook";
+  return { youtube: "YouTube", anifume: "Anifume", fairyanime: "FairyAnime", anime108: "Anime108", animeruka: "AnimeRuka", a037: "037-anime" }[item?.provider] || "Facebook";
 }
 
 function ytBadge(item) {
@@ -2133,7 +2133,7 @@ const AF_LIMITS = "ตัวเล่นของ Anifume: ไม่จำจุ
 const FRAME_LIMITS = "ตัวเล่นของแหล่งนี้: ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
 const FA_LIMITS = "ตัวเล่นของ FairyAnime: ไม่จำจุดดูค้าง · ไม่เล่นตอนถัดไปเอง · ปุ่มเล่น/หยุดตอนย่อจอใช้ไม่ได้";
 // เว็บที่เล่นด้วยการฝังตัวเล่นของเขา (ไม่จำจุดดูค้าง/ไม่เล่นต่อเอง)
-const FRAME_SITES = new Set(["anifume", "fairyanime", "anime108"]);
+const FRAME_SITES = new Set(["anifume", "fairyanime", "anime108", "animeruka"]);
 function frameLimits(provider) {
   return provider === "anifume" ? AF_LIMITS : provider === "fairyanime" ? FA_LIMITS : FRAME_LIMITS;
 }
@@ -5687,7 +5687,7 @@ const ADD_KIND_HINT = {
   fb: "วางได้หลายลิงก์ (บรรทัดละลิงก์) — ไปที่ฟอร์มวางลิงก์ Facebook เลือกหมวดแล้วกดเพิ่ม",
   watch: "ไปที่ฟอร์มติดตามเพจ เลือกหมวดที่จะใส่คลิปใหม่แล้วกดติดตาม",
   yt: "ไปที่ฟอร์ม YouTube และดึงข้อมูลให้เลย",
-  af: "ไปที่ฟอร์ม Anifume / FairyAnime / Anime108 และดึงข้อมูลให้เลย",
+  af: "ไปที่ฟอร์ม Anifume / FairyAnime / Anime108 / AnimeRuka และดึงข้อมูลให้เลย",
   category: "สร้างหมวดมังงะใหม่ชื่อนี้",
 };
 let addKind = "";
@@ -5699,7 +5699,7 @@ function detectAddKind(text) {
   if (!urls.length) return text.trim() ? "category" : "";
   const u = urls[0].toLowerCase();
   if (/(^|\.)(youtube\.com|youtu\.be)\//.test(u.replace(/^https?:\/\//, ""))) return "yt";
-  if (/anifume\.|fairyanime\.|anime108\./.test(u)) return "af";
+  if (/anifume\.|fairyanime\.|anime108\.|animeruka\./.test(u)) return "af";
   if (/facebook\.com|fb\.watch|fb\.com/.test(u)) {
     const pageReels = /\/reels\/?(\?|#|$)|sk=reels_tab/.test(u) && !/\/reel\/\d/.test(u);
     return urls.length === 1 && pageReels ? "watch" : "fb";
@@ -8951,7 +8951,11 @@ function afParseLines() {
 function renderAfSeriesPreview(data) {
   const fresh = data.items.filter((item) => !item.exists).length;
   const langs = Object.entries(afState.langs || {}).filter(([, n]) => n > 0);
-  const langSwitch = langs.length > 1 ? `<div class="af-langs">${langs.map(([l, n]) =>
+  const variants = afState.variants || [];
+  const langSwitch = variants.length > 1 ? `<div class="af-langs">${variants.map((v) =>
+    `<button type="button" class="video-chip${v.url === afState.seriesUrl ? " active" : ""}" data-af-variant="${escapeHtml(v.url)}">${escapeHtml(v.label)} ${v.count} ตอน</button>`).join("")}</div>
+    <p class="hint">เพิ่มทีละชุด — เพิ่มชุดแรกแล้วกดชุดถัดไป ใช้ชื่อเรื่อง/เรื่องเดิมเดียวกัน = รวมเป็นเรื่องเดียว</p>`
+    : langs.length > 1 ? `<div class="af-langs">${langs.map(([l, n]) =>
     `<button type="button" class="video-chip${l === afState.lang ? " active" : ""}" data-af-lang="${l}">${LANG_LABEL[l]} ${n} ตอน</button>`).join("")}</div>
     <p class="hint">เพิ่มทีละภาษา — เพิ่มภาษาแรกแล้วกดอีกภาษา ใช้ชื่อเรื่องเดิม = รวมเป็นเรื่องเดียว (สลับพากย์/ซับในหน้าเรื่องได้)</p>` : "";
   el("#afPreview").innerHTML = `<div class="yt-preview">${vmThumb(afState.image)}<div><div class="name">${escapeHtml(data.name)}</div>
@@ -9028,6 +9032,7 @@ async function afFillSeries(url) {
   afState.lang = d.lang || null;
   afState.langs = d.langs || null;
   afState.langUrls = d.lang_urls || null;
+  afState.variants = d.variants || null;
   el("#afName").value = d.name;
   el("#afItems").value = d.items.map((item) => `${item.url} | ${item.episode ?? ""} | ${item.title}`).join("\n");
   el("#afUrl").value = d.url;
@@ -9082,12 +9087,13 @@ function initAnifumeAdmin() {
   });
   el("#afPreview").addEventListener("click", async (event) => {
     const langBtn = event.target.closest("[data-af-lang]")?.dataset.afLang;
-    if (langBtn && afState.langUrls?.[langBtn] && langBtn !== afState.lang) {
+    const variantUrl = event.target.closest("[data-af-variant]")?.dataset.afVariant;
+    if ((variantUrl && variantUrl !== afState.seriesUrl) || (langBtn && afState.langUrls?.[langBtn] && langBtn !== afState.lang)) {
       const name = el("#afName").value; // ชื่อที่แก้ไว้ใช้ต่อ (ภาษาที่สองต้องชื่อเดียวกันถึงจะรวมเรื่อง)
       const keep = afState.into && { into: afState.into, season: el("#afSeason").value, offset: el("#afOffset").value };
       afMsg("กำลังดึงรายชื่อตอน...");
       try {
-        await afFillSeries(afState.langUrls[langBtn]);
+        await afFillSeries(variantUrl || afState.langUrls[langBtn]);
         el("#afName").value = name;
         afState.preview = await sendJSON("POST", "/api/anifume/add", { name, items: afParseLines(), dry_run: true });
         renderAfSeriesPreview(afState.preview);
