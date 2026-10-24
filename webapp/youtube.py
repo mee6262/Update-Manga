@@ -11,6 +11,7 @@
 """
 import json
 import re
+from collections import Counter
 from urllib.parse import parse_qs, urlsplit
 
 import requests
@@ -226,6 +227,34 @@ def parse_episode(title: str) -> float | None:
     # ไม่มีคำว่า "ตอน": เลขท้ายสุดหลังขีด เช่น "ชื่อเรื่อง - 12"
     match = re.search(r"[-–|]\s*(\d+(?:\.\d+)?)\s*$", strip_lang(title or ""))
     return float(match.group(1)) if match else None
+
+
+# เลขในซีซั่นที่ช่องเขียนกำกับไว้ข้างเลขรวม เช่น "ตอนที่ 49 (S3 ตอนที่ 13)", "S3E13", "S3 EP13"
+_IN_SEASON = re.compile(r"\bS(\d+)\s*(?:ตอนที่|ตอน|ep\.?|e)\s*(\d+(?:\.\d+)?)", re.I)
+_MIN_AGREE = 3  # ต้องมีอย่างน้อยกี่ตอนที่ส่วนต่างตรงกัน ถึงจะเชื่อว่าเป็นรูปแบบของช่อง
+
+
+def episode_numbers(titles: list[str]) -> list[float | None]:
+    """เลขตอนของทั้ง playlist — ช่องที่เขียนทั้งเลขรวมและเลขในซีซั่น ("ตอนที่ 49 (S3 ตอนที่ 13)") ตรวจกันเองได้:
+    ในซีซั่นเดียวกัน (เลขรวม − เลขในซีซั่น) ต้องเท่ากันทุกตอน ตอนที่ต่างจากส่วนใหญ่ = ช่องพิมพ์เลขรวมผิด
+    (เจอจริง: S3 ตอนที่ 13 เขียนเป็น "ตอนที่ 49" ซ้ำกับตอน 12 → ตอน 50 หายไป) ใช้เลขในซีซั่น + ส่วนต่างของส่วนใหญ่"""
+    eps = [parse_episode(t) for t in titles]
+    marks: list[tuple[int, float] | None] = []
+    for title, ep in zip(titles, eps):
+        m = _IN_SEASON.search(title or "")
+        marks.append((int(m.group(1)), float(m.group(2))) if m and ep is not None and float(m.group(2)) != ep else None)
+    offsets: dict[int, Counter] = {}
+    for ep, mark in zip(eps, marks):
+        if mark:
+            offsets.setdefault(mark[0], Counter())[ep - mark[1]] += 1
+    out = list(eps)
+    for i, mark in enumerate(marks):
+        if not mark:
+            continue
+        (offset, agree), = offsets[mark[0]].most_common(1)
+        if agree >= _MIN_AGREE and agree * 2 > sum(offsets[mark[0]].values()) and eps[i] - mark[1] != offset:
+            out[i] = mark[1] + offset
+    return out
 
 
 def strip_lang(title: str) -> str:

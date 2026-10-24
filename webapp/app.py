@@ -3577,13 +3577,21 @@ def _store_youtube_items(list_id: str, info: dict, *, playlist_id: str | None, n
         track["checked_at"] = now
         track.pop("error", None)
         videos = storage.load_videos(fresh=True)
-        known = {v.get("canonical_key") for v in videos}
-        for item in info["items"]:
+        known = {v.get("canonical_key"): v for v in videos}
+        numbers = youtube.episode_numbers([item["title"] for item in info["items"]])
+        for item, checked in zip(info["items"], numbers):
             key = _yt_key(item["id"])
             if key in known:
+                # ตอนเดิมที่เลขมาจากชื่อที่ช่องพิมพ์ผิด → แก้ตามเลขที่ตรวจแล้ว (เฉพาะที่ยังเป็นเลขจากชื่อ ไม่ทับที่แอดมินแก้เอง)
+                old = known[key]
+                if (old and old.get("playlist_id") == playlist["id"] and checked is not None
+                        and old.get("episode") == youtube.parse_episode(item["title"]) and old.get("episode") != checked):
+                    old["episode"] = checked
+                    old["season"] = _season_of(item["title"], checked, playlist.get("season_starts") or [], default_season)
+                    print(f"[youtube] แก้เลขตอน {playlist['name']}: {item['title']} → ตอน {checked:g}", flush=True)
                 continue
-            known.add(key)
-            episode = youtube.parse_episode(item["title"])
+            known[key] = None
+            episode = checked
             video = _yt_record(item["id"], item["title"], item.get("duration"), username, now)
             video.update({
                 "playlist_id": playlist["id"],
