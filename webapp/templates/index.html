@@ -272,8 +272,8 @@
           <nav class="sub-tabs" hidden>
             <button class="sub-tab-btn active" data-subtab="overview" data-group="overview" hidden>ภาพรวม</button>
             <button class="sub-tab-btn" data-subtab="mangaManage" data-group="content">📋 รายการ</button>
-            <button class="sub-tab-btn" data-subtab="videoManage" data-group="content">🎬 หมวด · เพิ่มวิดีโอ</button>
-            <button class="sub-tab-btn" data-subtab="categoryManage" data-group="content">🏷 หมวดมังงะ</button>
+            <button class="sub-tab-btn" data-subtab="categoryManage" data-group="content">🏷 หมวด &amp; แนว</button>
+            <button class="sub-tab-btn" data-subtab="videoManage" data-group="content">➕ เพิ่ม · ติดตาม</button>
             <button class="sub-tab-btn" data-subtab="userManage" data-group="users">👥 สมาชิก</button>
             <button class="sub-tab-btn" data-subtab="requestsManage" data-group="users">📮 คำขอ</button>
             <button class="sub-tab-btn" data-subtab="commentManage" data-group="users">💬 คอมเมนต์</button>
@@ -294,6 +294,7 @@
         <div id="mangaManageSubview" class="subview">
         <div class="manage-actions">
           <button id="openAddMangaBtn" class="btn primary">＋ เพิ่ม</button>
+          <button id="contentSelectBtn" class="btn">☑ เลือก</button>
           <button id="refreshAllBtn" class="btn with-icon">
             <svg viewBox="0 0 24 24" width="20" height="20"><path d="M21 12a9 9 0 1 1-2.64-6.36" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M21 3v6h-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <span>รีเฟรชทั้งหมด</span>
@@ -309,9 +310,12 @@
           <button class="video-chip" data-manga-filter="similar">ชื่อคล้ายกัน</button>
         </div>
         <ul id="settingsList" class="settings-list"></ul>
+        <div id="contentSelectBar" class="content-select-bar" hidden></div>
         </div>
 
         <div id="categoryManageSubview" class="subview">
+          <div id="catNocatCard"></div>
+          <h3 class="cat-section">📚 หมวดมังงะ</h3>
           <form id="addCategoryForm" class="add-form">
             <input type="text" id="newCategoryName" placeholder="ชื่อหมวดหมู่ใหม่ เช่น แอกชัน" maxlength="40" required />
             <label class="checkbox-label"><input type="checkbox" id="newCategorySpecial" /> หมวดพิเศษ</label>
@@ -320,6 +324,27 @@
           <div id="categoryMsg" class="form-msg"></div>
           <p class="hint">ลำดับในรายการนี้ = ลำดับที่ผู้ใช้เห็นในแถบหมวดหมู่ · แตะ "เลือกเรื่อง" เพื่อกำหนดว่าหมวดนี้มีเรื่องอะไรบ้าง · <b>หมวดพิเศษ</b> ผู้ใช้จะเห็นก็ต่อเมื่อเปิด "แสดงหมวดพิเศษ" ในหน้าตั้งค่าของตัวเอง</p>
           <ul id="categoryList" class="settings-list"></ul>
+          <h3 class="cat-section">🎬 หมวดวิดีโอ</h3>
+          <div id="vcMain">
+              <p class="hint">หมวดที่ผู้ใช้เลือกจากปุ่ม "หมวด ▾" · ลากที่ ≡ เพื่อเรียงลำดับ · หมวดที่ซ่อนจะไม่ขึ้นในตัวเลือกหมวดและแถวหน้าหลัก (คลิปยังค้นหาเจอ)</p>
+              <form id="addVideoCategoryForm" class="add-form">
+                <input type="text" id="newVideoCategoryName" placeholder="ชื่อหมวดหลักใหม่ เช่น Full Movie" maxlength="40" required />
+                <button type="submit" class="btn primary">+ เพิ่ม</button>
+              </form>
+              <div id="videoCategoryMsg" class="form-msg"></div>
+              <ul id="videoCategoryList" class="vc-list"></ul>
+            </div>
+          <h3 class="cat-section">🏷 แนว <small>ใช้กับวิดีโอ — ติดให้เองจากคำในชื่อ</small></h3>
+          <div id="vcGenre">
+              <p class="hint">ระบบติดแนวให้เองจาก <b>คำในชื่อ</b> เรื่อง/คลิป — เพิ่มคำแล้วของเก่าเข้าแนวทันที ไม่ต้องไล่ติดทีละเรื่อง · แนวที่ปิดจะไม่ขึ้นเป็นชิปในหน้าหมวด · ติดเอง/เอาออกรายเรื่องได้ในแผ่นแก้ไขเรื่อง</p>
+              <form id="addVideoGenreForm" class="add-form">
+                <input type="text" id="newVideoGenreName" placeholder="ชื่อแนวใหม่ เช่น สืบสวน" maxlength="30" required />
+                <button type="submit" class="btn primary">+ เพิ่มแนว</button>
+              </form>
+              <div id="videoGenreMsg" class="form-msg"></div>
+              <ul id="videoGenreList" class="vc-list"></ul>
+            </div>
+          <div id="vcMenu" class="vc-menu" hidden></div>
         </div>
 
         <div id="userManageSubview" class="subview">
@@ -343,7 +368,7 @@
         </div>
 
         <div id="videoManageSubview" class="subview">
-          <div id="vmSeg" class="seg vm-seg">
+          <div id="vmSeg" class="seg vm-seg" hidden>
             <button data-vm-tab="clips">คลิป</button>
             <button data-vm-tab="playlists" class="active">Playlist</button>
             <button data-vm-tab="cats">หมวด</button>
@@ -360,29 +385,10 @@
             <ul id="playlistManageList" class="settings-list vm-list"></ul>
           </div>
           <div id="vmCats" class="vm-pane" hidden>
-            <div id="vcSeg" class="seg vc-seg">
+            <div id="vcSeg" class="seg vc-seg" hidden>
               <button data-vc-tab="main" class="active">หมวดหลัก</button>
               <button data-vc-tab="genre">แนว (หมวดย่อย)</button>
             </div>
-            <div id="vcMain">
-              <p class="hint">หมวดที่ผู้ใช้เลือกจากปุ่ม "หมวด ▾" · ลากที่ ≡ เพื่อเรียงลำดับ · หมวดที่ซ่อนจะไม่ขึ้นในตัวเลือกหมวดและแถวหน้าหลัก (คลิปยังค้นหาเจอ)</p>
-              <form id="addVideoCategoryForm" class="add-form">
-                <input type="text" id="newVideoCategoryName" placeholder="ชื่อหมวดหลักใหม่ เช่น Full Movie" maxlength="40" required />
-                <button type="submit" class="btn primary">+ เพิ่ม</button>
-              </form>
-              <div id="videoCategoryMsg" class="form-msg"></div>
-              <ul id="videoCategoryList" class="vc-list"></ul>
-            </div>
-            <div id="vcGenre" hidden>
-              <p class="hint">ระบบติดแนวให้เองจาก <b>คำในชื่อ</b> เรื่อง/คลิป — เพิ่มคำแล้วของเก่าเข้าแนวทันที ไม่ต้องไล่ติดทีละเรื่อง · แนวที่ปิดจะไม่ขึ้นเป็นชิปในหน้าหมวด · ติดเอง/เอาออกรายเรื่องได้ในแผ่นแก้ไขเรื่อง</p>
-              <form id="addVideoGenreForm" class="add-form">
-                <input type="text" id="newVideoGenreName" placeholder="ชื่อแนวใหม่ เช่น สืบสวน" maxlength="30" required />
-                <button type="submit" class="btn primary">+ เพิ่มแนว</button>
-              </form>
-              <div id="videoGenreMsg" class="form-msg"></div>
-              <ul id="videoGenreList" class="vc-list"></ul>
-            </div>
-            <div id="vcMenu" class="vc-menu" hidden></div>
           </div>
           <div id="vmAdd" class="vm-pane" hidden>
             <div class="vm-card">

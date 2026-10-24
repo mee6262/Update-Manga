@@ -1749,3 +1749,27 @@ button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%
 /* ตัวกรองหมวดในรายการรวม: dropdown หน้าตาเหมือนชิป */
 .chip-select { -webkit-appearance: none; appearance: none; flex: 0 0 auto; max-width: 190px; font: inherit; font-size: 0.85rem; color: var(--text); background: var(--bg-card) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E") no-repeat right 10px center; border: 1px solid var(--border); border-radius: 999px; padding: 6px 26px 6px 12px; text-overflow: ellipsis; }
 .chip-select.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+/* เลือกหลายอัน: วงกลมหน้าแถว + แถบสั่งงานติดล่าง (sticky ไม่ใช่ fixed) */
+#settingsList.selecting .settings-row[data-id]::before { content: ""; flex: none; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border); align-self: center; }
+#settingsList.selecting .settings-row.selected::before { content: "✓"; background: var(--accent); border-color: var(--accent); color: #fff; font-size: 0.8rem; font-weight: 700; display: grid; place-items: center; }
+#settingsList.selecting .settings-row.selected { border-color: var(--accent); }
+#settingsList.selecting .settings-row .chev { display: none; }
+#settingsList .settings-row[data-id] { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.content-select-bar { position: sticky; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 10px); z-index: 25; margin-top: 10px; background: var(--text); color: var(--bg); border-radius: 16px; padding: 10px 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+.content-select-bar[hidden] { display: none; }
+.content-select-bar .sel-top { display: flex; align-items: center; gap: 12px; font-size: 0.88rem; margin-bottom: 8px; }
+.content-select-bar .sel-top b { flex: 1; }
+.content-select-bar .link-btn { color: var(--accent); }
+.content-select-bar .sel-acts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.content-select-bar .sel-acts button { background: none; border: 0; color: inherit; font: inherit; font-size: 0.74rem; cursor: pointer; padding: 2px 0; }
+.content-select-bar .sel-acts button b { display: block; font-size: 1.2rem; font-weight: 400; }
+.content-select-bar .sel-acts button:disabled { opacity: 0.35; }
+.content-select-bar .sel-acts .danger { color: #ff8a8e; }
+#contentSelectBtn[hidden] { display: none; }
+/* หมวด & แนว หน้าเดียว */
+.cat-section { margin: 22px 2px 8px; font-size: 1rem; }
+.cat-section small { font-weight: 400; color: var(--text-dim); font-size: 0.78rem; margin-left: 4px; }
+#catNocatCard:empty { display: none; }
+#categoryManageSubview > .cat-section:first-of-type { margin-top: 12px; }
+#adminPage.searching #contentSelectBar:not([hidden]) { display: block; } /* ค้นแล้วเลือกจากผลค้นหาได้ */

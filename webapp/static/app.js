@@ -4140,7 +4140,7 @@ function renderSettings() {  const list = el("#settingsList");
   const items = ofType.filter((x) => mangaAdminFilter === "all" ? true
     : hostFilter ? x.kind === "manga" && mangaHosts(x.item).includes(hostFilter) : x[mangaAdminFilter])
     .sort((a, b) => (b.time || "").localeCompare(a.time || ""));
-  const signature = JSON.stringify([contentType, contentCat, mangaAdminFilter, Math.floor(Date.now() / 600000), Object.values(hosts).map((h) => [h.host, h.down, h.error]),
+  const signature = JSON.stringify([selectMode, contentType, contentCat, mangaAdminFilter, Math.floor(Date.now() / 600000), Object.values(hosts).map((h) => [h.host, h.down, h.error]),
     items.map((x) => [x.kind, x.id, x.name, x.time, x.problem, x.nocat, x.kind === "manga" ? [x.item.latest_chapter, (x.item.sources || []).length, x.item.followers, x.item.cover_url]
       : x.kind === "series" ? [x.item.count, x.item.category_id, x.gaps.length, (x.item.tracks || []).map((t) => [t.follow, t.error])] : [x.item.category_id, x.item.title]])]);
   if (signature === lastSettingsSignature) return;
@@ -4152,6 +4152,8 @@ function renderSettings() {  const list = el("#settingsList");
   list.innerHTML = (problemItems.length
     ? heading(`มีปัญหา · ${problemItems.length}`) + problemItems.map((x) => contentRowHtml(x, hosts)).join("") + heading(`อัปเดตล่าสุด · ${rest.length}`)
     : "") + rest.map((x) => contentRowHtml(x, hosts)).join("") || '<li class="hint">ไม่มีรายการตามตัวกรองนี้</li>';
+  list.classList.toggle("selecting", selectMode);
+  if (selectMode) els("#settingsList > li.settings-row[data-id]").forEach((r) => r.classList.toggle("selected", selectedItems.has(`${r.dataset.kind}:${r.dataset.id}`)));
 }
 
 function initSettingsClicks() {
@@ -4211,6 +4213,7 @@ function mangaHasBadHost(m, hosts) {
 }
 
 function closeMangaSheet() {
+  delete el("#mangaSheet").dataset.bulk;
   mangaSheetId = null;
   videoSheetKey = null;
   el("#mangaSheet").hidden = true;
@@ -4221,6 +4224,7 @@ function openMangaSheet(id) {
   if (!m) return closeMangaSheet();
   mangaSheetId = id;
   videoSheetKey = null;
+  delete el("#mangaSheet").dataset.bulk;
   const hosts = hostStatusMap();
   const urls = (m.sources || []).map((s) => s.url).filter(Boolean);
   const cats = new Set(m.categories || []);
@@ -4287,6 +4291,7 @@ async function saveMangaSources(m, urls) {
 
 async function mangaSheetClick(e) {
   if (e.target === el("#mangaSheet")) return closeMangaSheet(); // แตะพื้นหลัง
+  if (el("#mangaSheet").dataset.bulk) return bulkSheetClick(e);
   if (videoSheetKey) return videoSheetClick(e);
   const m = state.catalog.find((x) => x.id === mangaSheetId);
   if (!m) return;
@@ -4394,6 +4399,7 @@ function openSeriesSheet(id) {
   const p = playlistById(id);
   if (!p) return closeMangaSheet();
   mangaSheetId = null;
+  delete el("#mangaSheet").dataset.bulk;
   videoSheetKey = `pl:${id}`;
   const eps = allPlaylistEpisodes(id);
   const gaps = playlistGaps(id);
@@ -4449,6 +4455,7 @@ function openClipSheet(id) {
   const v = state.videos.find((x) => x.id === id);
   if (!v) return closeMangaSheet();
   mangaSheetId = null;
+  delete el("#mangaSheet").dataset.bulk;
   videoSheetKey = `v:${id}`;
   const dur = Number(v.duration_seconds) || 0;
   el("#mangaSheetBody").innerHTML = `
@@ -4554,6 +4561,235 @@ async function videoSheetSubmit(e) {
     toast("เปลี่ยนชื่อแล้ว");
   } catch (err) { toast(err.message || "บันทึกไม่สำเร็จ", { error: true }); }
   return true;
+}
+
+// ---------- เลือกหลายอัน (รายการรวม): กดค้างที่แถว / ปุ่ม "เลือก" → ใส่หมวด · รวมเป็นเรื่อง · รีเฟรช · ลบ ทีเดียว ----------
+let selectMode = false;
+const selectedItems = new Set(); // "manga:<id>" / "series:<id>" / "clip:<id>"
+
+function selKind(key) { return key.slice(0, key.indexOf(":")); }
+function selId(key) { return key.slice(key.indexOf(":") + 1); }
+
+function setSelectMode(on) {
+  selectMode = on;
+  if (!on) selectedItems.clear();
+  lastSettingsSignature = null;
+  renderSettings();
+  renderSelectBar();
+}
+
+function toggleSelected(key, row) {
+  selectedItems.has(key) ? selectedItems.delete(key) : selectedItems.add(key);
+  row?.classList.toggle("selected", selectedItems.has(key));
+  renderSelectBar();
+}
+
+function renderSelectBar() {
+  const bar = el("#contentSelectBar");
+  bar.hidden = !selectMode;
+  el("#contentSelectBtn").hidden = selectMode;
+  if (!selectMode) return;
+  const kinds = [...selectedItems].map(selKind);
+  const n = selectedItems.size;
+  const onlyClips = n >= 2 && kinds.every((k) => k === "clip");
+  const anyManga = kinds.includes("manga");
+  bar.innerHTML = `
+    <div class="sel-top"><b>เลือก ${n} รายการ</b><button class="link-btn" data-sel="all">เลือกทั้งหมดที่แสดง</button><button class="link-btn" data-sel="cancel">ยกเลิก</button></div>
+    <div class="sel-acts">
+      <button data-sel="cat"${n ? "" : " disabled"}><b>🏷</b>ใส่หมวด</button>
+      <button data-sel="merge"${onlyClips ? "" : " disabled"} title="เลือกคลิปเดี่ยว 2 อันขึ้นไป"><b>📁</b>รวมเป็นเรื่อง</button>
+      <button data-sel="refresh"${anyManga ? "" : " disabled"} title="เฉพาะมังงะ"><b>🔄</b>รีเฟรช</button>
+      <button data-sel="delete" class="danger"${n ? "" : " disabled"}><b>🗑</b>ลบ</button>
+    </div>`;
+}
+
+// ทำทีละไม่เกิน 4 คำขอพร้อมกัน แสดงความคืบหน้า
+async function runBulk(keys, fn, label) {
+  let done = 0, failed = 0;
+  const msg = (t) => { const m = el("#mangaSheetMsg"); if (m) m.textContent = t; else toast(t); };
+  const queue = [...keys];
+  await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => {
+    while (queue.length) {
+      const key = queue.shift();
+      try { await fn(key); } catch (e) { failed++; }
+      done++;
+      msg(`${label} ${done}/${keys.length}…`);
+    }
+  }));
+  return { done, failed };
+}
+
+async function afterBulk(text, failed) {
+  await Promise.all([loadCatalog(), loadManga(), loadVideos()]);
+  adminTasksCache && (adminTasksCache.at = 0);
+  closeMangaSheet();
+  setSelectMode(false);
+  toast(failed ? `${text} — ไม่สำเร็จ ${failed} รายการ` : text, { error: !!failed });
+}
+
+function openBulkCatSheet() {
+  const keys = [...selectedItems];
+  const manga = keys.filter((k) => selKind(k) === "manga").length;
+  const video = keys.length - manga;
+  mangaSheetId = null;
+  videoSheetKey = null;
+  el("#mangaSheetBody").innerHTML = `
+    <div class="add-head"><h3>ใส่หมวดให้ ${keys.length} รายการ</h3><button class="link-btn" data-bulk-close>ปิด</button></div>
+    ${manga ? `<div class="ms-title">📚 หมวดมังงะ <small>เพิ่มเข้าหมวดที่เลือก (หมวดเดิมยังอยู่) · ${manga} เรื่อง</small></div>
+      <div class="ms-cats">${state.categories.map((c) => `<button class="video-chip" data-bulk-mcat="${escapeHtml(c.id)}">${escapeHtml(c.name)}</button>`).join("") || '<span class="hint">ยังไม่มีหมวดมังงะ</span>'}</div>` : ""}
+    ${video ? `<div class="ms-title">🎬 หมวดวิดีโอ <small>ตั้งเป็นหมวดนี้ · ${video} รายการ</small></div>
+      <div class="ms-cats">${(state.videoCategories || []).map((c) => `<button class="video-chip" data-bulk-vcat="${escapeHtml(c.id)}">${escapeHtml(c.name)}</button>`).join("")}</div>` : ""}
+    <button class="btn primary add-go" data-bulk-cat-save>บันทึก</button>
+    <div id="mangaSheetMsg" class="form-msg"></div>`;
+  el("#mangaSheet").hidden = false;
+  el("#mangaSheet").dataset.bulk = "1";
+}
+
+function guessSeriesName(titles) {
+  // ส่วนหน้าที่ซ้ำกันของชื่อคลิป (ตัดเลขตอน/ตัวคั่นท้าย) — ไม่เจอใช้ชื่อคลิปแรกตัดเลขตอนออก
+  let prefix = titles[0] || "";
+  for (const t of titles) while (prefix && !t.startsWith(prefix)) prefix = prefix.slice(0, -1);
+  const clean = (s) => s.replace(/(ตอนที่|ตอน|ep\.?|EP)\s*\d+.*$/i, "").replace(/[\s\-–:|#(]+$/, "").trim();
+  return clean(prefix).length >= 3 ? clean(prefix) : clean(titles[0] || "");
+}
+
+function openBulkMergeSheet() {
+  const clips = [...selectedItems].map((k) => state.videos.find((v) => v.id === selId(k))).filter(Boolean);
+  mangaSheetId = null;
+  videoSheetKey = null;
+  el("#mangaSheetBody").innerHTML = `
+    <div class="add-head"><h3>รวม ${clips.length} คลิปเป็นเรื่อง</h3><button class="link-btn" data-bulk-close>ปิด</button></div>
+    <input id="bulkSeriesName" class="add-name" maxlength="80" value="${escapeHtml(guessSeriesName(clips.map((v) => v.title)))}" placeholder="ชื่อเรื่อง (ตรงกับเรื่องที่มี = ต่อท้ายเรื่องนั้น)" />
+    <div class="ms-title">หมวด</div>
+    <div class="ms-cats">${(state.videoCategories || []).map((c) => `<button class="video-chip${clips[0]?.category_id === c.id ? " active" : ""}" data-bulk-vcat="${escapeHtml(c.id)}">${escapeHtml(c.name)}</button>`).join("")}</div>
+    <div class="ms-title">ลำดับตอน <small>เลขตอนจากชื่อคลิป ไม่มีเลข = ตามลำดับนี้</small></div>
+    <div class="ms-group">${clips.map((v, i) => `<div class="ms-row"><span class="set-ic">${i + 1}</span><span class="grow">${escapeHtml(v.title)}</span></div>`).join("")}</div>
+    <button class="btn primary add-go" data-bulk-merge-save>รวมเป็นเรื่อง</button>
+    <div id="mangaSheetMsg" class="form-msg"></div>`;
+  el("#mangaSheet").hidden = false;
+  el("#mangaSheet").dataset.bulk = "1";
+}
+
+async function bulkSheetClick(e) {
+  if (e.target.closest("[data-bulk-close]")) return closeMangaSheet();
+  const mcat = e.target.closest("[data-bulk-mcat]");
+  if (mcat) return mcat.classList.toggle("active");
+  const vcat = e.target.closest("[data-bulk-vcat]");
+  if (vcat) {
+    els("#mangaSheet [data-bulk-vcat]").forEach((b) => b.classList.toggle("active", b === vcat && !b.classList.contains("active")));
+    return;
+  }
+  const keys = [...selectedItems];
+  if (e.target.closest("[data-bulk-cat-save]")) {
+    const mcats = els("#mangaSheet [data-bulk-mcat].active").map((b) => b.dataset.bulkMcat);
+    const vcatId = el("#mangaSheet [data-bulk-vcat].active")?.dataset.bulkVcat;
+    if (!mcats.length && !vcatId) return (el("#mangaSheetMsg").textContent = "เลือกหมวดก่อน");
+    e.target.disabled = true;
+    const { failed } = await runBulk(keys, async (key) => {
+      const kind = selKind(key), id = selId(key);
+      if (kind === "manga" && mcats.length) {
+        const m = state.catalog.find((x) => x.id === id);
+        await sendJSON("PUT", `/api/manga/${id}/categories`, { category_ids: [...new Set([...(m?.categories || []), ...mcats])] });
+      } else if (kind !== "manga" && vcatId) {
+        await sendJSON("PATCH", kind === "series" ? `/api/video-playlists/${encodeURIComponent(id)}` : `/api/videos/${encodeURIComponent(id)}`, { category_id: vcatId });
+      }
+    }, "กำลังใส่หมวด");
+    return afterBulk(`ใส่หมวดให้ ${keys.length} รายการแล้ว`, failed);
+  }
+  if (e.target.closest("[data-bulk-merge-save]")) {
+    const name = el("#bulkSeriesName").value.trim();
+    if (!name) return (el("#mangaSheetMsg").textContent = "ต้องตั้งชื่อเรื่อง");
+    e.target.disabled = true;
+    try {
+      const res = await sendJSON("POST", "/api/video-playlists/from-clips", {
+        name, video_ids: keys.map(selId), category_id: el("#mangaSheet [data-bulk-vcat].active")?.dataset.bulkVcat || null,
+      });
+      await afterBulk(`${res.created ? "สร้างเรื่อง" : "ต่อท้ายเรื่อง"} "${res.name}" (${res.moved} ตอน) แล้ว`, 0);
+      openSeriesSheet(res.id);
+    } catch (err) {
+      e.target.disabled = false;
+      el("#mangaSheetMsg").className = "form-msg error";
+      el("#mangaSheetMsg").textContent = err.message;
+    }
+  }
+}
+
+async function selectBarClick(e) {
+  const act = e.target.closest("[data-sel]")?.dataset.sel;
+  if (!act) return;
+  if (act === "cancel") return setSelectMode(false);
+  if (act === "all") {
+    els("#settingsList > li.settings-row[data-id]:not(.search-miss)").forEach((row) => {
+      selectedItems.add(`${row.dataset.kind}:${row.dataset.id}`);
+      row.classList.add("selected");
+    });
+    return renderSelectBar();
+  }
+  const keys = [...selectedItems];
+  if (act === "cat") return openBulkCatSheet();
+  if (act === "merge") return openBulkMergeSheet();
+  if (act === "refresh") {
+    const manga = keys.filter((k) => selKind(k) === "manga");
+    const { failed } = await runBulk(manga, (key) => fetch(`/api/manga/${selId(key)}/refresh`, { method: "POST" }).then((r) => { if (!r.ok) throw new Error(); }), "กำลังรีเฟรช");
+    return afterBulk(`รีเฟรช ${manga.length} เรื่องแล้ว`, failed);
+  }
+  if (act === "delete") {
+    const count = (k) => keys.filter((x) => selKind(x) === k).length;
+    const parts = [["manga", "มังงะ"], ["series", "ซีรีส์"], ["clip", "คลิป"]].filter(([k]) => count(k)).map(([k, l]) => `${l} ${count(k)}`).join(" · ");
+    const clipsInSeries = keys.filter((k) => selKind(k) === "series").reduce((n, k) => n + (playlistById(selId(k))?.count || 0), 0);
+    if (!(await askConfirm(`ลบ ${keys.length} รายการ (${parts})${clipsInSeries ? `\nรวมคลิปในซีรีส์ ${clipsInSeries} ตอน` : ""}?\nทุกคนจะไม่เห็นอีก กู้คืนไม่ได้`))) return;
+    const { failed } = await runBulk(keys, async (key) => {
+      const kind = selKind(key), id = selId(key);
+      const url = kind === "manga" ? `/api/manga/${id}` : kind === "series" ? `/api/video-playlists/${encodeURIComponent(id)}` : `/api/videos/${encodeURIComponent(id)}`;
+      const res = await fetch(url, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+    }, "กำลังลบ");
+    return afterBulk(`ลบ ${keys.length} รายการแล้ว`, failed);
+  }
+}
+
+// กดค้าง ~0.5 วิ ที่แถว = เข้าโหมดเลือก + เลือกแถวนั้น (คลิกที่ตามมาไม่เปิดแผ่น)
+function initLongPressSelect() {
+  const list = el("#settingsList");
+  let timer = null, startX = 0, startY = 0, suppressUntil = 0;
+  list.addEventListener("pointerdown", (e) => {
+    const row = e.target.closest(".settings-row[data-id]");
+    if (!row || selectMode) return;
+    startX = e.clientX; startY = e.clientY;
+    timer = setTimeout(() => {
+      timer = null;
+      suppressUntil = Date.now() + 600; // คลิกที่ตามมาจากการปล่อยนิ้ว (แถวถูกวาดใหม่ อาจไม่มีคลิกเลย)
+      setSelectMode(true);
+      const again = el(`#settingsList .settings-row[data-kind="${row.dataset.kind}"][data-id="${CSS.escape(row.dataset.id)}"]`);
+      toggleSelected(`${row.dataset.kind}:${row.dataset.id}`, again);
+      navigator.vibrate?.(15);
+    }, 500);
+  });
+  const cancel = (e) => {
+    if (timer && (e.type !== "pointermove" || Math.hypot(e.clientX - startX, e.clientY - startY) > 8)) { clearTimeout(timer); timer = null; }
+  };
+  ["pointerup", "pointercancel", "pointermove", "scroll"].forEach((t) => list.addEventListener(t, cancel, { passive: true }));
+  list.addEventListener("contextmenu", (e) => { if (e.target.closest(".settings-row")) e.preventDefault(); });
+  list.addEventListener("click", (e) => {
+    if (Date.now() < suppressUntil) { suppressUntil = 0; e.stopImmediatePropagation(); e.preventDefault(); return; }
+    if (!selectMode) return;
+    const row = e.target.closest(".settings-row[data-id]");
+    if (!row) return;
+    e.stopImmediatePropagation();
+    toggleSelected(`${row.dataset.kind}:${row.dataset.id}`, row);
+  }, true);
+  el("#contentSelectBtn").addEventListener("click", () => setSelectMode(true));
+  el("#contentSelectBar").addEventListener("click", selectBarClick);
+}
+
+// หน้า "หมวด & แนว": การ์ดเรื่องที่ยังไม่มีหมวด → รายการกรอง "ไม่มีหมวด" + โหมดเลือก
+function renderNocatCard() {
+  const manga = state.catalog.filter((m) => !(m.categories || []).length).length;
+  const video = (state.videoPlaylists || []).filter((p) => !p.category_id).length + state.videos.filter((v) => !v.playlist_id && !v.category_id).length;
+  el("#catNocatCard").innerHTML = manga || video ? `<div class="admin-task warn">
+      <div class="admin-task-title">${[manga && `มังงะ ${manga}`, video && `วิดีโอ ${video}`].filter(Boolean).join(" · ")} ยังไม่มีหมวด</div>
+      <div class="admin-task-desc">ผู้ใช้จะไม่เจอตอนเลือกดูตามหมวด — เลือกหลายเรื่องแล้วใส่หมวดทีเดียวได้</div>
+      <div class="admin-task-acts"><button class="btn primary" data-nocat-go>เลือกแล้วใส่หมวด</button></div></div>` : "";
 }
 
 // ---------- ＋ เพิ่ม (แอดมิน): วางลิงก์อะไรก็ได้ → เดาชนิด → มังงะดูตัวอย่าง/เช็คซ้ำก่อนเพิ่ม, ที่เหลือส่งต่อฟอร์มเดิม ----------
@@ -6859,7 +7095,7 @@ async function loadCommentManage() {
 }
 
 // ---------- จัดการคลิป (แอดมิน): แท็บ คลิป / Playlist / หมวด / เพิ่ม + แผ่นแก้ไข ----------
-let vmTab = "cats"; // คลิป/Playlist ย้ายไปรายการรวม (เนื้อหา › รายการ) — หน้านี้เหลือหมวด/เพิ่ม
+let vmTab = "add"; // คลิป/Playlist ย้ายไปรายการรวม (เนื้อหา › รายการ) — หน้านี้เหลือหมวด/เพิ่ม
 let vmPlFilter = "updated"; // updated / nocat / similar
 let vmClipFilter = "all"; // all / nocat / external
 
@@ -6974,8 +7210,9 @@ function genreItems() {
 function setVcTab(tab) {
   vcTab = tab;
   els("#vcSeg [data-vc-tab]").forEach((b) => b.classList.toggle("active", b.dataset.vcTab === tab));
-  el("#vcMain").hidden = tab !== "main";
-  el("#vcGenre").hidden = tab !== "genre";
+  // หมวดวิดีโอ + แนว อยู่หน้าเดียวกันแล้ว (หมวด & แนว) — แสดงทั้งคู่เสมอ
+  el("#vcMain").hidden = false;
+  el("#vcGenre").hidden = false;
   closeVcMenu();
 }
 
@@ -7722,6 +7959,8 @@ function initAdminPanels() {
     if (btn.dataset.subtab === "systemManage") loadSystemStatus();
     if (btn.dataset.subtab === "commentManage") loadCommentManage();
     if (btn.dataset.subtab === "videoManage") loadVideos().then(() => { renderVideoManage(); loadPlaylistWatch(); });
+    if (btn.dataset.subtab !== "mangaManage" && selectMode) setSelectMode(false);
+    if (btn.dataset.subtab === "categoryManage") loadVideos().then(() => { renderVideoManage(); renderNocatCard(); });
     if (btn.dataset.subtab === "mangaManage") (state.videoPlaylists?.length ? Promise.resolve() : loadVideos()).then(() => { lastSettingsSignature = null; renderSettings(); });
   }));
   el("#systemRefreshBtn").addEventListener("click", loadSystemStatus);
@@ -7813,6 +8052,7 @@ function goBack() {
   if (!el("#vmSheet").hidden) return closeVmSheet(), true;
   if (!el("#mangaSheet").hidden) return closeMangaSheet(), true;
   if (!el("#addSheet").hidden) return closeAddSheet(), true;
+  if (selectMode && state.tab === "settings") return setSelectMode(false), true;
   if (!el("#installSheet").hidden) return closeInstallSheet(), true;
   if (!el("#videoFormModal").hidden) return showVideoForm(false), true;
   if (!el("#mangaFormModal").hidden) return closeMangaModal(), true;
@@ -7910,6 +8150,13 @@ function init() {
   initSettingsClicks();
   initMangaSheet();
   initAddSheet();
+  initLongPressSelect();
+  el("#catNocatCard").addEventListener("click", (e) => {
+    if (!e.target.closest("[data-nocat-go]")) return;
+    contentCat = "none"; contentType = "all"; mangaAdminFilter = "all";
+    openAdminPage("mangaManage");
+    setSelectMode(true);
+  });
   initChapterListClicks();
   initMangaForm();
   initChapterSearch();

@@ -2842,6 +2842,55 @@ def _store_playlist_items(groups: list[tuple[str, list[dict]]], category_name: s
     return {"added": added, "moved": moved, "thumbs_queued": len(thumbs), "items": items_out}
 
 
+@app.route("/api/video-playlists/from-clips", methods=["POST"])
+@require_admin
+def playlist_from_clips():
+    """เลือกคลิปเดี่ยวหลายอัน → รวมเป็นเรื่อง (ชื่อซ้ำเรื่องที่มี = ต่อท้ายเรื่องนั้น)
+    body: {"name", "video_ids": [...] (ตามลำดับที่เลือก), "category_id"?}
+    เลขตอนจากชื่อคลิป (playlist_parse) ไม่มีเลข = ต่อท้ายตามลำดับที่ส่งมา"""
+    body = request.get_json(force=True, silent=True) or {}
+    name = " ".join(str(body.get("name") or "").split())[:80]
+    ids = [str(i) for i in body.get("video_ids") or []]
+    if not name:
+        return jsonify({"error": "ต้องตั้งชื่อเรื่อง"}), 400
+    if not ids:
+        return jsonify({"error": "ยังไม่ได้เลือกคลิป"}), 400
+    now = datetime.now(timezone.utc).isoformat()
+    with storage.state_lock:
+        playlists = storage.load_video_playlists(fresh=True)
+        videos = storage.load_videos(fresh=True)
+        by_id = {v["id"]: v for v in videos}
+        clips = [by_id.get(i) for i in ids]
+        if any(c is None for c in clips):
+            return jsonify({"error": "ไม่พบบางคลิป (อาจถูกลบไปแล้ว)"}), 404
+        if any(c.get("playlist_id") for c in clips):
+            return jsonify({"error": "มีคลิปที่อยู่ในเรื่องอื่นแล้ว — เลือกเฉพาะคลิปเดี่ยว"}), 400
+        category_id = body.get("category_id") or next((c.get("category_id") for c in clips if c.get("category_id")), None)
+        if category_id and not any(c["id"] == category_id for c in storage.load_video_categories()):
+            return jsonify({"error": "ไม่พบหมวดนี้"}), 400
+        playlist = next((p for p in playlists if p["name"] == name), None)
+        created = not playlist
+        if created:
+            playlist = {"id": secrets.token_hex(4), "name": name, "created_at": now, "fresh": True}
+            playlists.append(playlist)
+        if category_id and (created or not playlist.get("category_id")):
+            playlist["category_id"] = category_id
+        last = max((v.get("episode") or 0 for v in videos if v.get("playlist_id") == playlist["id"]), default=0)
+        used = {v.get("episode") for v in videos if v.get("playlist_id") == playlist["id"]}
+        for clip in clips:
+            parsed = playlist_parse.parse_episode(clip.get("title") or "")
+            episode = float(parsed[1]) if parsed and parsed[1] is not None and float(parsed[1]) not in used else None
+            if episode is None:
+                last = float(int(max([last, *[e for e in used if e]] or [0]))) + 1
+                episode = last
+            used.add(episode)
+            clip["playlist_id"] = playlist["id"]
+            clip["episode"] = episode
+        storage.save_video_playlists(playlists)
+        storage.save_videos(videos)
+    return jsonify({"ok": True, "id": playlist["id"], "name": name, "created": created, "moved": len(clips)})
+
+
 @app.route("/api/video-playlists/import", methods=["POST"])
 @require_admin
 def import_video_playlists():
