@@ -2711,6 +2711,8 @@ def _public_playlists(videos: list[dict], saved: dict | None = None) -> list[dic
             "genres_add": playlist.get("genres_add") or [],
             "genres_remove": playlist.get("genres_remove") or [],
             "saved_at": (saved or {}).get(f"playlist:{playlist['id']}"),  # บันทึกทั้งเรื่องไว้ในคลังวิดีโอ
+            # กระดิ่ง (แบบ YouTube): อยู่ในคลัง = แจ้งเตือนตอนใหม่ เว้นแต่ปิดกระดิ่งไว้ (คีย์ "mute:<id>")
+            "notify": bool((saved or {}).get(f"playlist:{playlist['id']}")) and f"mute:{playlist['id']}" not in (saved or {}),
             "created_at": playlist.get("created_at"),
             # สร้างจากตอนใหม่ (เช็คเพจ/วางลิงก์) = ป้าย NEW ได้; ชุดที่นำเข้าทีเดียวทั้งคลังไม่นับว่าเรื่องใหม่
             "is_fresh": bool(playlist.get("fresh")),
@@ -2948,8 +2950,28 @@ def save_playlist_bookmark(playlist_id):
             saved.setdefault(key, datetime.now(timezone.utc).isoformat())
         else:
             saved.pop(key, None)
+            saved.pop(f"mute:{playlist_id}", None)
         storage.save_video_saved(username or "local", saved)
-    return jsonify({"saved_at": saved.get(key)})
+    return jsonify({"saved_at": saved.get(key), "notify": bool(saved.get(key)) and f"mute:{playlist_id}" not in saved})
+
+
+@app.route("/api/video-playlists/<playlist_id>/notify", methods=["POST"])
+def playlist_notify(playlist_id):
+    """กระดิ่งของเรื่องในคลัง: ปิด = ยังอยู่ในคลังแต่ไม่แจ้งเตือนตอนใหม่ (ต้องอยู่ในคลังก่อน แบบปุ่มกระดิ่งของ YouTube)"""
+    username = current_username()
+    if not username and storage.load_users():
+        return jsonify({"error": "unauthorized"}), 401
+    want = bool((request.get_json(force=True, silent=True) or {}).get("on"))
+    with storage.state_lock:
+        saved = storage.load_video_saved(username or "local", fresh=True)
+        if f"playlist:{playlist_id}" not in saved:
+            return jsonify({"error": "เพิ่มเรื่องนี้เข้าคลังก่อน"}), 400
+        if want:
+            saved.pop(f"mute:{playlist_id}", None)
+        else:
+            saved[f"mute:{playlist_id}"] = datetime.now(timezone.utc).isoformat()
+        storage.save_video_saved(username or "local", saved)
+    return jsonify({"notify": want})
 
 
 @app.route("/api/video-playlists/<playlist_id>", methods=["PATCH"])
@@ -3077,6 +3099,8 @@ def merge_video_playlist(playlist_id):
             if src_key in saved:
                 saved.setdefault(dst_key, saved[src_key])
                 del saved[src_key]
+                if f"mute:{playlist_id}" in saved:
+                    saved.setdefault(f"mute:{target_id}", saved.pop(f"mute:{playlist_id}"))
                 storage.save_video_saved(u, saved)
     return jsonify({"ok": True, "moved": moved, "into": target["name"]})
 
@@ -3093,12 +3117,13 @@ def delete_video_playlist(playlist_id):
         videos = storage.load_videos(fresh=True)
         gone = {v["id"] for v in videos if v.get("playlist_id") == playlist_id}
         saved_key = f"playlist:{playlist_id}"
+        mute_key = f"mute:{playlist_id}"
         storage.save_videos([v for v in videos if v["id"] not in gone])
         for u in [*storage.all_usernames(), "local"]:
             for load, save in ((storage.load_video_progress, storage.save_video_progress),
                                (storage.load_video_saved, storage.save_video_saved)):
                 data = load(u, fresh=True)
-                drop = gone | {saved_key}
+                drop = gone | {saved_key, mute_key}
                 if drop & data.keys():
                     save(u, {k: v for k, v in data.items() if k not in drop})
         comments = storage.load_comments(fresh=True)
@@ -3618,7 +3643,8 @@ def _notify_new_episodes(playlist_id: str, name: str, added: list[dict]):
     text = f"{name} ตอนที่ {newest['episode']:g}{lang} มาแล้ว" + (f" (+{len(added) - 1} ตอน)" if len(added) > 1 else "")
     url = f"/?playlist={playlist_id}"
     for username in storage.all_usernames():
-        if f"playlist:{playlist_id}" in storage.load_video_saved(username):
+        saved = storage.load_video_saved(username)
+        if f"playlist:{playlist_id}" in saved and f"mute:{playlist_id}" not in saved:
             _add_notification(username, {"type": "video", "target": f"playlist:{playlist_id}", "text": text, "url": url})
             webpush.send_to_user(username, {"title": name, "body": text, "tag": f"playlist-{playlist_id}", "url": url})
 

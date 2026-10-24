@@ -1075,8 +1075,23 @@ async function togglePlaylistSave(id, btn) {
   try {
     const data = await sendJSON("POST", `/api/video-playlists/${encodeURIComponent(id)}/save`, { saved: !p.saved_at });
     p.saved_at = data.saved_at || null;
+    p.notify = !!data.notify;
+    if (p.saved_at) toast("เพิ่มเข้าคลังแล้ว · ตอนใหม่มาจะแจ้งเตือน (ปิดได้ที่ 🔔)");
     renderVideos();
   } catch (e) { toast(e.message || "บันทึกไม่สำเร็จ", { error: true }); btn.disabled = false; }
+}
+
+// กระดิ่งของเรื่องในคลัง (แบบ YouTube: อยู่ในคลังแล้วค่อยเปิด/ปิดแจ้งเตือนได้)
+async function togglePlaylistNotify(id, btn) {
+  const p = playlistById(id);
+  if (!p || !p.saved_at) return;
+  btn.disabled = true;
+  try {
+    const data = await sendJSON("POST", `/api/video-playlists/${encodeURIComponent(id)}/notify`, { on: !p.notify });
+    p.notify = !!data.notify;
+    toast(p.notify ? "เปิดแจ้งเตือนตอนใหม่แล้ว" : "ปิดแจ้งเตือนแล้ว · เรื่องยังอยู่ในคลัง");
+    renderVideos();
+  } catch (e) { toast(e.message || "ตั้งค่าแจ้งเตือนไม่สำเร็จ", { error: true }); btn.disabled = false; }
 }
 
 // เลื่อนใกล้ท้ายหน้าหมวด: เติมการ์ดในตาราง (วาดเฉพาะตาราง แถวด้านบนไม่เด้งกลับต้นแถว)
@@ -1283,6 +1298,7 @@ function openPlaylist(playlistId) {
   document.body.style.overflow = "hidden";
   renderPlaylistView();
   el("#playlistBody").scrollTop = 0;
+  el("#playlistTop")?.classList.remove("solid");
 }
 
 function closePlaylist() {
@@ -1301,11 +1317,49 @@ function episodeTileHtml(v, playlist, { fresh = false, playing = false, na = fal
   return `<button class="${cls}" data-episode-id="${escapeHtml(v.id)}"${na ? ` data-na-lang="${escapeHtml(v.lang || "")}"` : ""} title="${escapeHtml(na ? `ยังไม่มีในภาษาที่เลือก (มี${LANG_LABEL[v.lang] || "ภาษาอื่น"})` : sub || episodeLabel(v))}"><span class="ep-num">${Number(v.episode)}</span>${sub ? `<span class="ep-sub">${escapeHtml(sub)}</span>` : ""}${done ? '<span class="ep-check" aria-label="ดูแล้ว">✓</span>' : ""}${fresh ? '<span class="ep-new">NEW</span>' : ""}${pos > 0 && dur > 0 ? `<span class="ep-pg" style="width:${Math.min(100, (pos / dur) * 100).toFixed(1)}%"></span>` : ""}</button>`;
 }
 
+// หน้าเรื่อง: ตอนแบบตารางเลข / รายการมีภาพ (จำต่อเครื่อง)
+const EP_VIEW_KEY = "videoEpView";
+function epViewMode() {
+  try { return localStorage.getItem(EP_VIEW_KEY) === "list" ? "list" : "grid"; } catch (e) { return "grid"; }
+}
+
+function minutesText(sec) {
+  return `${Math.max(1, Math.round(sec / 60))} นาที`;
+}
+
+// ชื่อตอนที่แสดงได้ (ตัดชื่อที่ซ้ำกับป้ายตอน เช่น "ซีซั่น 2 - ตอนที่ 02 [ซับไทย]")
+function episodeNameShown(v, playlist) {
+  const sub = episodeSubtitle(v, playlist.name);
+  return sub && !/ตอน|ep\.?\s*\d/i.test(sub) ? sub : "";
+}
+
+// แถวตอนแบบมีภาพ: ภาพ + หลอดดูค้าง · ตอนที่ · ความยาว/เหลือ · ✓ ดูจบ · NEW
+function episodeRowHtml(v, playlist, { fresh = false, na = false } = {}) {
+  const { watched_at, pos, dur } = episodeProgress(v);
+  const done = watched_at && !pos;
+  const len = Number(v.duration_seconds) || dur;
+  const name = episodeNameShown(v, playlist);
+  const meta = na ? `ยังไม่มี${LANG_LABEL[seriesLang(playlist)] || "ในภาษานี้"} · มี${LANG_LABEL[v.lang] || "ภาษาอื่น"}`
+    : [len ? minutesText(len) : "", pos > 0 && len ? `เหลือ ${minutesText(len - pos)}` : ""].filter(Boolean).join(" · ");
+  const cls = ["sp-row", pos > 0 ? "cur" : "", done ? "done" : "", na ? "na" : ""].filter(Boolean).join(" ");
+  return `<button class="${cls}" data-episode-id="${escapeHtml(v.id)}"${na ? ` data-na-lang="${escapeHtml(v.lang || "")}"` : ""}>
+    <span class="sp-row-thumb">${thumbHtml(v.thumbnail_url || playlist.thumbnail_url)}${pos > 0 ? '<span class="sp-row-pill">▶ ดูค้าง</span>' : ""}${pos > 0 && len ? `<span class="sp-row-bar"><span style="width:${Math.min(100, (pos / len) * 100).toFixed(1)}%"></span></span>` : ""}</span>
+    <span class="sp-row-info"><b>ตอนที่ ${Number(v.episode)}</b>${name ? `<small class="sp-row-name">${escapeHtml(name)}</small>` : ""}<small>${fresh ? '<span class="sp-new">NEW</span> ' : ""}${escapeHtml(meta)}</small></span>
+    ${done ? '<span class="sp-row-check" aria-label="ดูแล้ว">✓</span>' : ""}</button>`;
+}
+
+// ไอคอนกระดิ่ง (เปิด = ทึบ)
+function bellIcon(on, size = 20) {
+  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true" fill="${on ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M6 10a6 6 0 0 1 12 0v4l2 3H4l2-3z"/><path d="M10 20a2 2 0 0 0 4 0" fill="none"/>${on ? "" : '<path d="M4 4l16 16" />'}</svg>`;
+}
+
 function renderPlaylistView() {
   const playlist = playlistById(openPlaylistId);
   const episodes = playlistEpisodes(openPlaylistId);
   if (!playlist || !episodes.length) return closePlaylist();
   el("#playlistTitle").textContent = playlist.name;
+  const moreBtn = el("#playlistMoreBtn"); // HTML เก่าที่ยังแคชอยู่ก่อนรีสตาร์ทไม่มีปุ่มนี้
+  if (moreBtn) moreBtn.hidden = !state.currentUser.is_admin;
   const lang = seriesLang(playlist);
   const resume = playlistResume(episodes);
   const started = episodes.some((v) => episodeProgress(v).watched_at);
@@ -1313,9 +1367,10 @@ function renderPlaylistView() {
   const fresh = new Set(newEpisodes(playlist, episodes).map((v) => v.id));
   // ช่องตอน = ทุกเลขตอนที่มีในภาษาใดก็ได้ — ภาษาที่เลือกยังไม่มี (พากย์มักออกช้ากว่าซับ) เป็นกรอบประ
   const mine = new Map(episodes.map((v) => [`${v.season || 1}|${Number(v.episode)}`, v]));
+  const all = allPlaylistEpisodes(openPlaylistId);
   const slots = [];
   const seen = new Set();
-  for (const v of allPlaylistEpisodes(openPlaylistId)) {
+  for (const v of all) {
     const key = `${v.season || 1}|${Number(v.episode)}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -1323,39 +1378,57 @@ function renderPlaylistView() {
   }
   slots.sort((a, b) => (a.v.season || 1) - (b.v.season || 1) || a.v.episode - b.v.episode);
   const seasons = [...new Set(slots.map((x) => x.v.season || 1))];
-  let chips = "";
+  let tabs = "";
   let shown;
   if (seasons.length > 1) {
     if (!seasons.includes(playlistSeason)) playlistSeason = resume.season || 1;
-    chips = seasons.map((n) => `<button class="video-chip${n === playlistSeason ? " active" : ""}" data-pl-season="${n}">${escapeHtml(seasonLabel(playlist, n))}</button>`).join("");
+    tabs = seasons.map((n) => `<button class="sp-tab${n === playlistSeason ? " active" : ""}" data-pl-season="${n}">${escapeHtml(seasonLabel(playlist, n))}</button>`).join("");
     shown = slots.filter((x) => (x.v.season || 1) === playlistSeason);
     if (playlistDesc) shown.reverse();
   } else {
     const ordered = playlistDesc ? [...slots].reverse() : slots;
     const ranges = Math.ceil(ordered.length / EP_RANGE);
     playlistRange = Math.min(playlistRange, ranges - 1);
-    chips = ranges > 1 ? Array.from({ length: ranges }, (_, i) => {
+    tabs = ranges > 1 ? Array.from({ length: ranges }, (_, i) => {
       const part = ordered.slice(i * EP_RANGE, (i + 1) * EP_RANGE);
-      return `<button class="video-chip${i === playlistRange ? " active" : ""}" data-ep-range="${i}">${Number(part[0].v.episode)}${part.length > 1 ? `–${Number(part[part.length - 1].v.episode)}` : ""}</button>`;
+      return `<button class="sp-tab${i === playlistRange ? " active" : ""}" data-ep-range="${i}">${Number(part[0].v.episode)}${part.length > 1 ? `–${Number(part[part.length - 1].v.episode)}` : ""}</button>`;
     }).join("") : "";
     shown = ordered.slice(playlistRange * EP_RANGE, (playlistRange + 1) * EP_RANGE);
   }
-  const tiles = shown.map((x) => episodeTileHtml(x.v, playlist, { fresh: fresh.has(x.v.id), na: x.na })).join("");
-  const langSeg = !lang && seriesLangs(playlist).length === 1
-    ? `<div class="pl-lang-one">${seriesLangs(playlist).map((l) => `<span class="series-lang">${LANG_LABEL[l]}</span>`).join("")}<span>มีภาษาเดียว</span></div>`
-    : lang ? `<div class="pl-lang" role="tablist">${seriesLangs(playlist).map((l) =>
-    `<button class="${l === lang ? "active" : ""}" data-pl-lang="${l}" role="tab" aria-selected="${l === lang}">${LANG_LABEL[l] || l}</button>`).join("")}</div>` : "";
-  const resumeWhere = `${episodeLabel(resume)}${lang ? ` · ${LANG_LABEL[lang]}` : ""}`;
-  el("#playlistBody").innerHTML = `<div class="pl-cover">${thumbHtml(resume.thumbnail_url || playlist.thumbnail_url)}${ytBadge(playlist)}${playlistBadge(playlist, episodes)}</div>
-    <h2 class="pl-name">${escapeHtml(playlist.name)}</h2>
-    <div class="pl-meta">${seasons.length > 1 ? `${seasons.length} ซีซั่น · ` : ""}${episodes.length} ตอน · อัปเดต ${timeAgo(playlist.updated_at, "เมื่อสักครู่")} · ดูไป ${watched}/${episodes.length}</div>
-    <div class="lib-bar pl-bar"><span style="width:${((watched / episodes.length) * 100).toFixed(1)}%"></span></div>
+  const view = epViewMode();
+  const items = shown.map((x) => view === "list"
+    ? episodeRowHtml(x.v, playlist, { fresh: fresh.has(x.v.id), na: x.na })
+    : episodeTileHtml(x.v, playlist, { fresh: fresh.has(x.v.id), na: x.na })).join("");
+  const naCount = shown.filter((x) => x.na).length;
+  const langs = seriesLangs(playlist);
+  const langSeg = !lang && langs.length === 1
+    ? `<div class="pl-lang-one">${langs.map((l) => `<span class="series-lang">${LANG_LABEL[l]}</span>`).join("")}<span>มีภาษาเดียว</span></div>`
+    : lang ? `<div class="sp-lang" role="tablist">${langs.map((l) =>
+    `<button class="${l === lang ? "active" : ""}" data-pl-lang="${l}" role="tab" aria-selected="${l === lang}">${LANG_LABEL[l] || l} <small>${all.filter((v) => v.lang === l).length}</small></button>`).join("")}</div>` : "";
+  const rp = episodeProgress(resume);
+  const rlen = Number(resume.duration_seconds) || rp.dur;
+  const resumeSub = [lang ? LANG_LABEL[lang] : "", rp.pos > 0 && rlen ? `เหลือ ${minutesText(rlen - rp.pos)}` : ""].filter(Boolean).join(" · ");
+  const saved = !!playlist.saved_at;
+  const cover = thumbHtml(resume.thumbnail_url || playlist.thumbnail_url);
+  const cat = playlist.category_id ? videoCategoryName(playlist.category_id) : "";
+  const tags = [cat ? escapeHtml(cat) : "", ...itemGenres(playlist).slice(0, 3).map((g) => `#${escapeHtml(g.name)}`)]
+    .filter(Boolean).map((t) => `<span>${t}</span>`).join("");
+  el("#playlistBody").innerHTML = `<div class="sp-hero">${cover}</div>
+    <div class="sp-info"><div class="sp-poster">${thumbHtml(playlist.thumbnail_url || resume.thumbnail_url)}${playlistBadge(playlist, episodes)}</div>
+      <div class="sp-head"><h2 class="sp-name">${escapeHtml(playlist.name)}</h2>
+        <div class="sp-meta">${seasons.length > 1 ? `${seasons.length} ซีซั่น · ` : ""}${episodes.length} ตอน · อัปเดต ${timeAgo(playlist.updated_at, "เมื่อสักครู่")}</div>
+        <div class="sp-tags">${tags}${ytBadge(playlist)}</div></div></div>
     ${langSeg}
+    <div class="sp-actions"><button class="btn primary sp-resume" data-episode-id="${escapeHtml(resume.id)}"><b>▶ ${started ? "ดูต่อ" : "เริ่มดู"} ${escapeHtml(episodeLabel(resume))}</b>${resumeSub ? `<small>${escapeHtml(resumeSub)}</small>` : ""}</button>
+      <button class="sp-act${saved ? " on" : ""}" data-save-playlist="${escapeHtml(playlist.id)}" title="${saved ? "อยู่ในคลังของฉันแล้ว — กดเพื่อเอาออก" : "เพิ่มเข้าคลังของฉัน"}">${libraryIcon(saved, 20)}<span>${saved ? "ในคลัง" : "คลัง"}</span></button>
+      ${saved ? `<button class="sp-act${playlist.notify ? " on" : ""}" data-pl-notify="${escapeHtml(playlist.id)}" title="${playlist.notify ? "แจ้งเตือนเมื่อมีตอนใหม่ — กดเพื่อปิด" : "ปิดแจ้งเตือนอยู่ — กดเพื่อเปิด"}">${bellIcon(playlist.notify)}<span>${playlist.notify ? "แจ้งเตือน" : "ปิดเตือน"}</span></button>` : ""}</div>
+    <div class="sp-progress"><small>ดูไป ${watched}/${episodes.length} ตอน</small><div class="lib-bar"><span style="width:${((watched / episodes.length) * 100).toFixed(1)}%"></span></div></div>
     ${playlist.provider === "anifume" || playlist.provider === "fairyanime" ? `<div class="hint pl-hint">⚠️ ${frameLimits(playlist.provider)}</div>` : ""}
-    <div class="pl-actions"><button class="btn primary" data-episode-id="${escapeHtml(resume.id)}">▶ ${started ? "ดูต่อ" : "เริ่มดู"} ${resumeWhere}</button>${playlistSaveButton(playlist)}</div>
-    <div class="pl-controls">${chips}<button class="video-chip" data-ep-sort>${playlistDesc ? "ล่าสุดก่อน" : "ตอนแรกก่อน"} ⇅</button></div>
-    <div class="ep-grid">${tiles}</div>
-    ${seriesLangs(playlist).length > 1 ? '<div class="hint pl-hint">กรอบประ = ตอนนี้ยังไม่มีในภาษาที่เลือก · ดูถึงไหนนับรวมทั้งพากย์และซับ</div>' : ""}`;
+    <div class="sp-tabs">${tabs}<span class="grow"></span><button class="sp-sort" data-ep-sort>${playlistDesc ? "ล่าสุดก่อน" : "ตอนแรกก่อน"} ⇅</button></div>
+    <div class="sp-viewbar"><small>${shown.length} ตอน${naCount ? ` · ยังไม่มี${(LANG_LABEL[lang] || "").replace("ไทย", "")} ${naCount} ตอน` : ""}</small>
+      <div class="sp-switch" role="tablist"><button class="${view === "grid" ? "active" : ""}" data-ep-view="grid">▦ เลข</button><button class="${view === "list" ? "active" : ""}" data-ep-view="list">☰ ภาพ</button></div></div>
+    <div class="${view === "list" ? "sp-list" : "ep-grid sp-grid"}">${items}</div>
+    ${naCount ? `<div class="hint pl-hint">${view === "list" ? "แถวจาง" : "กรอบประ"} = ยังไม่มีในภาษาที่เลือก (แตะแล้วถามว่าดูภาษาอื่นไปก่อนไหม) · ดูถึงไหนนับรวมทั้งพากย์และซับ</div>` : ""}`;
 }
 
 function neighborEpisode(video, step) {
@@ -2672,6 +2745,10 @@ function initVideos() {
   });
   initPlayerMenu();
   el("#playlistClose").addEventListener("click", closePlaylist);
+  el("#playlistBody").addEventListener("scroll", () => {
+    el("#playlistTop")?.classList.toggle("solid", el("#playlistBody").scrollTop > 150);
+  }, { passive: true });
+  el("#playlistMoreBtn")?.addEventListener("click", () => { if (openPlaylistId) openSeriesSheet(openPlaylistId); });
   initVideoInfiniteScroll();
   el("#playlistBody").addEventListener("click", async (event) => {
     const range = event.target.closest("[data-ep-range]")?.dataset.epRange;
@@ -2688,6 +2765,10 @@ function initVideos() {
       return;
     }
     if (event.target.closest("[data-ep-sort]")) { playlistDesc = !playlistDesc; setEpisodeSortDesc(playlistDesc); playlistRange = 0; return renderPlaylistView(); }
+    const epView = event.target.closest("[data-ep-view]")?.dataset.epView;
+    if (epView) { try { localStorage.setItem(EP_VIEW_KEY, epView); } catch (e) { /* ไม่จำก็ได้ */ } return renderPlaylistView(); }
+    const bell = event.target.closest("[data-pl-notify]");
+    if (bell) return togglePlaylistNotify(bell.dataset.plNotify, bell);
     const saveBtn = event.target.closest("[data-save-playlist]");
     if (saveBtn) return togglePlaylistSave(saveBtn.dataset.savePlaylist, saveBtn);
     const id = event.target.closest("[data-episode-id]")?.dataset.episodeId;
