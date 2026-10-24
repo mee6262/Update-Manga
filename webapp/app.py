@@ -3484,12 +3484,48 @@ def anifume_add():
     lang = body.get("lang") if body.get("lang") in ("dub", "sub") else None
     for item in items:
         item.update(provider=site_name, image=image if site.is_image_url(image) else "", lang=lang)
+    if body.get("into_playlist_id"):
+        return _attach_ep_site(body, site_name, name, items, lang, follow_url, username)
     result = _store_playlist_items([(name, items)], category["name"] if category else "", username, move_existing=True,
                                    mark_fresh=True)  # เหมือนเพิ่มเรื่องจาก YouTube
     playlist = next((p for p in storage.load_video_playlists() if p["name"] == name), None)
     if playlist and follow_url:
         _set_anifume_track(playlist["id"], site_name, follow_url, name, lang, bool(body.get("follow", True)))
     return jsonify({"ok": True, "playlist_id": playlist and playlist["id"], "name": name,
+                    "added": result["added"], "moved": result["moved"]})
+
+
+def _attach_ep_site(body: dict, site_name: str, name: str, items: list[dict], lang: str | None,
+                    follow_url: str | None, username: str):
+    """เพิ่มภาคจากเว็บอนิเมะเป็น "แหล่งเสริม" ของเรื่องที่มีอยู่ (เช่น YouTube มีถึงตอน 6 เว็บนี้มีถึง 11)
+    ใช้ชื่อแฝงแบบเดียวกับรวมเรื่อง: "<เว็บ>: <ชื่อภาค>" = ซีซั่นนี้ + บวกเลขตอน — ตอนใหม่ที่เช็คเจอทีหลังเข้าที่เดิมเอง
+    ตอนที่ซ้ำกับของเดิม (ซีซั่น+ตอน+ภาษาเดียวกัน) เก็บไว้เป็นแหล่งสำรอง หน้าเว็บเลือกตัวที่เล่นในแอปได้เป็นหลัก"""
+    try:
+        season = int(body.get("season") or 1)
+        offset = float(body.get("episode_offset") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "ซีซั่น/เลขตอนบวกเพิ่มต้องเป็นตัวเลข"}), 400
+    if not 1 <= season <= 99 or not -10000 <= offset <= 10000:
+        return jsonify({"error": "ซีซั่นหรือเลขตอนบวกเพิ่มเกินช่วง"}), 400
+    alias_name = f"{EP_SITES[site_name].LABEL}: {name}"[:MAX_PLAYLIST_NAME + 20]
+    target_id = str(body["into_playlist_id"])
+    with storage.state_lock:
+        playlists = storage.load_video_playlists(fresh=True)
+        target = next((p for p in playlists if p["id"] == target_id), None)
+        if not target:
+            return jsonify({"error": "ไม่พบเรื่องที่จะเพิ่มเข้า"}), 404
+        clash = next((p for p in playlists if p is not target and (p["name"] == alias_name
+                      or any(a["name"] == alias_name for a in p.get("aliases", [])))), None)
+        if clash:
+            return jsonify({"error": f'ภาคนี้ผูกกับเรื่อง "{clash["name"]}" อยู่แล้ว'}), 409
+        aliases = [a for a in target.get("aliases", []) if a["name"] != alias_name]
+        aliases.append({"name": alias_name, "season": season, "lang": None, "episode_offset": offset})
+        target["aliases"] = aliases
+        storage.save_video_playlists(playlists)
+    result = _store_playlist_items([(alias_name, items)], "", username, move_existing=True)
+    if follow_url:
+        _set_anifume_track(target_id, site_name, follow_url, alias_name, lang, bool(body.get("follow", True)))
+    return jsonify({"ok": True, "playlist_id": target_id, "name": target["name"], "alias": alias_name,
                     "added": result["added"], "moved": result["moved"]})
 
 

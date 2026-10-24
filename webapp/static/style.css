@@ -2044,3 +2044,4 @@ button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%
 .video-player.mini .skel-player { width: 128px; height: 72px; aspect-ratio: auto; }
 .ms-added { flex: none; color: var(--accent); font-size: 0.82rem; font-weight: 700; white-space: nowrap; }
 .af-langs { display: flex; gap: 6px; margin: 10px 0 2px; flex-wrap: wrap; }
+.af-into { margin-top: 10px; } .af-into-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; } .af-into-opts .hint { grid-column: 1 / -1; margin: 0; } .af-into-opts[hidden], #afNewOnly[hidden] { display: none; }

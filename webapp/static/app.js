@@ -1324,9 +1324,33 @@ function allPlaylistEpisodes(playlistId) {
       list.sort((a, b) => (a.season || 1) - (b.season || 1) || (a.episode || 0) - (b.episode || 0));
       seasons.set(id, new Set(list.map((v) => v.season || 1)).size);
     }
-    episodeIndex = { source: state.videos, size: state.videos.length, map, seasons };
+    episodeIndex = { source: state.videos, size: state.videos.length, map, seasons, primary: new Map() };
   }
   return episodeIndex.map.get(playlistId) || [];
+}
+
+// ตอนเดียวกัน = ซีซั่น + เลขตอนตรงกัน (ภาษา/แหล่งใดก็ได้)
+function sameEpisode(a, b) {
+  return Number(a.episode) === Number(b.episode) && (a.season || 1) === (b.season || 1);
+}
+
+// ตอนเดียวกันมีหลายแหล่ง (YouTube + เว็บฝังตัวเล่นที่เพิ่มเป็นแหล่งเสริม / คลิปซ้ำจากเพจ) → ตัวหลัก 1 ตัว
+// เล่นในแอปได้ (จำจุดดูค้าง/เล่นต่อเอง) ก่อนเว็บฝัง แล้วตัวที่เพิ่มก่อน — ตัวอื่นเป็น "เล่นจากแหล่งอื่น" (altSources)
+function primaryPlaylistEpisodes(playlistId) {
+  const all = allPlaylistEpisodes(playlistId);
+  let list = episodeIndex.primary.get(playlistId);
+  if (list) return list;
+  const rank = (v) => (FRAME_SITES.has(v.provider) ? 1 : 0);
+  const best = new Map();
+  for (const v of all) {
+    const key = `${v.season || 1}|${Number(v.episode)}|${v.lang || ""}`;
+    const cur = best.get(key);
+    if (!cur || rank(v) < rank(cur) || (rank(v) === rank(cur) && String(v.created_at || "") < String(cur.created_at || ""))) best.set(key, v);
+  }
+  const keep = new Set(best.values());
+  list = all.filter((v) => keep.has(v));
+  episodeIndex.primary.set(playlistId, list);
+  return list;
 }
 
 // ---------- พากย์ไทย / ซับไทย ในเรื่องเดียวกัน ----------
@@ -1353,7 +1377,7 @@ function setSeriesLang(p, lang) {
 
 // ตอนของเรื่องในภาษาที่เลือก (เรื่องภาษาเดียว = ทุกตอน) — ตอนที่ไม่รู้ภาษาอยู่ทุกภาษา
 function playlistEpisodes(playlistId) {
-  const all = allPlaylistEpisodes(playlistId);
+  const all = primaryPlaylistEpisodes(playlistId);
   const lang = seriesLang(playlistById(playlistId));
   return lang ? all.filter((v) => !v.lang || v.lang === lang) : all;
 }
@@ -1361,13 +1385,13 @@ function playlistEpisodes(playlistId) {
 // ตอนเดียวกันในภาษาอื่น (เลขตอน + ซีซั่นตรงกัน) — ดูพากย์ถึงไหน สลับเป็นซับก็ต่อได้
 function siblingEpisodes(v) {
   if (!v.playlist_id || !v.lang) return [];
-  return allPlaylistEpisodes(v.playlist_id).filter((x) => x.lang && x.lang !== v.lang
-    && Number(x.episode) === Number(v.episode) && (x.season || 1) === (v.season || 1));
+  return primaryPlaylistEpisodes(v.playlist_id).filter((x) => x.lang && x.lang !== v.lang && sameEpisode(x, v));
 }
 
-// สถานะการดูของ "ตอน" รวมทุกภาษา: ยึดภาษาที่ดูล่าสุด
+// สถานะการดูของ "ตอน" รวมทุกภาษาและทุกแหล่ง: ยึดตัวที่ดูล่าสุด (ดูจากแหล่งสำรองก็นับ)
 function episodeProgress(v) {
-  const latest = [v, ...siblingEpisodes(v)].filter((x) => x.watched_at)
+  const versions = v.playlist_id ? allPlaylistEpisodes(v.playlist_id).filter((x) => x.id !== v.id && sameEpisode(x, v)) : [];
+  const latest = [v, ...versions].filter((x) => x.watched_at)
     .sort((a, b) => b.watched_at.localeCompare(a.watched_at))[0];
   if (!latest) return { watched_at: null, pos: 0, dur: Number(v.duration_seconds) || 0 };
   return { watched_at: latest.watched_at, pos: Number(latest.position_seconds) || 0,
@@ -1376,7 +1400,7 @@ function episodeProgress(v) {
 
 // ตอนในภาษาเดียวกับคลิปที่เล่นอยู่ (เล่นต่อ/แถบเลขตอนใต้คลิป ไม่สลับภาษาเอง)
 function episodesLike(video) {
-  const all = allPlaylistEpisodes(video.playlist_id);
+  const all = primaryPlaylistEpisodes(video.playlist_id);
   return video.lang ? all.filter((v) => !v.lang || v.lang === video.lang) : all;
 }
 
@@ -1590,7 +1614,7 @@ function renderPlaylistView() {
   const langSeg = !lang && langs.length === 1
     ? `<div class="pl-lang-one">${langs.map((l) => `<span class="series-lang">${LANG_LABEL[l]}</span>`).join("")}<span>มีภาษาเดียว</span></div>`
     : lang ? `<div class="sp-lang" role="tablist">${langs.map((l) =>
-    `<button class="${l === lang ? "active" : ""}" data-pl-lang="${l}" role="tab" aria-selected="${l === lang}">${LANG_LABEL[l] || l} <small>${all.filter((v) => v.lang === l).length}</small></button>`).join("")}</div>` : "";
+    `<button class="${l === lang ? "active" : ""}" data-pl-lang="${l}" role="tab" aria-selected="${l === lang}">${LANG_LABEL[l] || l} <small>${primaryPlaylistEpisodes(openPlaylistId).filter((v) => v.lang === l).length}</small></button>`).join("")}</div>` : "";
   const rp = episodeProgress(resume);
   const rlen = Number(resume.duration_seconds) || rp.dur;
   const resumeSub = [lang ? LANG_LABEL[lang] : "", rp.pos > 0 && rlen ? `เหลือ ${minutesText(rlen - rp.pos)}` : ""].filter(Boolean).join(" · ");
@@ -1620,7 +1644,8 @@ function renderPlaylistView() {
 function neighborEpisode(video, step) {
   if (!video?.playlist_id) return null;
   const episodes = episodesLike(video);
-  return episodes[episodes.findIndex((v) => v.id === video.id) + step] || null;
+  const at = episodes.findIndex((v) => v.id === video.id || sameEpisode(v, video));
+  return at < 0 ? null : episodes[at + step] || null;
 }
 
 // ไอคอนบันทึกเข้าคลัง: ＋ = ยังไม่อยู่ในคลัง, ✓ = อยู่ในคลังแล้ว — วาดเอง ไม่ใช้อีโมจิ (แต่ละเครื่องวาดไม่เหมือนกัน)
@@ -1766,7 +1791,7 @@ function renderPlayerEpisodes(video) {
   const episodes = seasonEpisodesLike(video);
   const fresh = new Set(newEpisodes(playlist, episodes).map((v) => v.id));
   const scroll = box.scrollLeft;
-  box.innerHTML = episodes.map((v) => episodeTileHtml(v, playlist, { fresh: fresh.has(v.id), playing: v.id === video.id })).join("");
+  box.innerHTML = episodes.map((v) => episodeTileHtml(v, playlist, { fresh: fresh.has(v.id), playing: v.id === video.id || sameEpisode(v, video) })).join("");
   const playing = box.querySelector(".playing");
   if (box.dataset.for === video.id) box.scrollLeft = scroll;
   // วัดจากตำแหน่งบนจอ (offsetLeft นับจากกล่องแม่ตัวอื่น ทำให้เลื่อนไม่ถึงตอนที่เล่นอยู่)
@@ -8702,6 +8727,7 @@ function setAfMode(mode) {
   els("#afMode [data-af-mode]").forEach((b) => b.classList.toggle("active", b.dataset.afMode === mode));
   el("#afSeries").hidden = mode !== "series";
   afState.seriesUrl = null; // ติดตามได้เฉพาะรายการที่ดึงจากหน้ารวมตอน
+  afState.into = null;
   afState.preview = null;
   el("#afPreview").innerHTML = "";
 }
@@ -8723,9 +8749,66 @@ function renderAfSeriesPreview(data) {
   el("#afPreview").innerHTML = `<div class="yt-preview">${vmThumb(afState.image)}<div><div class="name">${escapeHtml(data.name)}</div>
       <div class="meta">${data.items.length} ตอน${afState.lang ? ` · ${LANG_LABEL[afState.lang]}` : ""}${fresh < data.items.length ? ` · มีในคลังแล้ว ${data.items.length - fresh}` : ""}</div></div></div>${langSwitch}
     <ul class="af-list">${data.items.map((item) => `<li${item.exists ? ' class="exists"' : ""}><span class="ep">ตอน ${escapeHtml(String(item.episode))}</span><span>${escapeHtml(item.title)}${item.exists ? " (มีแล้ว)" : ""}</span></li>`).join("")}</ul>
-    ${afCategorySelect()}
+    ${afIntoHtml()}
+    <div id="afNewOnly">${afCategorySelect()}</div>
     ${afState.seriesUrl ? '<label class="switch-label">ติดตามตอนใหม่อัตโนมัติ (เช็คทุก 1 ชม.) <input type="checkbox" class="switch" id="afFollow" checked /></label>' : ""}
     <button type="button" class="btn primary" data-af-add-series>เพิ่มเป็นเรื่อง "${escapeHtml(data.name)}" (${data.items.length} ตอน)</button>`;
+  if (afState.into) { el("#afInto").value = afState.into; afIntoChanged(); }
+}
+
+// เรื่องที่น่าจะเป็นเรื่องเดียวกัน: ชื่อเรื่องในคลังอยู่ในชื่อจากเว็บ (ไม่สนเว้นวรรค/ตัวพิมพ์) — ยาวสุดก่อน
+function afGuessInto(name) {
+  const norm = (t) => String(t || "").toLowerCase().replace(/[\s\-–:()[\]]+/g, "");
+  const n = norm(name);
+  return (state.videoPlaylists || []).filter((p) => norm(p.name).length >= 3 && n.includes(norm(p.name)))
+    .sort((a, b) => b.name.length - a.name.length)[0] || null;
+}
+
+function afIntoHtml() {
+  const guess = afGuessInto(afState.preview?.name);
+  const lists = [...(state.videoPlaylists || [])].sort((a, b) => a.name.localeCompare(b.name, "th"));
+  return `<div class="af-into"><label class="vm-field">เพิ่มเข้า <select id="afInto" class="form-select">
+      <option value="">— เป็นเรื่องใหม่ —</option>
+      ${guess ? `<option value="${escapeHtml(guess.id)}">⭐ ${escapeHtml(guess.name)} (แหล่งเสริม)</option>` : ""}
+      ${lists.filter((p) => p !== guess).map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join("")}</select></label>
+    <div id="afIntoOpts" class="af-into-opts" hidden>
+      <label class="vm-field">ซีซั่น <input id="afSeason" type="number" min="1" max="99" inputmode="numeric" /></label>
+      <label class="vm-field">บวกเลขตอน <input id="afOffset" type="number" min="-10000" max="10000" inputmode="numeric" /></label>
+      <p id="afMapHint" class="hint"></p></div></div>`;
+}
+
+// เลขตอนของเว็บ → ตอนในเรื่องเดิม: เสนอซีซั่นล่าสุด และบวกเลขให้ตอนแรกของเว็บ = ตอนแรกของซีซั่นนั้นที่มีอยู่
+function afIntoChanged(fromInput = false) {
+  const id = el("#afInto")?.value;
+  afState.into = id || null;
+  el("#afIntoOpts").hidden = !id;
+  el("#afNewOnly").hidden = !!id;
+  const items = afState.preview?.items || [];
+  const btn = el("#afPreview [data-af-add-series]");
+  if (!id) { if (btn) btn.textContent = `เพิ่มเป็นเรื่อง "${afState.preview?.name || ""}" (${items.length} ตอน)`; return; }
+  const p = playlistById(id);
+  const eps = allPlaylistEpisodes(id);
+  const nums = items.map((x) => Number(x.episode)).filter((n) => Number.isFinite(n));
+  const first = nums.length ? Math.min(...nums) : 1;
+  if (!fromInput) {
+    const seasons = [...new Set(eps.map((v) => v.season || 1))];
+    const season = seasons.length ? Math.max(...seasons) : 1;
+    const inSeason = eps.filter((v) => (v.season || 1) === season && (!afState.lang || v.lang === afState.lang || !v.lang));
+    const start = inSeason.length ? Math.min(...inSeason.map((v) => Number(v.episode))) : first;
+    el("#afSeason").value = season;
+    el("#afOffset").value = start - first;
+  }
+  const season = Number(el("#afSeason").value) || 1;
+  const offset = Number(el("#afOffset").value) || 0;
+  const mapped = nums.map((n) => n + offset);
+  const have = new Set(eps.filter((v) => (v.season || 1) === season && (!afState.lang || v.lang === afState.lang)).map((v) => Number(v.episode)));
+  const dup = mapped.filter((n) => have.has(n)).length;
+  const fresh = mapped.length - dup;
+  el("#afMapHint").textContent = nums.length
+    ? `ตอน ${Math.min(...nums)}–${Math.max(...nums)} ของเว็บ → ${seasonLabel(p, season)} ตอน ${Math.min(...mapped)}–${Math.max(...mapped)}`
+      + ` · ตอนใหม่ ${fresh}${dup ? ` · ซ้ำกับที่มี ${dup} (ใช้ของเดิมเป็นหลัก เว็บนี้เป็นสำรอง)` : ""}`
+    : "";
+  if (btn) btn.textContent = `เพิ่มเป็นแหล่งเสริมของ "${p.name}" (ใหม่ ${fresh} ตอน)`;
 }
 
 async function afFillSeries(url) {
@@ -8783,16 +8866,30 @@ function initAnifumeAdmin() {
       afMsg("");
     } catch (e) { afState.preview = null; el("#afPreview").innerHTML = ""; afMsg(e.message, true); }
   });
+  el("#afPreview").addEventListener("change", (event) => {
+    if (event.target.id === "afInto") afIntoChanged();
+  });
+  el("#afPreview").addEventListener("input", (event) => {
+    if (event.target.id === "afSeason" || event.target.id === "afOffset") afIntoChanged(true);
+  });
   el("#afPreview").addEventListener("click", async (event) => {
     const langBtn = event.target.closest("[data-af-lang]")?.dataset.afLang;
     if (langBtn && afState.langUrls?.[langBtn] && langBtn !== afState.lang) {
       const name = el("#afName").value; // ชื่อที่แก้ไว้ใช้ต่อ (ภาษาที่สองต้องชื่อเดียวกันถึงจะรวมเรื่อง)
+      const keep = afState.into && { into: afState.into, season: el("#afSeason").value, offset: el("#afOffset").value };
       afMsg("กำลังดึงรายชื่อตอน...");
       try {
         await afFillSeries(afState.langUrls[langBtn]);
         el("#afName").value = name;
         afState.preview = await sendJSON("POST", "/api/anifume/add", { name, items: afParseLines(), dry_run: true });
         renderAfSeriesPreview(afState.preview);
+        if (keep) {
+          el("#afInto").value = keep.into;
+          afIntoChanged();
+          el("#afSeason").value = keep.season;
+          el("#afOffset").value = keep.offset;
+          afIntoChanged(true);
+        }
         afMsg("");
       } catch (e) { afMsg(e.message, true); }
       return;
@@ -8814,10 +8911,12 @@ function initAnifumeAdmin() {
         const res = await sendJSON("POST", "/api/anifume/add", { url: afState.preview.url, category_id });
         afMsg(res.already_exists ? `มีในคลังแล้ว: "${res.title}"` : `เพิ่มคลิป "${res.title}" แล้ว`);
       } else {
+        const into = el("#afInto")?.value || null;
         const res = await sendJSON("POST", "/api/anifume/add", { name: afState.preview.name, items: afState.preview.items,
           category_id, image: afState.image, lang: afState.lang,
-          follow_url: afState.seriesUrl || null, follow: el("#afFollow")?.checked ?? false });
-        afMsg(`เพิ่มเข้า "${res.name}" ${res.added} ตอน${res.moved ? ` (ย้ายตอนที่มีอยู่แล้ว ${res.moved})` : ""}`);
+          follow_url: afState.seriesUrl || null, follow: el("#afFollow")?.checked ?? false,
+          ...(into ? { into_playlist_id: into, season: Number(el("#afSeason").value) || 1, episode_offset: Number(el("#afOffset").value) || 0 } : {}) });
+        afMsg(`${into ? "เพิ่มเป็นแหล่งเสริมของ" : "เพิ่มเข้า"} "${res.name}" ${res.added} ตอน${res.moved ? ` (ย้ายตอนที่มีอยู่แล้ว ${res.moved})` : ""}`);
         el("#afItems").value = "";
         el("#afName").value = "";
       }
