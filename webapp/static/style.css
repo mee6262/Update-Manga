@@ -1938,3 +1938,46 @@ button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%
 .sp-row.done .sp-row-info b { color: var(--text-dim); font-weight: 600; }
 .sp-row-check { color: var(--accent); font-weight: 800; padding-right: 4px; }
 .sp-new { display: inline-block; font-size: 0.6rem; font-weight: 800; background: var(--new-badge); color: #fff; border-radius: 4px; padding: 0 5px; }
+
+/* ===== หน้าแรกวิดีโอ + หน้าหมวด (รอบ 3) ===== */
+#videoLibraryBtn.active { color: var(--accent); border-color: var(--accent); }
+/* แบนเนอร์ "ดูต่อจากที่ค้างไว้" */
+.mm-hero-kicker { font-size: 0.72rem; font-weight: 700; opacity: 0.9; }
+.mm-hero-bar { align-self: stretch; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.3); overflow: hidden; margin: 6px 0 2px; }
+.mm-hero-bar span { display: block; height: 100%; background: var(--accent); }
+.mm-hero-acts { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.mm-hero .mm-hero-acts .btn { margin-top: 0; border: 0; font-weight: 700; padding: 7px 14px; }
+.mm-hero-play { background: #fff; color: #111; }
+.mm-hero-all { background: rgba(255, 255, 255, 0.2); color: #fff; }
+.mm-hero-pill { margin-left: auto; font-size: 0.7rem; font-weight: 700; background: rgba(0, 0, 0, 0.7); border-radius: 6px; padding: 2px 7px; }
+/* ตอนใหม่จากเรื่องในคลัง */
+.mm-newep-list { display: flex; flex-direction: column; gap: 8px; }
+.mm-newep { display: flex; align-items: center; gap: 10px; padding: 8px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.mm-newep-thumb { width: 96px; aspect-ratio: 16 / 9; flex: none; border-radius: 9px; overflow: hidden; background: var(--img-bg); }
+.mm-newep-thumb img, .mm-newep-thumb .video-placeholder { width: 100%; height: 100%; object-fit: cover; font-size: 1rem; }
+.mm-newep-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.mm-newep-info b { font-size: 0.86rem; }
+.mm-newep-info small { font-size: 0.74rem; color: var(--text-dim); }
+.mm-newep-go { color: var(--accent); font-size: 0.78rem; font-weight: 700; white-space: nowrap; padding-right: 4px; }
+/* ดูค้างไว้: การ์ดแนวนอนกว้าง */
+.mm-row-wide > * { flex: 0 0 228px; }
+.mm-ctag { position: absolute; top: 6px; left: 6px; font-size: 0.66rem; font-weight: 700; background: rgba(0, 0, 0, 0.72); color: #fff; border-radius: 5px; padding: 1px 6px; }
+.mm-ctime { position: absolute; bottom: 8px; right: 6px; font-size: 0.66rem; font-weight: 700; background: rgba(0, 0, 0, 0.72); color: #fff; border-radius: 5px; padding: 1px 6px; }
+.mm-cont .mm-name { font-weight: 700; }
+/* โปสเตอร์แนวตั้ง */
+.mm-row-poster > * { flex: 0 0 112px; }
+.mm-pthumb { position: relative; display: block; width: 100%; aspect-ratio: 5 / 7; border-radius: 12px; overflow: hidden; background: var(--img-bg); }
+.mm-pthumb img, .mm-pthumb .video-placeholder { width: 100%; height: 100%; object-fit: cover; aspect-ratio: auto; display: grid; }
+.mm-pthumb .new-badge { top: 6px; left: 6px; right: auto; }
+.mm-pbar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255, 255, 255, 0.35); }
+.mm-pbar span { display: block; height: 100%; background: var(--accent); }
+.mm-pname { font-size: 0.8rem; font-weight: 700; line-height: 1.25; margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mm-poster .mm-meta { font-size: 0.7rem; }
+/* หน้าหมวด: แถวเครื่องมือ + ตาราง 3 คอลัมน์ */
+.mm-tools { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin-bottom: 12px; }
+.mm-tools::-webkit-scrollbar { display: none; }
+.mm-tools button { flex: none; background: var(--bg-card); border: 1px solid var(--border); color: var(--text); border-radius: 10px; padding: 6px 12px; font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer; }
+.mm-tools button.active { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.mm-grid.mm-grid-poster { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 10px; }
+@media (min-width: 700px) { .mm-grid.mm-grid-poster { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); } }
+.mm-grid-poster .empty-state { grid-column: 1 / -1; }

@@ -43,7 +43,8 @@
       <h1 class="topbar-title brand-title" data-for="videos" hidden><img class="brand-icon" src="{{ url_for('static', filename='icon-192.png') }}" alt="" /><span>Mee<span class="brand-plus">+</span></span><span class="brand-sub">ดูหนัง</span></h1>
       <h1 class="topbar-title brand-title" data-for="settings" hidden><img class="brand-icon" src="{{ url_for('static', filename='icon-192.png') }}" alt="" /><span>Mee<span class="brand-plus">+</span></span><span class="brand-sub">ตั้งค่า</span></h1>
       <div class="topbar-actions" data-for="videos" hidden>
-        <button id="videoLibraryBtn" class="topbar-pill" data-video-tab="library">คลังของฉัน</button>
+        <button id="videoSearchBtn" class="icon-btn" aria-label="ค้นหา" title="ค้นหา"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></button>
+        <button id="videoLibraryBtn" class="icon-btn" data-video-tab="library" aria-label="คลังของฉัน" title="คลังของฉัน"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="4" y="4" width="4" height="16" rx="1"/><rect x="10" y="4" width="4" height="16" rx="1"/><path d="M16.2 5.2l3.7-1 3.1 15.5-3.7 1z" transform="translate(-2.5 0)"/></svg></button>
         <button id="addVideoBtn" class="topbar-pill primary" hidden>+ เพิ่ม</button>
       </div>
       <button id="installBtn" class="icon-btn" title="เพิ่มไปยังหน้าจอโฮม" hidden>
