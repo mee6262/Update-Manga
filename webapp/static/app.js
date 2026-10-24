@@ -1364,9 +1364,10 @@ function neighborEpisode(video, step) {
   return episodes[episodes.findIndex((v) => v.id === video.id) + step] || null;
 }
 
-// ไอคอนที่คั่นหนังสือ (บันทึก) — วาดเอง ไม่ใช้อีโมจิ (แต่ละเครื่องวาด 🔖 ไม่เหมือนกัน)
-function bookmarkIcon(filled, size = 17) {
-  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true"><path d="M6 3.5h12a1 1 0 0 1 1 1V21l-7-4.5L5 21V4.5a1 1 0 0 1 1-1z" fill="${filled ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`;
+// ไอคอนบันทึกเข้าคลัง: ＋ = ยังไม่อยู่ในคลัง, ✓ = อยู่ในคลังแล้ว — วาดเอง ไม่ใช้อีโมจิ (แต่ละเครื่องวาดไม่เหมือนกัน)
+function libraryIcon(saved, size = 17) {
+  const path = saved ? '<path d="M5 12.5l4.5 4.5L19 7.5"/>' : '<path d="M12 5v14M5 12h14"/>';
+  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
 }
 
 // บันทึกในตัวเล่น: ตอนของเรื่อง = บันทึกทั้งเรื่อง (ตอนใหม่มาแล้วแจ้งเตือน), คลิปเดี่ยว = บันทึกคลิป
@@ -1382,7 +1383,8 @@ function renderEpisodeNav(video) {
   ["#episodePrev", "#episodeNext", "#autoNextBtn", "#playerEpHead"].forEach((sel) => { el(sel).hidden = !playlist; });
   const { saved } = playerSaveTarget(video);
   const saveBtn = el("#videoSaveBtn");
-  saveBtn.innerHTML = `${bookmarkIcon(saved)}${saved ? "บันทึกแล้ว" : "บันทึก"}`;
+  saveBtn.innerHTML = `${libraryIcon(saved)}${saved ? "ในคลัง" : "คลัง"}`;
+  saveBtn.title = saved ? "อยู่ในคลังของฉันแล้ว — กดเพื่อเอาออก" : "เพิ่มเข้าคลังของฉัน";
   saveBtn.classList.toggle("on", saved);
   saveBtn.disabled = false; // toggle*Save ปิดปุ่มระหว่างส่ง แล้ววาดใหม่ผ่าน renderVideos (ปุ่มนี้ไม่ถูกสร้างใหม่)
   renderPlayerNext(video);
@@ -1411,7 +1413,7 @@ function renderPlayerNext(video) {
     return;
   }
   const label = `${(video.season || 1) > 1 || episodeIndex.seasons.get(video.playlist_id) > 1 ? `${seasonLabel(playlist, video.season || 1)} ` : ""}ตอนที่ ${Number(video.episode) + 1}`;
-  box.innerHTML = `<span class="pn-info"><small>ถัดไป</small><b>ยังไม่มี${escapeHtml(label)}</b><small>${playlist.saved_at ? "บันทึกเรื่องนี้ไว้แล้ว — ตอนใหม่มาเมื่อไรแจ้งเตือน" : "กดบันทึกไว้ ตอนใหม่มาเมื่อไรแจ้งเตือน"}</small></span>`;
+  box.innerHTML = `<span class="pn-info"><small>ถัดไป</small><b>ยังไม่มี${escapeHtml(label)}</b><small>${playlist.saved_at ? "เรื่องนี้อยู่ในคลังแล้ว — ตอนใหม่มาเมื่อไรแจ้งเตือน" : "กด ＋ คลัง ไว้ ตอนใหม่มาเมื่อไรแจ้งเตือน"}</small></span>`;
 }
 
 // ความคิดเห็นล่าสุด 1 อันใต้คลิป (ข้อมูลชุดเดียวกับตัวเลขบนปุ่ม — ไม่ยิงเพิ่ม)
