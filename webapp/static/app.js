@@ -2263,10 +2263,14 @@ async function openVideo(video, { autoplay = false } = {}) {
   videoClockStartedAt = null;
   const playlist = video.playlist_id && (state.videoPlaylists || []).find((p) => p.id === video.playlist_id);
   // มีเรื่อง: ชื่อเรื่องบรรทัดบน + ตอนบรรทัดล่าง แตะแล้วไปหน้าเรื่อง (เปิดตอนจากหน้าแรกก็กลับไปเลือกตอนได้)
-  el("#videoPlayerTitle").textContent = playlist ? playlist.name : video.title;
-  el("#videoPlayerSub").textContent = playlist ? `${episodeLabel(video)} · ดูทุกตอน ›` : "";
-  el("#videoPlayerSub").hidden = !playlist;
-  el("#videoPlayerTitleBtn").disabled = !playlist;
+  // (HTML เก่าที่เซิร์ฟเวอร์ยังแคชอยู่ก่อนรีสตาร์ทไม่มีบรรทัดล่าง → ชื่อ · ตอน บรรทัดเดียวแบบเดิม)
+  const sub = el("#videoPlayerSub");
+  el("#videoPlayerTitle").textContent = playlist ? (sub ? playlist.name : `${playlist.name} · ${episodeLabel(video)}`) : video.title;
+  if (sub) {
+    sub.textContent = playlist ? `${episodeLabel(video)} · ดูทุกตอน ›` : "";
+    sub.hidden = !playlist;
+    el("#videoPlayerTitleBtn").disabled = !playlist;
+  }
   el("#videoPlayer").hidden = false; // ก่อนวาดแถบเลขตอน — ซ่อนอยู่วัดตำแหน่งไม่ได้ เลื่อนไปตอนที่เล่นไม่ถึง
   renderEpisodeNav(video);
   refreshCommentCount({ kind: "video", id: video.id }, el("#videoCommentCount"));
@@ -2549,7 +2553,7 @@ function initVideos() {
     if (video && video.id === activeVideo?.id && isVideoMini()) return setVideoMini(false); // ตอนที่ย่อเล่นอยู่: ขยายกลับ ไม่โหลดใหม่
     if (video) openVideo(video);
   });
-  el("#videoPlayerTitleBtn").addEventListener("click", () => {
+  el("#videoPlayerTitleBtn")?.addEventListener("click", () => {
     const id = activeVideo?.playlist_id;
     if (!id || !playlistById(id)) return;
     setVideoMini(true);
