@@ -7,6 +7,7 @@ scraper.py เรียกไฟล์นี้เป็น process แยก (�
 ติดตั้ง: pip install "camoufox[geoip]" แล้ว python -m camoufox fetch
 ใช้: python cf_solve.py <url>
 ผลลัพธ์ (stdout): {"ua": "...", "cookies": {"cf_clearance": "...", ...}}
+    หรือ {"ua": "...", "cookies": {...}, "no_challenge": true} = เปิดได้เลยไม่มีหน้าตรวจ (เว็บเลิกตรวจแล้ว)
 """
 import json
 import sys
@@ -29,6 +30,11 @@ def solve(url: str) -> dict:
         page = browser.new_page()
         ua = page.evaluate("navigator.userAgent")  # อ่านก่อนเปิดเว็บ: ผ่านหน้าตรวจแล้วหน้าเปลี่ยน evaluate พัง
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        # up-manga (25 ต.ค.): เคยตรวจแล้วเลิก → ต่ออายุคุกกี้ทุก 30 นาทีรอ cf_clearance ไม่มีวันมา จนหมดเวลา
+        if not _is_challenge(page) and not any(c["name"] == "cf_clearance" for c in page.context.cookies()):
+            page.wait_for_timeout(3000)  # หน้าตรวจบางแบบขึ้นช้ากว่า domcontentloaded
+            if not _is_challenge(page):
+                return {"ua": ua, "cookies": _jar(page, host), "no_challenge": True}
         deadline = time.time() + WAIT_SECONDS
         while time.time() < deadline:
             cookies = page.context.cookies()
@@ -38,9 +44,21 @@ def solve(url: str) -> dict:
         else:
             raise RuntimeError(f"ไม่ผ่านหน้าตรวจ Cloudflare ใน {WAIT_SECONDS} วิ")
         page.wait_for_timeout(1500)  # ให้หน้าจริงตั้งคุกกี้อื่นที่ต้องใช้คู่กันให้ครบ
-        jar = {c["name"]: c["value"] for c in page.context.cookies()
-               if host.endswith(c["domain"].lstrip("."))}
-        return {"ua": ua, "cookies": jar}
+        return {"ua": ua, "cookies": _jar(page, host)}
+
+
+def _jar(page, host: str) -> dict:
+    return {c["name"]: c["value"] for c in page.context.cookies() if host.endswith(c["domain"].lstrip("."))}
+
+
+def _is_challenge(page) -> bool:
+    """หน้าตรวจของ Cloudflare ("Just a moment..." / "รอสักครู่...") — ชื่อหน้า หรือสคริปต์ challenge-platform"""
+    try:
+        title = (page.title() or "").lower()
+        return ("just a moment" in title or "รอสักครู่" in title
+                or page.locator("script[src*='challenge-platform']").count() > 0)
+    except Exception:
+        return True  # อ่านไม่ได้ (หน้ากำลังเปลี่ยน) = ถือว่ายังตรวจอยู่ ใช้ทางเดิม
 
 
 if __name__ == "__main__":

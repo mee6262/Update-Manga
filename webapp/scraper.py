@@ -212,8 +212,8 @@ def _run_cf_solver(url: str):
     try:
         proc = subprocess.run(
             [sys.executable, str(Path(__file__).with_name("cf_solve.py")), url],
-            capture_output=True, text=True, encoding="utf-8", timeout=CF_SOLVE_TIMEOUT,
-            stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=CF_SOLVE_TIMEOUT,
+            stdin=subprocess.DEVNULL, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             # priority ต่ำ (Firefox ลูกได้ตาม): VPS 2 CPU — ทดสอบ camoufox ติดกันแล้วเว็บไม่ตอบ healthz 1 ครั้ง (23 ต.ค. 22:32)
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0),
         )
@@ -224,6 +224,17 @@ def _run_cf_solver(url: str):
                 message = "ยังไม่ได้ติดตั้ง camoufox"
             raise RuntimeError(message[:200])
         result = json.loads(proc.stdout.strip().splitlines()[-1])
+        if result.get("no_challenge"):
+            # เว็บเลิกตรวจแล้ว: ทิ้งคุกกี้เก่า ไม่งั้น cf_headers สั่งต่ออายุ (เปิดเบราว์เซอร์) ซ้ำทุก 30 นาทีไม่จบ
+            # โดนตรวจอีกเมื่อไร is_cf_challenge → request_cf_solve แก้ใหม่ตามปกติ
+            with _cf_lock:
+                _cf_clearance.pop(host, None)
+                _cf_last_error.pop(host, None)
+                tmp = CF_FILE.with_suffix(".tmp")
+                tmp.write_text(json.dumps(_cf_clearance, ensure_ascii=False), encoding="utf-8")
+                os.replace(tmp, CF_FILE)
+            print(f"[cloudflare] {host} ไม่มีหน้าตรวจแล้ว — เลิกใช้คุกกี้เดิม ({time.monotonic() - started:.0f} วิ)", flush=True)
+            return
         if "cf_clearance" not in result.get("cookies", {}):
             raise RuntimeError("ไม่ได้คุกกี้ cf_clearance")
         with _cf_lock:
