@@ -2087,11 +2087,13 @@ def video_stream_playlist(video_id):
     """ไฟล์รายการ HLS ของแหล่งที่ต้องส่ง Referer ของเขาเอง (AnimeRuka ตัวหลัก, Anime108) — ดึงแค่ไฟล์รายการ (~15-40 KB)
     ท่อนวิดีโอในนั้นเป็นลิงก์เต็มของ CDN <video> โหลดตรง ไม่ผ่านเซิร์ฟเวอร์นี้"""
     video = next((v for v in storage.load_videos() if v.get("id") == video_id), None)
-    if not video or video.get("provider") not in ("animeruka", "anime108"):
+    if not video or video.get("provider") not in ("animeruka", "anime108", "fairyanime"):
         return Response("not found", status=404, mimetype="text/plain")
     try:
         if video["provider"] == "anime108":  # ท่อนวิดีโอผ่าน Worker (VIDEO_PROXY_URL) ?v = ความละเอียด
             text = anime108.stream_playlist(video, request.args.get("v"))
+        elif video["provider"] == "fairyanime":
+            text = fairyanime.stream_playlist(video, request.args.get("v"))
         else:
             text = animeruka.stream_playlist(video)
     except ValueError as e:
@@ -2120,7 +2122,8 @@ def get_video_playback(video_id):
         print(f"[playback] {video.get('provider')} {video_id}: {e.code}", flush=True)
         status = 422 if e.code in (streams.PROVIDER_RESTRICTION, streams.PLAYBACK_UNSUPPORTED) else 502
         return jsonify({**e.to_dict(), "fallback_url": fallback}), status
-    return jsonify({k: playback.get(k) for k in ("kind", "url", "expires_at", "frame", "provider", "referrer", "alt")} | {"fallback_url": fallback})
+    return jsonify({k: playback.get(k) for k in ("kind", "url", "sources", "expires_at", "frame", "provider", "referrer", "alt")}
+                   | {"fallback_url": fallback})
 
 
 @app.route("/api/videos/<video_id>/progress", methods=["GET"])

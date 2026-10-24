@@ -6,9 +6,11 @@
   แต่หน้าตอนไม่ส่ง X-Frame-Options / CSP frame-ancestors = ฝังทั้งหน้าใน iframe ได้ (ทดสอบแล้วเล่นได้)
 - หน้ารวมตอน /<เลขเรื่อง>: ชื่อเรื่อง (h1.post-title), ปก (.post-content-img img), ลิงก์ทุกตอน (.eplink a)
 - ไม่ต้องใช้คุกกี้; ไม่มี og:image ในหน้าตอน (ปกเอาจากหน้ารวมตอน)
-- ตัวเล่นจริง (หน้า /player/ + ไฟล์ mp4 ลงลายเซ็นบนโฮสต์อื่น) ได้มาด้วยคำขอที่ต้องมี Referer ของหน้าตอนเท่านั้น
-  → ดึงฝั่งเซิร์ฟเวอร์ = ปลอม Referer ไม่ทำ; resolve_playback จึงคืน page_embed (หน้าตอนเลื่อนไป #vpfi) เท่านั้น
-  ตัวเล่นของเขาขอลิงก์ใหม่เองทุกครั้งที่หน้าโหลด — "ขอใหม่" ฝั่งเรา = โหลดหน้าตอนใหม่
+- ตัวเล่นจริง: ajax ของหน้าตอน (ตัวหลัก mainv / สำรอง mirp2) ตอบ <iframe src="anifume.com/player/..."> เฉพาะเมื่อส่ง
+  Referer = หน้าตอนนั้น + X-Requested-With (ไม่ส่ง = ว่าง) — หน้า /player/ ไม่เช็ค Referer มี jwplayer sources =
+  MP4 ตรง 720p + 360p (a15.rukoluo.com, ลงลายเซ็น m + หมดอายุ e ~4 ชม., ไม่ผูก IP, ไม่เช็ค Referer, video/mp4 + Range)
+  → ต.ค. 2026 (25): เล่นในตัวเล่นแอป (kind file + sources hd/sd, หมดอายุแล้ว streams ขอใหม่) แบบเดียวกับ AnimeRuka
+    ที่ส่ง Referer ของเว็บเขาเอง; อ่านไม่ได้/เล่นไม่ได้ → page_embed (หน้าตอนเลื่อนไป #vpfi) เหมือนเดิม
 """
 import re
 from urllib.parse import urljoin, urlsplit
@@ -82,13 +84,16 @@ def _framable(headers) -> bool:
     return "frame-ancestors" not in csp
 
 
-def _get(url: str) -> requests.Response:
-    """ยิงเฉพาะ URL ที่สร้างจาก parse_url แล้ว (โฮสต์ anifume.com) ไม่ตาม redirect"""
+def _get(url: str, headers: dict | None = None) -> requests.Response:
+    """ยิงเฉพาะ URL บนโฮสต์ anifume.com (สร้างจาก parse_url หรืออ่านจากหน้าของเขา) ไม่ตาม redirect"""
+    if (urlsplit(url).hostname or "").lower() not in HOSTS:
+        raise ValueError("ลิงก์นอก Anifume")
     if scraper.host_is_down(url) or scraper.host_is_stalled(url):
         raise ValueError("Anifume ไม่ตอบช่วงนี้ ลองใหม่อีกครั้ง")
     try:
         with scraper.awaiting_response(url):
-            resp = scraper.session().get(url, headers={"User-Agent": UA, "Accept-Language": "th-TH,th;q=0.9"},
+            resp = scraper.session().get(url, headers={"User-Agent": UA, "Accept-Language": "th-TH,th;q=0.9",
+                                                       **(headers or {})},
                                          timeout=TIMEOUT, allow_redirects=False)
     except requests.RequestException as e:
         if scraper.is_outage(e):
@@ -152,6 +157,30 @@ def fetch_series(url: str) -> dict:
             "items": items}
 
 
+_AJAX = re.compile(r'url:\s*"(/[A-Za-z0-9]{8,40}\?u=[^"\s]{10,2000})"')
+_PLAYER = re.compile(r'<iframe[^>]+src="(https://(?:www\.)?anifume\.com/player2?/[^"\s]+)"')
+_SOURCE = re.compile(r'"file":\s*"(https://[^"\s]+)",\s*"label":\s*"(\d{3,4})p"')
+
+
+def file_sources(url: str) -> dict:
+    """{"hd": ลิงก์ mp4 ความละเอียดสูงสุด | None, "sd": ต่ำสุด, "expires_at": หมดอายุ (epoch) | None}
+    หน้าตอน → ajax ตัวหลัก (Referer หน้าตอน) → หน้า /player/ → sources ของ jwplayer"""
+    html = _get(url).text
+    ajax = _AJAX.search(html)
+    if not ajax:
+        raise ValueError("ไม่พบตัวเล่นในหน้าตอน (เว็บอาจเปลี่ยนหน้าตา)")
+    frag = _get(urljoin(url, ajax.group(1)), headers={"Referer": url, "X-Requested-With": "XMLHttpRequest"}).text
+    player = _PLAYER.search(frag)
+    if not player:
+        raise ValueError("ไม่ได้ลิงก์ตัวเล่น (เว็บอาจเปลี่ยนวิธี)")
+    found = {int(label): file for file, label in _SOURCE.findall(_get(player.group(1).replace("&amp;", "&")).text)}
+    if not found:
+        raise ValueError("ไม่พบไฟล์วิดีโอในตัวเล่น")
+    hi, lo = max(found), min(found)
+    exps = [int(m.group(1)) for f in found.values() for m in [re.search(r"[?&]e=(\d{9,11})", f)] if m]
+    return {"hd": found[hi] if hi != lo else None, "sd": found[lo], "expires_at": min(exps) - 300 if exps else None}
+
+
 class Provider:
     """adapter ของ streams — ข้อมูลเรื่อง/ตอนจากฟังก์ชันข้างบน, เล่นด้วยการฝังหน้าตอน"""
     name = "anifume"
@@ -194,7 +223,14 @@ class Provider:
         if video.get("external"):
             raise streams.StreamError(streams.PROVIDER_RESTRICTION, "หน้าตอนนี้ห้ามฝังในเว็บอื่น (X-Frame-Options/CSP)")
         # กล่องตัวเล่น #vpfi อยู่ใน .content (padding ซ้ายขวา 12px, border-box กว้างสุด 854px) — ตัวเล่นใช้ crop ตัดขอบ
-        return {"kind": "page_embed", "url": url + "#vpfi", "expires_at": None, "frame": {"pad": 12, "max": 854}}
+        embed = {"kind": "page_embed", "url": url + "#vpfi", "expires_at": None, "frame": {"pad": 12, "max": 854}}
+        try:
+            src = file_sources(url)
+        except ValueError:
+            return embed
+        # MP4 ตรง → <video> ของแอป (จำจุดดูค้าง/เลือก 720p-360p) เปิดไม่ขึ้น หน้าเว็บสลับไปฝังหน้าตอนเอง (alt)
+        return {"kind": "file", "url": src["sd"], "sources": {k: src[k] for k in ("hd", "sd") if src[k]},
+                "expires_at": src["expires_at"], "frame": None, "alt": embed}
 
 
 streams.register(Provider())

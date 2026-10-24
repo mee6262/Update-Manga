@@ -9,9 +9,15 @@
   (ตัวเล่นตอนจริง ซ้อนกรอบ anime.tonytonychopper.net อีกชั้น ที่เช็ค Referer = โฮสต์ตัวเล่น — ได้เองเพราะซ้อนใน playback/v)
   แอปฝัง playback/v ตรง (มี่เลือกข้ามโฆษณา) — ไม่มีตัวเลือกเซิร์ฟเวอร์สำรองแบบใน playback/f
   ทดสอบ Chromium ฝังจาก localhost ใน sandbox แบบเดียวกับแอป: พร้อมใน 1 วิ แตะครั้งเดียวเล่นตอนจริง
-  ไม่ดึงไฟล์วิดีโอเอง; slug อ่านใหม่ตอนกดเล่น (แคชใน streams 10 นาที)
+  slug อ่านใหม่ตอนกดเล่น (แคชใน streams 10 นาที)
+- ต.ค. 2026 (25): /base/ เลิกมี var slug — slug อยู่ในลิงก์ webmainapp + "playback/v/<slug>/" ตรง ๆ
+- ไฟล์จริง: playback/v มี iframe anime.tonytonychopper.net/v2/<vid> (jwplayer, ลิงก์ซ่อนด้วย packer หลายชั้น)
+  ที่โหลด HLS /file2/<vid>/ (master) → /quality2/<vid>/<ความสูง>/ — ไม่ต้อง Referer, ไม่มี CORS (เซิร์ฟเวอร์ส่งต่อ)
+  ท่อนบน fa-new06.top = MPEG-TS ชื่อ .webp, CORS * → hls.js โหลดตรง ไม่ผ่าน VPS
+  → เล่นในตัวเล่นแอป (kind hls + alt ฝัง playback/v เดิม)
 """
 import re
+import time
 from urllib.parse import urljoin, urlsplit
 
 import requests
@@ -28,6 +34,8 @@ TIMEOUT = (5, 15)
 MAX_PAGE_BYTES = 3 * 1024 * 1024
 _SLUG = r"[a-z0-9][a-z0-9-]{0,150}"
 _EP = r"[A-Za-z0-9]{6,20}"
+STREAM_CACHE_SECONDS = 10 * 60
+_streams: dict[str, tuple[float, str]] = {}  # video id → (หมดอายุ, ลิงก์ master HLS)
 # หน้าระดับเดียวกับหน้าเรื่องที่ไม่ใช่เรื่อง
 _RESERVED = {"genre", "search", "member", "blog", "status", "scoretop", "watch", "base", "assets", "uploads",
              "category", "tag", "page", "feed"}
@@ -80,7 +88,7 @@ def is_image_url(url: str) -> bool:
 
 
 def _get(url: str) -> requests.Response:
-    """ยิงเฉพาะ URL ที่สร้างจาก parse_url แล้ว (โฮสต์ fairyanime.net) ไม่ตาม redirect"""
+    """ยิงเฉพาะ URL ที่สร้างจาก parse_url แล้ว (โฮสต์ fairyanime.net) หรือที่อ่านได้จากหน้าของเขา (ตัวเล่น/HLS) ไม่ตาม redirect"""
     if scraper.host_is_down(url) or scraper.host_is_stalled(url):
         raise ValueError("FairyAnime ไม่ตอบช่วงนี้ ลองใหม่อีกครั้ง")
     try:
@@ -154,10 +162,35 @@ def player_url(episode_id: str) -> str:
     """อ่าน /base/<id>/ ของหน้าตอน → https://<โฮสต์ตัวเล่น>/playback/v/<slug>/ (ตัวเล่นตอนจริง ไม่ผ่านตัวห่อโฆษณา)"""
     js = _get(f"https://{HOST}/base/{episode_id}/").text
     host = re.search(r"webmainapp\s*=\s*['\"](https://[A-Za-z0-9.-]+/)['\"]", js)
-    slug = re.search(r"var\s+slug\s*=\s*['\"]([A-Za-z0-9_-]{4,40})['\"]", js)
+    slug = (re.search(r"var\s+slug\s*=\s*['\"]([A-Za-z0-9_-]{4,40})['\"]", js)
+            or re.search(r"playback/v/([A-Za-z0-9_-]{4,40})/", js))  # หน้าแบบใหม่: slug ฝังในลิงก์ตรง ๆ
     if not host or not slug or slug.group(1) in ("null", "undefined"):  # id ที่ไม่มีจริง เว็บตอบ 200 + slug = "null"
         raise ValueError("ไม่พบตัวเล่นของตอนนี้บน FairyAnime (ตอนอาจถูกลบ)")
     return f"{host.group(1)}playback/v/{slug.group(1)}/"
+
+
+def hls_master(player: str) -> str:
+    """หน้าตัวเล่น playback/v → ลิงก์ master HLS (<โฮสต์ v2>/file2/<vid>/)"""
+    m = re.search(r"src=[\"'](https://[A-Za-z0-9.-]+)/v2/([A-Za-z0-9]{4,40})/?[\"']", _get(player).text)
+    if not m:
+        raise ValueError("ไม่พบไฟล์วิดีโอในหน้าตัวเล่น (เว็บอาจเปลี่ยนวิธี)")
+    return f"{m.group(1)}/file2/{m.group(2)}/"
+
+
+def stream_playlist(video: dict, variant: str | None) -> str:
+    """/api/videos/<id>/stream.m3u8 — ไฟล์รายการผ่านเซิร์ฟเวอร์ (เขาไม่เปิด CORS) ท่อนโหลดตรงจาก CDN (CORS *)"""
+    entry = _streams.get(video["id"])
+    if entry and entry[0] > time.time():
+        master = entry[1]
+    else:
+        parsed = parse_url(video.get("source_url") or "")
+        if not parsed or parsed[0] != "episode":
+            raise ValueError("ลิงก์ตอนของ FairyAnime ไม่ถูกต้อง")
+        master = hls_master(player_url(parsed[1]))
+        _streams[video["id"]] = (time.time() + STREAM_CACHE_SECONDS, master)
+    host = urlsplit(master).hostname
+    return streams.hls_playlist(master, lambda u: _get(u).text, f"/api/videos/{video['id']}/stream.m3u8", variant,
+                                variant_ok=lambda u: urlsplit(u).hostname == host)
 
 
 class Provider:
@@ -202,7 +235,14 @@ class Provider:
             url = player_url(parsed[1])
         except ValueError as e:
             raise streams.StreamError(streams.STREAM_RESOLUTION_FAILED, str(e), retryable=True) from None
-        return {"kind": "embed", "url": url, "expires_at": None, "frame": None}
+        embed = {"kind": "embed", "url": url, "expires_at": None, "frame": None}
+        try:
+            _streams[video["id"]] = (time.time() + STREAM_CACHE_SECONDS, hls_master(url))
+        except ValueError:
+            return embed
+        # เล่นในตัวเล่นแอป (hls.js) — เล่นไม่ได้ หน้าเว็บสลับไปฝังตัวเล่นเขาเอง (alt)
+        return {"kind": "hls", "url": f"/api/videos/{video['id']}/stream.m3u8", "expires_at": None, "frame": None,
+                "alt": embed}
 
 
 streams.register(Provider())

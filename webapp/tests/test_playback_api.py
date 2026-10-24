@@ -36,9 +36,17 @@ class PlaybackApiTest(unittest.TestCase):
         self._orig = (a037.get_player_servers, a037.check_origin)
         a037.get_player_servers = lambda ep: [{"lang": "dub", "name": "main", "url": "https://player.example/video/abc"}]
         a037.check_origin = lambda url, origin: self.seen.append(origin) or "037-anime.com" in origin
+        # Anifume หาไฟล์ MP4 ผ่านเน็ต — ค่าเริ่มต้นในเทสต์ = หาไม่ได้ (ได้ page_embed เดิม) ห้ามยิงเว็บจริง
+        self._orig_af = self.m.anifume.file_sources
+        self.m.anifume.file_sources = self._no_file
+
+    @staticmethod
+    def _no_file(url):
+        raise ValueError("no network in tests")
 
     def tearDown(self):
         self.m.a037.get_player_servers, self.m.a037.check_origin = self._orig
+        self.m.anifume.file_sources = self._orig_af
 
     def play(self, vid, c=None, **kw):
         r = (c or self.admin).get(f"/api/videos/{vid}/playback", **kw)
@@ -51,6 +59,18 @@ class PlaybackApiTest(unittest.TestCase):
         self.assertEqual((d["kind"], d["url"], d["frame"], d["fallback_url"]), ("page_embed", EP + "#vpfi", {"pad": 12, "max": 854}, EP))
         self.assertEqual(self.play("af1", self.member)[0], 200)
         self.assertEqual(self.play("af1", self.anon)[0], 200)  # ผู้เยี่ยมชมดูได้
+
+    def test_anifume_mp4_with_page_embed_alt(self):
+        hd, sd = "https://a15.cdn.example/f/x.mp4?m=a&e=1900000000", "https://a15.cdn.example/f/x-q360.mp4?m=b&e=1900000000"
+        self.m.anifume.file_sources = lambda url: {"hd": hd, "sd": sd, "expires_at": 1899999700}
+        status, d = self.play("af1")
+        self.assertEqual(status, 200)
+        self.assertEqual((d["kind"], d["url"], d["sources"], d["expires_at"]), ("file", sd, {"hd": hd, "sd": sd}, 1899999700))
+        self.assertEqual((d["alt"]["kind"], d["alt"]["url"]), ("page_embed", EP + "#vpfi"))
+        # sources ที่ไม่ใช่ https / คีย์แปลก ถูกตัดทิ้ง
+        self.m.streams.clear()
+        self.m.anifume.file_sources = lambda url: {"hd": "http://x.example/a.mp4", "sd": sd, "expires_at": None}
+        self.assertEqual(self.play("af1")[1]["sources"], {"sd": sd})
 
     def test_error_shape(self):
         for vid, c, status, code in [("af2", None, 422, "PROVIDER_RESTRICTION"), ("afbad", None, 502, "PLAYER_INFO_MISSING"),

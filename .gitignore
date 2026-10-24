@@ -26,3 +26,5 @@ webapp/data/comments.json
 webapp/data/activity.json
 webapp/data/image_domains.json
 webapp/data/cf_clearance.json
+
+tools/.wrangler/

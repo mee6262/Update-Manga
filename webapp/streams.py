@@ -11,6 +11,7 @@ provider (เช่น anifume.Provider, a037.Provider) ลงทะเบีย
 Playback = {"kind", "url", "expires_at" (epoch วินาที | None), "frame" (คำแนะนำการวางกรอบ iframe | None)}
     kind: page_embed = ฝังหน้าเว็บของแหล่ง (ตัวเล่นของเขาเอง) / embed = ฝังลิงก์ตัวเล่น
           file = ไฟล์วิดีโอตรง (mp4/webm) / hls = .m3u8 — สองแบบหลังเล่นด้วย <video> ตัวเดิมของแอป
+    sources (file) = {"hd", "sd"} หลายความละเอียด / alt = ตัวสำรอง (มักเป็นตัวฝัง) เมื่อ <video> เล่นไม่ได้
 Facebook/YouTube ยังใช้ทางเดิม (/sources + ตัวเล่นของ YouTube) ไม่ผ่านโมดูลนี้
 
 ห้าม log URL เต็ม (ลิงก์มีลายเซ็น/โทเคน) — ใช้ redact()
@@ -87,7 +88,10 @@ def _normalize(playback: dict, provider_name: str) -> dict:
         except StreamError:
             alt = None
     expires = playback.get("expires_at")
-    return {"kind": kind, "url": url, "expires_at": float(expires) if expires else None,
+    # file หลายความละเอียด: {"hd": ..., "sd": ...} ลิงก์ https เท่านั้น (ตัวเล่นแอปเลือก 720p/360p)
+    sources = {q: u for q, u in (playback.get("sources") or {}).items()
+               if kind == "file" and q in ("hd", "sd") and isinstance(u, str) and u.startswith("https://")} or None
+    return {"kind": kind, "url": url, "expires_at": float(expires) if expires else None, "sources": sources,
             "frame": playback.get("frame"), "provider": provider_name,
             # "none" = ฝังโดยไม่ส่ง Referer (ตัวเล่นที่ปฏิเสธเมื่อเห็นชื่อเว็บอื่น เช่น 108player)
             "referrer": "none" if playback.get("referrer") == "none" else None, "alt": alt}
@@ -136,3 +140,54 @@ def clear():
     with _lock:
         _cache.clear()
         _refreshes.clear()
+
+
+def hls_playlist(master_url: str, fetch, own_url: str, variant: str | None, *,
+                 segment=lambda url: url, variant_ok=lambda url: True) -> str:
+    """ไฟล์รายการ HLS ที่เซิร์ฟเวอร์ส่งต่อให้ <video>/hls.js (/api/videos/<id>/stream.m3u8)
+    variant None = master: แต่ละความละเอียดชี้กลับมาที่ own_url?v=<ลำดับ> (เลือกได้/อัตโนมัติใน hls.js)
+    variant "<n>" = ไฟล์รายการย่อยตัวที่ n: ลิงก์ท่อนเป็นลิงก์เต็ม https ผ่าน segment() (เช่น เซ็นให้ Worker)
+    master ที่จริงเป็นไฟล์ย่อยเลย (ไม่มี STREAM-INF) = ความละเอียดเดียว ?v=0
+    fetch(url) → ข้อความ; ผิดรูปแบบ raise ValueError (หน้าเว็บสลับไปตัวสำรองเอง)"""
+    from urllib.parse import urljoin
+    text = fetch(master_url)
+    if not text.lstrip().startswith("#EXTM3U"):
+        raise ValueError("ไฟล์รายการวิดีโอไม่ใช่ HLS")
+    variants, inf = [], None
+    if "#EXT-X-STREAM-INF" in text:
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("#EXT-X-STREAM-INF"):
+                inf = line
+            elif line and not line.startswith("#") and inf:
+                url = urljoin(master_url, line)
+                if url.startswith("https://") and variant_ok(url):
+                    variants.append((inf, url))
+                inf = None
+        if not variants:
+            raise ValueError("ไฟล์รายการวิดีโอไม่มีความละเอียดให้เลือก")
+    else:
+        variants = [("#EXT-X-STREAM-INF:BANDWIDTH=1", master_url)]
+    if variant is None:
+        lines = ["#EXTM3U"]
+        for i, (inf, _) in enumerate(variants):
+            lines += [inf, f"{own_url}?v={i}"]
+        return "\n".join(lines) + "\n"
+    if not variant.isdigit() or int(variant) >= len(variants):
+        raise ValueError("ไม่มีความละเอียดนี้")
+    url = variants[int(variant)][1]
+    text = text if url == master_url else fetch(url)
+    if not text.lstrip().startswith("#EXTM3U") or "#EXTINF" not in text:
+        raise ValueError("ไฟล์รายการวิดีโอว่าง (เว็บอาจเปลี่ยนวิธี)")
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("#EXT-X-KEY") or line.startswith("#EXT-X-MAP"):
+            raise ValueError("ไฟล์วิดีโอแบบเข้ารหัส/แยกหัวไฟล์ — ยังไม่รองรับ")
+        if line and not line.startswith("#"):
+            seg = urljoin(url, line)
+            if not seg.startswith("https://"):
+                raise ValueError("ลิงก์ท่อนวิดีโอไม่ใช่ https")
+            line = segment(seg)
+        out.append(line)
+    return "\n".join(out) + "\n"

@@ -2205,7 +2205,7 @@ async function mountResolvedVideo(video, position, autoplay, refresh = false) {
     unmountYouTube();
     unmountNativeVideo();
     try {
-      await mountNativeVideo(video, position, useHlsJs ? { sd: pb.url, hls: true } : { sd: pb.url });
+      await mountNativeVideo(video, position, useHlsJs ? { sd: pb.url, hls: true } : (pb.sources || { sd: pb.url }));
     } catch (e) {
       if (stale()) return;
       unmountNativeVideo();

@@ -247,30 +247,9 @@ def _player_id(src: str) -> str:
     return pid
 
 
-def _variants(pid: str) -> list[tuple[str, str]]:
-    """[(บรรทัด #EXT-X-STREAM-INF, ลิงก์ไฟล์รายการย่อย)] จาก master — รับเฉพาะไฟล์บน main.108player.com"""
-    master = f"{PLAYER_ORIGIN}/newplaylist/{pid}/{pid}.m3u8"
-    text = _request("GET", master).text
-    if not text.lstrip().startswith("#EXTM3U"):
-        raise ValueError("ไฟล์รายการวิดีโอไม่ใช่ HLS")
-    out, inf = [], None
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("#EXT-X-STREAM-INF"):
-            inf = line
-        elif line and not line.startswith("#") and inf:
-            url = urljoin(master, line)
-            if url.startswith(PLAYER_ORIGIN + "/"):
-                out.append((inf, url))
-            inf = None
-    if not out:
-        raise ValueError("ไฟล์รายการวิดีโอไม่มีความละเอียดให้เลือก")
-    return out
-
-
 def stream_playlist(video: dict, variant: str | None) -> str:
-    """/api/videos/<id>/stream.m3u8 — ไม่มี ?v = master (ความละเอียดชี้กลับมาที่นี่ ?v=<ลำดับ>), มี ?v = ไฟล์รายการย่อย
-    ที่ลิงก์ท่อนเปลี่ยนเป็นลิงก์ Worker ที่เซ็นแล้ว (ท่อนวิดีโอไม่ผ่านเซิร์ฟเวอร์เรา)"""
+    """/api/videos/<id>/stream.m3u8 — master ชี้กลับมาที่นี่ ?v=<ลำดับ> (เฉพาะไฟล์บน main.108player.com),
+    ไฟล์ย่อยเปลี่ยนลิงก์ท่อนเป็นลิงก์ Worker ที่เซ็นแล้ว (ท่อนวิดีโอไม่ผ่านเซิร์ฟเวอร์เรา)"""
     proxy = _proxy()
     if not proxy:
         raise ValueError("ยังไม่ได้ตั้ง Worker ส่งต่อวิดีโอ (VIDEO_PROXY_URL/VIDEO_PROXY_KEY)")
@@ -280,30 +259,10 @@ def stream_playlist(video: dict, variant: str | None) -> str:
     else:
         pid = _player_id(player_url(video.get("source_url") or ""))
         _streams[video["id"]] = (time.time() + STREAM_CACHE_SECONDS, pid)
-    variants = _variants(pid)
-    if variant is None:
-        lines = ["#EXTM3U"]
-        for i, (inf, _) in enumerate(variants):
-            lines += [inf, f"/api/videos/{video['id']}/stream.m3u8?v={i}"]
-        return "\n".join(lines) + "\n"
-    if not variant.isdigit() or int(variant) >= len(variants):
-        raise ValueError("ไม่มีความละเอียดนี้")
-    url = variants[int(variant)][1]
-    text = _request("GET", url).text
-    if not text.lstrip().startswith("#EXTM3U") or "#EXTINF" not in text:
-        raise ValueError("ไฟล์รายการวิดีโอว่าง (เว็บอาจเปลี่ยนวิธี)")
-    out = []
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("#EXT-X-KEY") or line.startswith("#EXT-X-MAP"):
-            raise ValueError("ไฟล์วิดีโอแบบเข้ารหัส/แยกหัวไฟล์ — ยังไม่รองรับ")
-        if line and not line.startswith("#"):
-            seg = urljoin(url, line)
-            if not seg.startswith("https://"):
-                raise ValueError("ลิงก์ท่อนวิดีโอไม่ใช่ https")
-            line = sign_segment(seg, proxy)
-        out.append(line)
-    return "\n".join(out) + "\n"
+    return streams.hls_playlist(f"{PLAYER_ORIGIN}/newplaylist/{pid}/{pid}.m3u8", lambda u: _request("GET", u).text,
+                                f"/api/videos/{video['id']}/stream.m3u8", variant,
+                                segment=lambda seg: sign_segment(seg, proxy),
+                                variant_ok=lambda u: u.startswith(PLAYER_ORIGIN + "/"))
 
 
 class Provider:
