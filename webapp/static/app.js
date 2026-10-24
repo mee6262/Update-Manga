@@ -4781,6 +4781,8 @@ function openMangaSheet(id) {
     </div>
     <div id="mangaSheetMsg" class="form-msg"></div>`;
   el("#mangaSheet").hidden = false;
+  // เพิ่มแหล่งจากผลค้นแล้วแผ่นวาดใหม่ — ผลค้นยังอยู่ จะได้กดเพิ่มเว็บอื่นต่อโดยไม่ต้องค้นใหม่
+  if (lastFoundSources?.id === id) renderFoundSources(state.catalog.find((x) => x.id === id), lastFoundSources.data);
 }
 
 async function saveMangaSources(m, urls) {
@@ -5694,13 +5696,24 @@ async function findMangaSources(m) {
     return;
   }
   if (mangaSheetId !== m.id) return;
+  lastFoundSources = { id: m.id, data };
+  renderFoundSources(m, data);
+}
+
+let lastFoundSources = null; // ผลค้นแหล่งสำรองล่าสุด { id เรื่อง, data }
+
+function renderFoundSources(m, data) {
+  const box = el("#msFindResult");
+  if (!box || !m) return;
+  const have = new Set((m.sources || []).map((x) => x.url));
   const gapText = (c) => c.error ? `เปิดไม่ได้: ${c.error}` : c.gap == null ? (c.latest_chapter || "ไม่พบตอน")
     : `${c.latest_chapter} · ${c.close ? "✓ ใกล้ของเรา" : `ห่าง ${c.gap > 0 ? "+" : ""}${c.gap} ตอน`}`;
   box.innerHTML = data.candidates.length ? `<div class="ms-group">${data.candidates.map((c) => `
       <div class="ms-row">
         <span class="status-dot ${c.close ? "ok" : "warn"}"></span>
         <span class="grow"><b>${escapeHtml(c.host.replace(/^www\./, ""))}</b> · ${escapeHtml(c.title)}<small>${escapeHtml(gapText(c))}</small></span>
-        <button class="btn${c.close ? " primary" : ""}" data-ms-use="${escapeHtml(c.url)}"${c.error ? " disabled" : ""}>ใช้</button>
+        ${have.has(c.url) ? '<span class="ms-added">✓ เพิ่มแล้ว</span>'
+    : `<button class="btn${c.close ? " primary" : ""}" data-ms-use="${escapeHtml(c.url)}"${c.error ? " disabled" : ""}>ใช้</button>`}
       </div>`).join("")}</div><p class="hint">ค้น ${data.searched} เว็บ · เทียบกับของเรา ${escapeHtml(data.latest_chapter || "-")} — ตอนห่างมากอาจเป็นคนละภาค (Remake) หรือเว็บลงช้า</p>`
     : `<p class="hint">ไม่เจอในเว็บอื่น (ค้น ${data.searched} เว็บ) — ลองวางลิงก์เองด้วย "＋ เพิ่มแหล่งสำรอง"</p>`;
 }

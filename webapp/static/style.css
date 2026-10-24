@@ -2042,3 +2042,4 @@ button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%
 .skel-poster { flex: 0 0 112px; aspect-ratio: 5 / 7; border-radius: 12px; }
 .skel-player { width: 100%; max-width: 900px; aspect-ratio: 16 / 9; border-radius: 0; justify-self: center; background: linear-gradient(90deg, #15171c 0%, #23262e 50%, #15171c 100%); background-size: 200% 100%; }
 .video-player.mini .skel-player { width: 128px; height: 72px; aspect-ratio: auto; }
+.ms-added { flex: none; color: var(--accent); font-size: 0.82rem; font-weight: 700; white-space: nowrap; }
