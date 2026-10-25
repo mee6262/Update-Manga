@@ -2072,5 +2072,8 @@ button.admin-card { font: inherit; color: inherit; text-align: left; width: 100%
   .video-player:not(.mini) .video-player-body { width: 100%; height: 100%; min-height: 0; padding: 0; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
   .video-player:not(.mini) .native-wrap { width: 100%; height: 100%; max-width: none; }
   .video-player:not(.mini) .native-video { width: 100%; height: 100%; max-height: none; object-fit: contain; background: #000; }
+  /* ของใต้ตัวเล่น (ลิงก์เปิดใน YouTube, แจ้ง error) เคยดันตัวเล่นล้นขอบบน → ซ่อนลิงก์ ส่วน error ลอยทับขอบล่างแทน */
+  .video-player:not(.mini) .yt-open { display: none !important; }
+  .video-player:not(.mini) .video-player-body > :not(:first-child):not(.fb-video) { position: absolute; left: 0; right: 0; bottom: 12px; margin: 0; z-index: 5; }
   .video-player:not(.mini) .yt-wrap, .video-player:not(.mini) .af-wrap, .video-player:not(.mini) .skel-player { width: min(100vw, 100dvh * 16 / 9); max-width: none; aspect-ratio: 16 / 9; }
 }
