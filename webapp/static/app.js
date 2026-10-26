@@ -5753,7 +5753,7 @@ const ADD_KINDS = {
   yt: ["▶", "YouTube"], af: ["🎬", "เว็บอนิเมะ"], category: ["🏷", "หมวดมังงะใหม่"],
 };
 const ADD_KIND_HINT = {
-  fb: "วางได้หลายลิงก์ (บรรทัดละลิงก์) — ไปที่ฟอร์มวางลิงก์ Facebook เลือกหมวดแล้วกดเพิ่ม",
+  fb: "วางได้หลายลิงก์ (บรรทัดละลิงก์) — มีเลขตอนเข้าเรื่อง ไม่มีเลขตอนเป็นคลิปเดี่ยว",
   watch: "ไปที่ฟอร์มติดตามเพจ เลือกหมวดที่จะใส่คลิปใหม่แล้วกดติดตาม",
   yt: "ไปที่ฟอร์ม YouTube และดึงข้อมูลให้เลย",
   af: "ไปที่ฟอร์ม Anifume / FairyAnime / Anime108 / AnimeRuka และดึงข้อมูลให้เลย",
@@ -5803,6 +5803,7 @@ function setAddKind(kind, { auto = false } = {}) {
   const result = el("#addResult");
   if (!text || !kind) { result.innerHTML = ""; return; }
   if (kind === "manga") return previewAddManga();
+  if (kind === "fb") return renderAddFb();
   result.innerHTML = `<p class="hint">${ADD_KIND_HINT[kind]}</p><button class="btn primary add-go" data-add-handoff>ไปต่อ ›</button>`;
 }
 
@@ -5845,6 +5846,46 @@ async function previewAddManga() {
     <div id="addMsg" class="form-msg"></div>`;
 }
 
+// คลิป Facebook เพิ่มในแผ่นนี้เลย — เดิมส่งต่อไปฟอร์มท้ายหน้า "ติดตามอัตโนมัติ" ซึ่งรายการเพจที่โหลดตามมา
+// ดันฟอร์มพ้นจอ ดูเหมือนแผ่นปิดแล้วเด้งกลับหน้าเนื้อหาเฉย ๆ ต้องเลื่อนหาเอง
+function renderAddFb() {
+  const cats = state.videoCategories || [];
+  const keep = el("#addLinksCategory")?.value;
+  const def = cats.some((c) => c.id === keep) ? keep : cats.find((c) => c.name === "ซีรีส์จีน")?.id || "";
+  el("#addResult").innerHTML = `<p class="hint">${ADD_KIND_HINT.fb}</p>
+    <label class="vm-field">หมวด <select id="addFbCategory" class="form-select"><option value="">— ไม่มีหมวด —</option>
+      ${cats.map((c) => `<option value="${escapeHtml(c.id)}"${c.id === def ? " selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}</select></label>
+    <button class="btn primary add-go" data-add-fb>เพิ่ม</button>
+    <div id="addMsg" class="form-msg watch-status"></div>`;
+}
+
+async function addFbLinks(btn) {
+  const msg = el("#addMsg");
+  btn.disabled = true;
+  msg.className = "form-msg watch-status";
+  msg.textContent = "กำลังอ่านลิงก์... (ลิงก์ละไม่กี่วินาที)";
+  try {
+    const data = await sendJSON("POST", "/api/video-playlists/add-links", {
+      links: el("#addInput").value, mode: "auto", playlist_id: null, category_id: el("#addFbCategory").value || null });
+    const label = { exists: "มีอยู่แล้ว", skipped: "ข้าม", error: "ผิดพลาด" };
+    const ok = data.results.some((r) => r.status === "added" || r.status === "added_clip");
+    msg.classList.toggle("error", !ok && data.results.some((r) => r.status === "error"));
+    msg.textContent = data.results.map((r) => r.status === "added"
+      ? `✓ ${r.playlist} ตอนที่ ${r.episode}${r.new_playlist ? " (เรื่องใหม่)" : ""}`
+      : r.status === "added_clip" ? `✓ คลิปเดี่ยว: ${r.title}`
+      : `${label[r.status]}: ${r.title || r.url}${r.error ? ` — ${r.error}` : ""}`).join("\n");
+    if (ok) {
+      el("#addInput").value = "";
+      await loadVideos();
+      renderVideoManage();
+      renderPlaylistWatch();
+    }
+  } catch (e) {
+    msg.classList.add("error");
+    msg.textContent = e.message || "เพิ่มไม่สำเร็จ";
+  } finally { btn.disabled = false; }
+}
+
 function handoffAdd(kind, text) {
   closeAddSheet();
   const url = (text.match(/https?:\/\/\S+/) || [""])[0];
@@ -5866,6 +5907,8 @@ async function addSheetClick(e) {
   const kindBtn = e.target.closest("[data-add-kind]");
   if (kindBtn) return setAddKind(kindBtn.dataset.addKind);
   if (e.target.closest("[data-add-handoff]")) return handoffAdd(addKind, el("#addInput").value);
+  const fbBtn = e.target.closest("[data-add-fb]");
+  if (fbBtn) return addFbLinks(fbBtn);
   const cat = e.target.closest("[data-add-cat]");
   if (cat) return cat.classList.toggle("active");
   const openId = e.target.closest("[data-add-open]")?.dataset.addOpen;
