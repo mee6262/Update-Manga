@@ -118,7 +118,10 @@ def _items_from(data) -> tuple[list[dict], str | None]:
 
 
 def _initial_data(html: str) -> dict:
-    match = re.search(r"var ytInitialData = (\{.*?\});</script>", html)
+    # YouTube สลับส่ง 2 แบบ: สคริปต์ var ytInitialData = {...}; หรือ (ต.ค. 2026, ราว 1 ใน 30 ครั้ง)
+    # JSON ใน <script id="yt-initial-data" type="application/json"> — เดิมอ่านแบบแรกอย่างเดียว ติดตามอัตโนมัติพลาดเป็นระยะ
+    match = (re.search(r"var ytInitialData = (\{.*?\});</script>", html)
+             or re.search(r'<script id="yt-initial-data"[^>]*>(\{.*?\})</script>', html, re.S))
     if not match:
         raise ValueError("อ่านหน้า YouTube ไม่ได้ (YouTube เปลี่ยนหน้า หรือ playlist เป็นส่วนตัว)")
     return json.loads(match.group(1))
