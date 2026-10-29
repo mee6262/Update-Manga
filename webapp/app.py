@@ -3726,6 +3726,10 @@ def _store_youtube_items(list_id: str, info: dict, *, playlist_id: str | None, n
         known = {v.get("canonical_key"): v for v in videos}
         numbers = youtube.episode_numbers([item["title"] for item in info["items"]])
         for item, checked in zip(info["items"], numbers):
+            # คลิปส่วนตัว/ต้อง login ใน playlist มาแบบไม่มีชื่อ — เคยได้เลขตอนจากลำดับ (ตอน 57 ในซีซั่น 1
+            # ของเรื่องที่มี 56 คลิป, 29 ต.ค.) ข้ามไว้ก่อน เปิดสาธารณะเมื่อไรรอบถัดไปได้ชื่อ+เลขตอนจริง
+            if not (item.get("title") or "").strip():
+                continue
             key = _yt_key(item["id"])
             if key in known:
                 # ตอนเดิมที่เลขมาจากชื่อที่ช่องพิมพ์ผิด → แก้ตามเลขที่ตรวจแล้ว (เฉพาะที่ยังเป็นเลขจากชื่อ ไม่ทับที่แอดมินแก้เอง)
