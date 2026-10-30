@@ -2368,6 +2368,18 @@ let nativeQualityPref = "auto";
 let nativeCurrentQuality = null;
 let nativeStalls = [];
 
+// HLS หลายความละเอียด (Anime108 ฯลฯ) จำเป็นความสูง (1080, 720, ...) แยกจาก hd/sd ของไฟล์ MP4 — ไม่มีค่า = อัตโนมัติ
+const HLS_HEIGHT_KEY = "videoHlsHeight";
+function readHlsHeightPref() {
+  try { return Number(localStorage.getItem(HLS_HEIGHT_KEY)) || 0; } catch (e) { return 0; }
+}
+
+// ระดับที่ตรงกับความสูงที่จำไว้ — ไม่มีตรงตัว (ตอนนี้มีถึง 720p) ใช้ตัวที่สูงสุดที่ไม่เกิน ไม่มีเลยใช้ตัวต่ำสุด
+function hlsLevelForHeight(levels, height) {
+  const ranked = levels.map((l, i) => ({ i, h: l.height || 0 })).sort((a, b) => b.h - a.h);
+  return (ranked.find((l) => l.h <= height) || ranked[ranked.length - 1])?.i ?? -1;
+}
+
 function readVideoQualityPref() {
   try { const v = localStorage.getItem(VIDEO_QUALITY_KEY); return VIDEO_QUALITY_LABEL[v] ? v : "auto"; } catch (e) { return "auto"; }
 }
@@ -2437,7 +2449,11 @@ function setNativeQuality(quality, startAt, autoplay = false) {
       v.dispatchEvent(new Event("error"));
     });
     const relabel = () => { if (nativeHls === hls) renderQualityButtons(); };
-    hls.on(window.Hls.Events.MANIFEST_PARSED, relabel);
+    hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+      const height = readHlsHeightPref();
+      if (height && hls.levels.length > 1) hls.currentLevel = hlsLevelForHeight(hls.levels, height);
+      relabel();
+    });
     hls.on(window.Hls.Events.LEVEL_SWITCHED, relabel);
     v.disableRemotePlayback = true; // iPhone (ManagedMediaSource) ไม่เปิดสตรีมถ้าไม่ปิด AirPlay หรือมีแหล่ง AirPlay สำรอง
     hls.loadSource(new URL(nativeSources[quality], location.href).href);
@@ -2507,6 +2523,8 @@ function mountNativeVideo(video, position, sources) {
       const level = event.target.closest("[data-hls-level]")?.dataset.hlsLevel;
       if (level !== undefined && nativeHls) {
         nativeHls.currentLevel = Number(level); // -1 = กลับไปอัตโนมัติ
+        const height = Number(level) >= 0 ? nativeHls.levels[Number(level)]?.height : 0;
+        try { height ? localStorage.setItem(HLS_HEIGHT_KEY, String(height)) : localStorage.removeItem(HLS_HEIGHT_KEY); } catch (e) { /* ไม่จำก็ได้ */ }
         renderQualityButtons();
         return;
       }
