@@ -39,7 +39,9 @@ def solve(url: str) -> dict:
                                       "browser.cache.disk.enable": False, "dom.ipc.processPrelaunch.enabled": False,
                                       "network.process.enabled": False, "media.rdd-process.enabled": False,
                                       "layers.gpu-process.enabled": False, "browser.sessionhistory.max_total_viewers": 0,
-                                      "extensions.webextensions.remote": False}) as browser:
+                                      "extensions.webextensions.remote": False,
+                                      # Firefox ยก content process เป็น Normal เอง (ไม่สน BelowNormal ที่ scraper ตั้ง) → แย่ง CPU เว็บ
+                                      "dom.ipc.processPriorityManager.enabled": False}) as browser:
         page = browser.new_page()
         ua = page.evaluate("navigator.userAgent")  # อ่านก่อนเปิดเว็บ: ผ่านหน้าตรวจแล้วหน้าเปลี่ยน evaluate พัง
         page.goto(url, wait_until="domcontentloaded", timeout=45000)

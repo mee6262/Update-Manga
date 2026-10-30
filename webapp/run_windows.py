@@ -73,7 +73,22 @@ class _PrintToLog:
 
 # ---------- process ลูก: ตัวเซิร์ฟเวอร์จริง ----------
 
+def _normal_priority():
+    """Scheduled Task เปิดโปรแกรมที่ priority 7 (BelowNormal) เป็นค่าเริ่ม แต่ Firefox ของ cf_solve ยก content process
+    ตัวเองเป็น Normal → แย่ง CPU ชนะเว็บเรา (VPS 2 CPU): 30-31 ต.ค. CPU 99-100% เว็บไม่ตอบ healthz 16 วิ
+    ตั้งเป็น Normal เอง (process ลูก waitress ได้ตาม) ไม่ต้องไปแก้ค่าของ Scheduled Task"""
+    if os.name != "nt":
+        return
+    import ctypes
+    NORMAL_PRIORITY_CLASS = 0x20
+    kernel32 = ctypes.windll.kernel32
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p  # pseudo handle -1 แบบ 64 บิต — ค่า default (int) ตัดเหลือ 32 บิต ใช้ไม่ได้
+    kernel32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), NORMAL_PRIORITY_CLASS)
+
+
 def serve():
+    _normal_priority()
     log = _setup_logging("webapp.log")
     sys.stdout = _PrintToLog(logging.getLogger("app"), logging.INFO)
     sys.stderr = _PrintToLog(logging.getLogger("app"), logging.ERROR)
@@ -131,6 +146,7 @@ def _healthy() -> bool:
 
 
 def supervise():
+    _normal_priority()
     log = _setup_logging("supervisor.log")
     print(f"กำลังรันที่ http://{HOST}:{PORT} (กด Ctrl+C เพื่อหยุด) — log อยู่ที่ {LOG_DIR}")
     no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
