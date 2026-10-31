@@ -4741,7 +4741,7 @@ def _verify_chapter(manga_id: str | None, chapter: dict, min_interval: float) ->
             if manga_id:
                 data["pv"] = CHAPTER_PARSER_VERSION
                 storage.save_chapter_cache(manga_id, url, data)
-                storage.add_image_domains({urlparse(src).netloc for src in data["images"]})
+                _remember_image_hosts(url, data["images"])
             return "real", url
         saw_placeholder = True
     # เจอหน้าหลอกแต่มีแหล่งที่ตรวจไม่ได้ (ล่ม) = ยังสรุปไม่ได้ — ตอนที่รู้จักอยู่แล้วคงไว้ ตอนใหม่รอยืนยัน
@@ -4877,6 +4877,14 @@ def _images_healthy(data: dict) -> bool:
     return not (images and scraper.host_is_down(images[0]))
 
 
+def _remember_image_hosts(chapter_url: str, images: list[str]):
+    """โดเมนรูปที่เจอในหน้าตอนจริง → อนุญาตให้พร็อกซี + จำหน้าเว็บมังงะไว้เป็น Referer สำรอง (ดู _image_referers)"""
+    hosts = {urlparse(src).netloc for src in images} - {""}
+    storage.add_image_domains(hosts)
+    page = urlparse(chapter_url)
+    storage.add_image_referers({host: f"{page.scheme}://{page.netloc}/" for host in hosts if host != page.netloc})
+
+
 def _fetch_chapter(manga_id: str, url: str, is_last: bool) -> tuple[dict | None, str | None]:
     """ดึงหน้าตอนจากลิงก์เดียว คืน (data, error) และเก็บแคชไว้ถ้าได้รูปมา"""
     try:
@@ -4891,7 +4899,7 @@ def _fetch_chapter(manga_id: str, url: str, is_last: bool) -> tuple[dict | None,
         )
     data["pv"] = CHAPTER_PARSER_VERSION
     storage.save_chapter_cache(manga_id, url, data)
-    storage.add_image_domains({urlparse(src).netloc for src in data["images"]})
+    _remember_image_hosts(url, data["images"])
     return data, None
 
 
@@ -5310,6 +5318,19 @@ def _resize_cover(raw: bytes, width: int) -> bytes | None:
         return None
 
 
+# โดเมนรูปที่ Referer ของเว็บมังงะผ่าน แต่ Referer ของตัวเองโดน 403 (server1.webtoon168.com ของ ped-manga)
+# → ครั้งถัดไปลองตัวที่ผ่านก่อน ไม่ต้องยิงสองครั้งทุกรูป
+_image_alt_referer_first: dict[str, bool] = {}
+
+
+def _image_referers(netloc: str) -> list[str]:
+    own = f"https://{netloc}/"
+    alt = storage.load_image_referers().get(netloc)
+    if not alt or alt == own:
+        return [own]
+    return [alt, own] if _image_alt_referer_first.get(netloc) else [own, alt]
+
+
 def _fetch_image(src: str, netloc: str) -> tuple[bytes, str, tuple[str, int] | None]:
     """ดึงรูปจากเว็บต้นทาง คืน (body, content_type, None) หรือ (b"", "", (ข้อความ, สถานะ)) ถ้าพลาด"""
     # คิวต่อเว็บ: เว็บช้าเว็บเดียวยึดได้ไม่เกิน IMAGE_HOST_SLOTS thread ส่วนคำขอที่รอคิวก็ยึด thread อยู่เหมือนกัน
@@ -5326,17 +5347,26 @@ def _fetch_image(src: str, netloc: str) -> tuple[bytes, str, tuple[str, int] | N
             return b"", "", ("source host is down", 502)
         with scraper.awaiting_response(src, IMAGE_STALL_SECONDS):
             try:
-                with scraper.awaiting_response(src):
-                    resp = scraper.session().get(
-                        src,
-                        headers={
-                            "User-Agent": scraper.HEADERS["User-Agent"],
-                            **scraper.cf_headers(src),  # รูปบนเว็บที่ติด Cloudflare ต้องใช้คุกกี้ + UA คู่เดียวกับหน้าเว็บ
-                            "Referer": f"https://{netloc}/",
-                        },
-                        timeout=IMAGE_TIMEOUT,
-                        stream=True,
-                    )
+                referers = _image_referers(netloc)
+                for attempt, referer in enumerate(referers):
+                    with scraper.awaiting_response(src):
+                        resp = scraper.session().get(
+                            src,
+                            headers={
+                                "User-Agent": scraper.HEADERS["User-Agent"],
+                                **scraper.cf_headers(src),  # รูปบนเว็บที่ติด Cloudflare ต้องใช้คุกกี้ + UA คู่เดียวกับหน้าเว็บ
+                                "Referer": referer,
+                            },
+                            timeout=IMAGE_TIMEOUT,
+                            stream=True,
+                        )
+                    # 403 = เว็บรูปกันลิงก์ข้ามเว็บ ลอง Referer อีกตัว (หน้าเว็บมังงะที่ใช้รูปนี้ / ตัวโดเมนรูปเอง)
+                    if resp.status_code == 403 and attempt + 1 < len(referers):
+                        resp.close()
+                        continue
+                    if len(referers) > 1 and resp.ok:
+                        _image_alt_referer_first[netloc] = referer != f"https://{netloc}/"
+                    break
                 resp.raise_for_status()
             except Exception as e:
                 # รูปโดนหน้าตรวจ Cloudflare (คุกกี้หมด/ยังไม่มี) → สั่งแก้เบื้องหลัง โหลดรูปรอบหน้าก็ผ่าน

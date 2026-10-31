@@ -12,6 +12,7 @@ MANGA_FILE = DATA_DIR / "manga.json"
 CHAPTERS_DIR = DATA_DIR / "chapters"
 COVERS_DIR = DATA_DIR / "covers"
 IMAGE_DOMAINS_FILE = DATA_DIR / "image_domains.json"
+IMAGE_REFERERS_FILE = DATA_DIR / "image_referers.json"
 CATEGORIES_FILE = DATA_DIR / "categories.json"
 SITE_SETTINGS_FILE = DATA_DIR / "site_settings.json"
 VIDEOS_FILE = DATA_DIR / "videos.json"
@@ -358,6 +359,19 @@ def add_image_domains(domains: set[str]):
     if domains <= existing:
         return
     _save_json(IMAGE_DOMAINS_FILE, sorted(existing | domains))
+
+
+def load_image_referers() -> dict[str, str]:
+    """โดเมนรูป → หน้าเว็บมังงะที่ใช้รูปนั้น (https://ped-manga.com/) ไว้เป็น Referer สำรองของพร็อกซีรูป"""
+    return _load_json(IMAGE_REFERERS_FILE, {})
+
+
+def add_image_referers(mapping: dict[str, str]):
+    """จำครั้งแรกที่เจอเท่านั้น (ไม่ทับ) — CDN เดียวกันอาจถูกหลายเว็บใช้ ตัวแรกที่เจอก็ใช้เป็น Referer ได้"""
+    existing = load_image_referers()
+    new = {host: ref for host, ref in mapping.items() if host and ref and host not in existing}
+    if new:
+        _save_json(IMAGE_REFERERS_FILE, {**existing, **new})
 
 
 _allowed_memo: tuple[tuple[list, list], set[str]] | None = None
