@@ -369,6 +369,7 @@ function showTab(tab, fromBack = false) {
   els(".topbar-title, .topbar-actions").forEach((t) => { t.hidden = t.dataset.for !== tab; });
   updateCategoryBar();
   window.scrollTo(0, 0);
+  setTimeout(() => kickLazyImages({ now: true }), 600); // หลังวาดแท็บใหม่ — Safari อาจไม่โหลดรูป lazy ของแท็บที่เพิ่งโชว์
 
   if (tab === "list") {
     loadHistory();
@@ -2615,7 +2616,10 @@ let viewportLogs = 0; // แก้ไม่หาย = ทุกการเล�
 // ค้างตามขนาดจอตอนเต็มจอ เต็มจอใน iframe ไม่ยิง event ให้หน้าเว็บรู้ → รูปที่อยู่ในจอแต่ยังไม่โหลด 2 รอบติด = สั่งโหลดเลย
 let lazyWaiting = new WeakSet();
 let lazyKickLogs = 0;
-function kickLazyImages() {
+// now = สั่งโหลดเลยไม่ต้องรอค้าง 2 รอบ — ใช้ตอนสลับแท็บ/กลับเข้าแอป (31 ต.ค. 18:23: สลับไปแอปอื่นก๊อปลิงก์
+// → กลับมา → ไปตั้งค่า → หน้าวิดีโอ การ์ดเทาทั้งหน้า ตัวเช็คทุก 2 วิ เพิ่งสั่งโหลด 38 รูปหลังแคปจอ)
+// รูปที่กำลังโหลดตามปกติโดนเปลี่ยนเป็น eager ก็ไม่เสียหาย
+function kickLazyImages({ now = false } = {}) {
   const h = window.innerHeight;
   const seen = new WeakSet();
   let kicked = 0;
@@ -2623,7 +2627,7 @@ function kickLazyImages() {
     if (img.complete || !img.getAttribute("src")) continue;
     const r = img.getBoundingClientRect();
     if (!r.width || r.bottom < -h || r.top > h * 2) continue; // ซ่อนอยู่/ไกลจอ ปล่อย lazy ตามปกติ
-    if (lazyWaiting.has(img)) { img.loading = "eager"; kicked++; } else seen.add(img);
+    if (now || lazyWaiting.has(img)) { img.loading = "eager"; kicked++; } else seen.add(img);
   }
   lazyWaiting = seen;
   if (kicked && lazyKickLogs++ < 3) {
@@ -2729,6 +2733,9 @@ function initFixedLayoutGuard() {
   document.addEventListener("focusout", later);
   document.addEventListener("visibilitychange", later);
   window.addEventListener("pageshow", later);
+  const kickSoon = () => { if (!document.hidden) setTimeout(() => kickLazyImages({ now: true }), 600); };
+  document.addEventListener("visibilitychange", kickSoon);
+  window.addEventListener("pageshow", kickSoon);
   // ดูเต็มจอแนวนอนแล้วออก ระหว่างอยู่หน้าตัวเล่นเมนูล่างถูกซ่อน (ข้ามการเช็ค) — พอกดย้อนกลับ/ปิด/ย่อตัวเล่น
   // เมนูโผล่มาโดยไม่มี event ใดให้เช็ค → เช็คเป็นระยะ (แค่วัดตำแหน่งเมนู ไม่หนัก)
   setInterval(() => checkBottomNav(true), 2000);
